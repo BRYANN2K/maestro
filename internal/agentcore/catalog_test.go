@@ -49,6 +49,27 @@ func TestCoreCatalog(t *testing.T) {
 	if !isLocalProvider(catalog["ollama"]) || isLocalProvider(catalog["openai"]) {
 		t.Error("local detection wrong")
 	}
+	opencode := catalog["opencode-go"]
+	if opencode.API != "https://opencode.ai/zen/go/v1" {
+		t.Fatalf("OpenCode Go fallback API = %q", opencode.API)
+	}
+	if _, stale := opencode.Models["opencode-go"]; stale {
+		t.Fatal("OpenCode fallback still advertises the retired opencode-go model")
+	}
+	for _, misplaced := range []string{"gpt-5.6-sol", "deepseek-v4-flash-free"} {
+		if _, ok := opencode.Models[misplaced]; ok {
+			t.Errorf("OpenCode Go fallback advertises Zen-only model %s", misplaced)
+		}
+	}
+	for _, current := range []string{"gpt-5.6-luna", "deepseek-v4-flash", "kimi-k2.7-code"} {
+		if _, ok := opencode.Models[current]; !ok {
+			t.Errorf("OpenCode Go fallback missing supported model %s", current)
+		}
+	}
+	luna := opencode.Models["gpt-5.6-luna"]
+	if luna.Cost.Input != 0.1 || luna.Cost.Output != 0.6 || luna.Limit.Context != 1_050_000 {
+		t.Fatalf("OpenCode Go Luna metadata = %+v", luna)
+	}
 }
 
 func TestParseCatalogRemoteShape(t *testing.T) {

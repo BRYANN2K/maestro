@@ -139,7 +139,7 @@ type Session struct {
 	Branch          string             `json:"branch,omitempty"`           // branch/worktree chosen at /accept
 	BaseBranch      string             `json:"base_branch,omitempty"`      // branch that was active before /accept
 	Worktree        string             `json:"worktree,omitempty"`         // worktree path, when used
-	ManagedWorktree bool               `json:"managed_worktree,omitempty"` // true only for ephemeral /accept --worktree checkouts
+	ManagedWorktree bool               `json:"managed_worktree,omitempty"` // true only for ephemeral worktrees created by /accept
 	Created         string             `json:"created"`
 	Updated         string             `json:"updated"`
 }

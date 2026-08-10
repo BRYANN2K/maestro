@@ -258,12 +258,18 @@ var coreCatalogJSON = `{
     }
   },
   "opencode-go": {
-    "id": "opencode-go", "name": "OpenCode Zen (Go)", "env": ["OPENCODE_API_KEY"],
-    "npm": "@ai-sdk/openai-compatible", "api": "https://opencode.ai/zen/v1",
+    "id": "opencode-go", "name": "OpenCode Go", "env": ["OPENCODE_API_KEY"],
+    "npm": "@ai-sdk/openai-compatible", "api": "https://opencode.ai/zen/go/v1",
     "models": {
-      "opencode-go": {"id":"opencode-go","name":"OpenCode Go","reasoning":true,"tool_call":true,
-        "cost":{"input":0,"output":0},
-        "limit":{"context":400000,"output":32768},"modalities":{"input":["text"],"output":["text"]},"status":"active"}
+      "gpt-5.6-luna": {"id":"gpt-5.6-luna","name":"GPT-5.6 Luna (2x usage)","reasoning":true,"tool_call":true,"attachment":true,
+        "cost":{"input":0.1,"output":0.6,"cache_read":0.01,"cache_write":0.125},
+        "limit":{"context":1050000,"output":128000},"modalities":{"input":["text","image","pdf"],"output":["text"]},"status":"active"},
+      "deepseek-v4-flash": {"id":"deepseek-v4-flash","name":"DeepSeek V4 Flash (2x usage)","reasoning":true,"tool_call":true,
+        "cost":{"input":0.07,"output":0.14,"cache_read":0.0014},
+        "limit":{"context":1000000,"output":384000},"modalities":{"input":["text"],"output":["text"]},"status":"active"},
+      "kimi-k2.7-code": {"id":"kimi-k2.7-code","name":"Kimi K2.7 Code","reasoning":true,"tool_call":true,"attachment":true,
+        "cost":{"input":0.95,"output":4,"cache_read":0.19},
+        "limit":{"context":262144,"output":262144},"modalities":{"input":["text","image","video"],"output":["text"]},"status":"active"}
     }
   },
   "hyper": {

@@ -485,15 +485,25 @@ func (o *Orchestrator) dispatchCommit(ctx context.Context, cmd Command) error {
 	return nil
 }
 
-// branchChoice maps a Command's flags to a BranchChoice for /accept.
+// branchChoice maps a Command's flags to a BranchChoice for /accept. A plain
+// /accept is intentionally isolated: users should not have to inspect the
+// checkout, choose a branch name, or know Git worktree syntax before accepting
+// a proposal. Explicit branch selection remains available for compatibility.
 func branchChoice(cmd Command) BranchChoice {
 	switch {
-	case flag(cmd, "worktree") == "true":
-		return BranchChoice{Kind: "worktree", Name: flag(cmd, "name")}
+	case flag(cmd, "worktree") != "" && flag(cmd, "worktree") != "false":
+		name := flag(cmd, "name")
+		// The TUI accepts both --flag=value and --flag value. Preserve the
+		// latter spelling for the legacy --worktree option even though plain
+		// /accept no longer needs the option at all.
+		if value := flag(cmd, "worktree"); value != "true" {
+			name = value
+		}
+		return BranchChoice{Kind: "worktree", Name: name}
 	case flag(cmd, "branch") != "":
 		return BranchChoice{Kind: "branch", Name: flag(cmd, "branch")}
 	default:
-		return BranchChoice{Kind: "stay"}
+		return BranchChoice{Kind: "worktree"}
 	}
 }
 

@@ -66,6 +66,50 @@ func TestNormalizeTaskCheckboxesPreservesEveryOtherByte(t *testing.T) {
 	}
 }
 
+func TestNormalizeTaskCheckboxesCanonicalizesOneMissingFinalLF(t *testing.T) {
+	withoutLF, withoutStates, err := normalizeTaskCheckboxes([]byte("- [ ] first\n- [x] second"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	withLF, withStates, err := normalizeTaskCheckboxes([]byte("- [ ] first\n- [x] second\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(withoutLF, withLF) || !reflect.DeepEqual(withoutStates, withStates) {
+		t.Fatalf("missing final LF changed contract: without=%q/%v with=%q/%v", withoutLF, withoutStates, withLF, withStates)
+	}
+	doubleLF, _, err := normalizeTaskCheckboxes([]byte("- [ ] first\n- [x] second\n\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Equal(withLF, doubleLF) {
+		t.Fatal("extra blank line was accepted as a final-LF-only change")
+	}
+}
+
+func TestSpecContractAcceptsLegacyMissingFinalLFHashOnly(t *testing.T) {
+	orch, _ := newAcceptedContractPipeline(t)
+	path := orch.store.PathFor(orch.spec.ID, spec.FileTasks)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	withoutLF := bytes.TrimSuffix(data, []byte("\n"))
+	orch.sess.SpecContract.TasksTemplateHash = contentHash(withoutLF)
+	if err := os.WriteFile(path, append(append([]byte(nil), withoutLF...), '\n'), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := orch.validateSpecContract(); err != nil {
+		t.Fatalf("single final LF rejected for legacy contract: %v", err)
+	}
+	if err := os.WriteFile(path, append(append([]byte(nil), withoutLF...), '\n', '\n'), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := orch.validateSpecContract(); err == nil || !strings.Contains(err.Error(), "tasks.md structure or text changed") {
+		t.Fatalf("extra blank line validation error = %v", err)
+	}
+}
+
 func TestBuildLeavesCheckboxProgressPendingUntilReview(t *testing.T) {
 	orch, dir := newAcceptedContractPipeline(t)
 	tasksPath := orch.store.PathFor(orch.spec.ID, spec.FileTasks)

@@ -20,6 +20,8 @@ const (
 	formActionNone formAction = iota
 	formActionRenameSession
 	formActionCreateWorkspace
+	formActionArchive
+	formActionArchiveMerge
 )
 
 // formField is one short, single-line answer in an interactive command
@@ -81,7 +83,14 @@ func (f *formOverlay) validate() bool {
 // closing the overlay and starting any asynchronous work.
 func (f *formOverlay) update(msg tea.KeyMsg) (submitted, cancelled bool) {
 	if len(f.fields) == 0 {
-		return true, false
+		switch msg.Type {
+		case tea.KeyEsc:
+			return false, true
+		case tea.KeyEnter:
+			return true, false
+		default:
+			return false, false
+		}
 	}
 	field := &f.fields[f.active]
 	runes := []rune(field.Value)
@@ -163,6 +172,7 @@ func (f *formOverlay) View(styles Styles, width int) string {
 	var b strings.Builder
 	b.WriteString(styles.DialogTitle(f.title) + "\n")
 	if len(f.fields) == 0 {
+		b.WriteString("\n" + styles.Hint.Render("enter confirm · esc cancel"))
 		return b.String()
 	}
 	current := &f.fields[f.active]

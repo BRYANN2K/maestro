@@ -348,6 +348,20 @@ func (c *Client) UntrackedFiles(ctx context.Context) ([]string, error) {
 	return paths, nil
 }
 
+// TrackedFiles lists the paths currently represented by the index. In an
+// unborn repository this is the exact candidate set for the first commit.
+func (c *Client) TrackedFiles(ctx context.Context) ([]string, error) {
+	out, err := c.run(ctx, "ls-files", "-z")
+	if err != nil {
+		return nil, fmt.Errorf("ls-files: %w", err)
+	}
+	paths, err := nulFields(out)
+	if err != nil {
+		return nil, fmt.Errorf("ls-files: %w", err)
+	}
+	return paths, nil
+}
+
 // DiffUnified returns the unified diff between base and the working tree.
 func (c *Client) DiffUnified(ctx context.Context, base string) (string, error) {
 	args := []string{"diff"}

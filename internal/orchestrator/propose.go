@@ -418,7 +418,7 @@ Spec proposal ready:
 %s
 
 Then:
-    /accept  — Create spec files and open branch menu
+    /accept  — Create spec files in an automatic managed worktree
     /edit    — Tell me what to change
     /cancel  — Drop this proposal
 `, d.ID, d.Title, d.Category, d.Recipe, strings.TrimSpace(d.Body))

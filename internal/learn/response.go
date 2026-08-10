@@ -64,6 +64,29 @@ func ValidateExplanationForDepth(source SourceSnapshot, exp *Explanation, deep b
 	return validateExplanationWithBlockLimit(source, exp, limit)
 }
 
+// ValidateExplanationContent applies the strict model-output contract to the
+// exact bounded bytes already supplied to an explainer. Code excerpts are
+// always hydrated from this trusted snapshot: the model selects line ranges
+// and explains them, but its attempted code copy is never displayed or
+// persisted. This both removes a brittle byte-copy task from smaller models
+// and makes source fidelity independent of model behavior.
+func ValidateExplanationContent(path string, content []byte, exp *Explanation, deep bool) error {
+	snapshot := SourceSnapshot{
+		RelativePath: path,
+		Content:      append([]byte(nil), content...),
+		Lines:        splitSourceLines(string(content)),
+	}
+	if exp != nil {
+		for i := range exp.Blocks {
+			block := &exp.Blocks[i]
+			if block.Start >= 1 && block.End >= block.Start && block.End <= len(snapshot.Lines) {
+				block.Code = strings.Join(snapshot.Lines[block.Start-1:block.End], "\n")
+			}
+		}
+	}
+	return ValidateExplanationForDepth(snapshot, exp, deep)
+}
+
 func validateExplanationWithBlockLimit(source SourceSnapshot, exp *Explanation, blockLimit int) error {
 	if exp == nil {
 		return errors.New("missing explanation")

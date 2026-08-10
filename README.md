@@ -26,16 +26,17 @@ The npm package is a small launcher for Maestro's prebuilt release
 binary. It requires Node.js 18 or newer; it does **not** require a Go toolchain.
 
 ```sh
-npx @bryann2k/maestro@1.0.0
+npx @bryann2k/maestro
 ```
 
 The launcher selects the matching macOS, Linux, or Windows binary for the
-current architecture and caches that exact Maestro version locally. Arguments
-are forwarded unchanged:
+current architecture and caches the exact Maestro version selected by the npm
+package. Pin `@1.0.0` when reproducibility matters. Arguments are forwarded
+unchanged:
 
 ```sh
-npx @bryann2k/maestro@1.0.0 --dir ./my-project
-npx @bryann2k/maestro@1.0.0 version
+npx @bryann2k/maestro --dir ./my-project
+npx @bryann2k/maestro version
 ```
 
 ### GitHub release binary
@@ -102,8 +103,8 @@ On first use:
 3. Invoke `/propose` when the idea is ready to become a spec. If MAESTRO.md is
    missing, Maestro completes project setup first and resumes the proposal only
    after you accept the contract.
-4. Review and `/accept` the proposal, choose a branch or worktree, then run
-   `/build`.
+4. Review and `/accept` the proposal. Maestro creates and selects an isolated
+   managed worktree automatically; then run `/build`.
 5. Complete `/review`, `/docs`, and `/archive` when the evidence is ready.
 
 Maestro never treats an approximate chat message as permission to create a
@@ -115,7 +116,7 @@ spec. Only `/propose` crosses that boundary.
 | --- | --- | --- |
 | Chat | Explores the repository and clarifies intent | Read-only discovery |
 | Propose | Creates a structured `spec.md`, `design.md`, and `tasks.md` draft | Explicit `/propose` |
-| Accept | Validates the spec and selects the Git workspace | Explicit acceptance |
+| Accept | Validates the spec and creates an isolated managed worktree | Explicit acceptance; Git setup is automatic |
 | Build | Delegates implementation and tests to a development agent | Tool permissions and cancellation |
 | Review | Runs deterministic checks, security analysis, and a read-only review agent | Findings can return through `/fix` |
 | Docs | Proposes an architecture decision record | Preview before write |
@@ -125,7 +126,7 @@ After a project contract exists, the equivalent headless lifecycle is:
 
 ```sh
 maestro propose -m "Add a PostgreSQL API"
-maestro accept --worktree
+maestro accept
 maestro build
 maestro review
 maestro docs
@@ -137,16 +138,19 @@ maestro archive --yes --merge
 The transcript is the setup surface; project setup never opens a separate
 form. `/bootstrap` extracts confirmed decisions from the existing discussion
 and asks only for missing purpose, users, stack, boundaries, safety, and
-verification details. `/adopt` first performs a bounded static analysis of an
-existing repository, then asks only for decisions the repository cannot prove.
-`/onboard` remains a compatibility alias for `/adopt`.
+verification details. It first initializes a local Git repository on `main`
+when the selected greenfield directory does not already contain one, without
+staging files or creating a commit. `/adopt` first performs a bounded static
+analysis of an existing repository, then asks only for decisions the repository
+cannot prove. `/onboard` remains a compatibility alias for `/adopt`.
 
-Both flows preview the same root-level `MAESTRO.md` contract. Nothing is written
-until the proposal is accepted. Repository discovery does not run installers,
-builds, tests, hooks, generators, MCP servers, or network requests. Starting
-`/propose` without a contract selects the appropriate flow, preserves the
-original proposal request, and resumes it after explicit contract acceptance.
-See [`docs/PROJECT_BOOTSTRAP.md`](docs/PROJECT_BOOTSTRAP.md).
+Both flows preview the same root-level `MAESTRO.md` contract. Apart from the
+explicit `/bootstrap` Git initialization, no project file is written until the
+proposal is accepted. Repository discovery does not run installers, builds,
+tests, hooks, generators, MCP servers, or network requests. Starting `/propose`
+without a contract selects the appropriate flow, preserves the original
+proposal request, and resumes it after explicit contract acceptance. See
+[`docs/PROJECT_BOOTSTRAP.md`](docs/PROJECT_BOOTSTRAP.md).
 
 ## Sessions and Git workspaces
 

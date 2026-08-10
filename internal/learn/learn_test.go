@@ -285,6 +285,21 @@ func TestDecodeAndValidateExplanation(t *testing.T) {
 	}
 }
 
+func TestValidateExplanationContentHydratesTrustedCode(t *testing.T) {
+	exp := Explanation{
+		HighLevel: "overview",
+		Blocks: []Block{{
+			Start: 2, End: 3, Code: "model-controlled", What: "explains the selected lines",
+		}},
+	}
+	if err := ValidateExplanationContent("x.go", []byte("one\ntwo\nthree\n"), &exp, false); err != nil {
+		t.Fatal(err)
+	}
+	if got := exp.Blocks[0].Code; got != "two\nthree" {
+		t.Fatalf("hydrated code = %q, want trusted source excerpt", got)
+	}
+}
+
 func TestFormatUsesSafeUnicodeAndFences(t *testing.T) {
 	code := "const s = `ticks ``` inside` // 世界🙂"
 	out := Format(Explanation{

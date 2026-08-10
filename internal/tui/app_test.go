@@ -89,6 +89,17 @@ func TestTrailingBackslashInsertsNewline(t *testing.T) {
 	}
 }
 
+func TestTabBarKeepsProjectVisibleWithLongSessionAndBranch(t *testing.T) {
+	m, _ := newTestModel(t)
+	m.SetSize(120, 30)
+	m.sessionTitle = strings.Repeat("long-session-title-", 4)
+	project := m.orch.ProjectName()
+	view := stripANSI(m.renderTabBar())
+	if !strings.Contains(view, "◇ "+project) {
+		t.Fatalf("tab bar hid project identity:\n%s", view)
+	}
+}
+
 func TestEditorFinishedReinjectsBuffer(t *testing.T) {
 	m, _ := newTestModel(t)
 	path := filepath.Join(t.TempDir(), "msg.md")

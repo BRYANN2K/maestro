@@ -9,16 +9,18 @@ environment for the terminal.
 ## Run
 
 ```sh
-npx @bryann2k/maestro@1.0.0
+npx @bryann2k/maestro
 ```
 
 Arguments are forwarded unchanged:
 
 ```sh
-npx @bryann2k/maestro@1.0.0 --dir ./my-project
-npx @bryann2k/maestro@1.0.0 version
-npx @bryann2k/maestro@1.0.0 spec list
+npx @bryann2k/maestro --dir ./my-project
+npx @bryann2k/maestro version
+npx @bryann2k/maestro spec list
 ```
+
+Use `npx @bryann2k/maestro@1.0.0` to pin the launcher explicitly.
 
 The launcher requires Node.js 18 or newer. A Go toolchain is **not** required.
 It downloads the matching Maestro 1.0.0 archive from GitHub Releases, verifies

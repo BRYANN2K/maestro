@@ -153,13 +153,29 @@ func (m *Model) renderTabBar() string {
 		}
 		branch = m.orch.BranchDisplay()
 	}
-	metaText := "  ◇ " + truncateIDEPlainText(project, 24)
-	if m.sessionTitle != "" && m.width >= 92 {
-		metaText += " · " + truncateIDEPlainText(m.sessionTitle, 28)
+	// Keep the project identity visible even when the session title or branch
+	// is long. The previous all-or-nothing fit check dropped the entire label,
+	// making a managed worktree look as though Maestro had opened an unrelated
+	// folder.
+	metaBudget := max(m.width-x-18, 0)
+	metaText := ""
+	if metaBudget >= 8 {
+		projectText := "  ◇ " + truncateIDEPlainText(project, max(min(24, metaBudget-4), 1))
+		metaText = projectText
+		branchText := "   ⎇ " + truncateIDEPlainText(branch, 28)
+		if lipgloss.Width(metaText)+lipgloss.Width(branchText) <= metaBudget {
+			metaText += branchText
+		}
+		if m.sessionTitle != "" && m.width >= 92 {
+			titleText := " · " + truncateIDEPlainText(m.sessionTitle, 28)
+			withTitle := projectText + titleText
+			if lipgloss.Width(withTitle)+lipgloss.Width(branchText) <= metaBudget {
+				metaText = withTitle + branchText
+			}
+		}
 	}
-	metaText += "   ⎇ " + truncateIDEPlainText(branch, 28)
-	meta := m.styles.TabInactive.Render(metaText)
-	if x+lipgloss.Width(meta)+18 < m.width {
+	if metaText != "" {
+		meta := m.styles.TabInactive.Render(metaText)
 		row += meta
 		x += lipgloss.Width(meta)
 	}

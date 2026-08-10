@@ -354,7 +354,7 @@ func runSpec(ctx context.Context, out io.Writer, store *spec.Store, args []strin
 
 func printHelp(out io.Writer) {
 	fmt.Fprintln(out, "Commands:")
-	fmt.Fprintln(out, "  /bootstrap            TUI-only project contract conversation")
+	fmt.Fprintln(out, "  /bootstrap            initialize Git and start the project contract conversation")
 	fmt.Fprintln(out, "  /adopt                TUI-only existing-repository contract conversation")
 	fmt.Fprintln(out, "  /onboard              compatibility alias for /adopt")
 	fmt.Fprintln(out, "  /propose              draft a spec proposal")

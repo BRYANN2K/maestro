@@ -345,7 +345,7 @@ func TestAcceptRequiresIsolationForDirtyCheckout(t *testing.T) {
 	wantStatus := gitRun(t, dir, "status", "--porcelain=v1")
 
 	for _, choice := range []BranchChoice{{Kind: "stay"}, {Kind: "branch", Name: "feat-unsafe"}} {
-		if _, err := orch.Accept(ctx, choice); err == nil || !strings.Contains(err.Error(), "--worktree") {
+		if _, err := orch.Accept(ctx, choice); err == nil || !strings.Contains(err.Error(), "plain /accept") {
 			t.Fatalf("Accept(%s) error = %v, want isolation guidance", choice.Kind, err)
 		}
 		if branch := strings.TrimSpace(gitRun(t, dir, "branch", "--show-current")); branch != "main" {
@@ -361,6 +361,159 @@ func TestAcceptRequiresIsolationForDirtyCheckout(t *testing.T) {
 	}
 	if got := gitRun(t, dir, "status", "--porcelain=v1"); got != wantStatus {
 		t.Fatalf("worktree accept changed base checkout: got %q, want %q", got, wantStatus)
+	}
+}
+
+func TestPlainAcceptManagesCollisionFreeWorktreeAndPreservesDirtyBase(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	dir := newTestRepo(t)
+	orch := newTestOrch(t, dir, &fakeRunner{})
+	ctx := context.Background()
+	if _, err := orch.Propose(ctx, "Add collision-safe managed acceptance"); err != nil {
+		t.Fatal(err)
+	}
+	menu, err := orch.Menu()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Simulate a retained worktree branch from an older session. Maestro must
+	// preserve it and allocate the next name without asking the user.
+	gitRun(t, dir, "branch", menu.Suggested)
+	retainedOID := strings.TrimSpace(gitRun(t, dir, "rev-parse", menu.Suggested))
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("user edit\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "user.txt"), []byte("keep me\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	wantStatus := gitRun(t, dir, "status", "--porcelain=v1")
+
+	if err := orch.Dispatch(ctx, Command{Cmd: "accept", Flags: map[string]string{}}); err != nil {
+		t.Fatalf("plain /accept: %v", err)
+	}
+	got := orch.Session()
+	if got.Branch != menu.Suggested+"-2" || !got.ManagedWorktree {
+		t.Fatalf("managed session = %+v, want branch %q", got, menu.Suggested+"-2")
+	}
+	wantParent, err := canonicalProjectDir(filepath.Join(home, ".maestro", "worktrees", got.Project))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !pathContains(wantParent, got.Worktree) {
+		t.Fatalf("managed worktree %q is outside %q", got.Worktree, wantParent)
+	}
+	if status := gitRun(t, dir, "status", "--porcelain=v1"); status != wantStatus {
+		t.Fatalf("plain /accept changed dirty base: got %q, want %q", status, wantStatus)
+	}
+	if oid := strings.TrimSpace(gitRun(t, dir, "rev-parse", menu.Suggested)); oid != retainedOID {
+		t.Fatalf("retained branch moved from %s to %s", retainedOID, oid)
+	}
+	if _, err := os.Stat(filepath.Join(got.Worktree, "specs", orch.ActiveSpec().ID, spec.FileSpec)); err != nil {
+		t.Fatalf("managed worktree does not own accepted spec: %v", err)
+	}
+}
+
+func TestEnsureBootstrapRepositoryInitializesOnceWithoutCommit(t *testing.T) {
+	dir := t.TempDir()
+	orch := newTestOrch(t, dir, &fakeRunner{})
+
+	initialized, err := orch.EnsureBootstrapRepository(t.Context())
+	if err != nil {
+		t.Fatalf("first bootstrap repository check: %v", err)
+	}
+	if !initialized {
+		t.Fatal("first bootstrap repository check did not initialize Git")
+	}
+	if branch := strings.TrimSpace(gitRun(t, dir, "symbolic-ref", "--short", "HEAD")); branch != "main" {
+		t.Fatalf("initial branch = %q, want main", branch)
+	}
+	head := exec.Command("git", "-C", dir, "rev-parse", "--verify", "HEAD")
+	if err := head.Run(); err == nil {
+		t.Fatal("bootstrap repository check unexpectedly created a commit")
+	}
+
+	initialized, err = orch.EnsureBootstrapRepository(t.Context())
+	if err != nil {
+		t.Fatalf("second bootstrap repository check: %v", err)
+	}
+	if initialized {
+		t.Fatal("second bootstrap repository check reinitialized the repository")
+	}
+}
+
+func TestPlainAcceptInitializesGitAndCreatesSafeBaseline(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("MAESTRO_MEMORY_DIR", filepath.Join(t.TempDir(), "mem"))
+	t.Setenv("MAESTRO_CHECKPOINTS_DIR", filepath.Join(t.TempDir(), "cps"))
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "app.py"), []byte("print('ready')\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte("TOKEN=do-not-commit\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(dir, "secrets"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "secrets", "local.txt"), []byte("private\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sessionsDir := filepath.Join(dir, ".maestro-private", "sessions")
+	orch, err := New(t.Context(), Options{
+		ProjectDir: dir, SessionsDir: sessionsDir, In: strings.NewReader("n\n"), Out: &bytes.Buffer{}, Runner: &fakeRunner{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if orch.workspaceRoute().git.IsRepo(t.Context()) {
+		t.Fatal("fixture unexpectedly started as a Git repository")
+	}
+	if _, err := orch.Propose(t.Context(), "Add an automatically versioned Python feature"); err != nil {
+		t.Fatal(err)
+	}
+	if err := orch.Dispatch(t.Context(), Command{Cmd: "accept", Flags: map[string]string{}}); err != nil {
+		t.Fatalf("plain /accept in non-repository: %v", err)
+	}
+
+	if !orch.workspaceRoute().git.IsRepo(t.Context()) {
+		t.Fatal("/accept did not initialize Git")
+	}
+	if subject := strings.TrimSpace(gitRun(t, dir, "log", "-1", "--pretty=%s", "main")); subject != initialCommitMessage {
+		t.Fatalf("baseline subject = %q, want %q", subject, initialCommitMessage)
+	}
+	if tracked := strings.TrimSpace(gitRun(t, dir, "ls-files", "--", "app.py")); tracked != "app.py" {
+		t.Fatalf("app.py was not captured by baseline: %q", tracked)
+	}
+	for _, sensitive := range []string{".env", "secrets/local.txt"} {
+		if tracked := strings.TrimSpace(gitRun(t, dir, "ls-files", "--", sensitive)); tracked != "" {
+			t.Fatalf("sensitive path %q entered baseline: %q", sensitive, tracked)
+		}
+		if _, err := os.Stat(filepath.Join(dir, sensitive)); err != nil {
+			t.Fatalf("sensitive path %q was not preserved in base: %v", sensitive, err)
+		}
+		if _, err := os.Stat(filepath.Join(orch.Session().Worktree, sensitive)); !os.IsNotExist(err) {
+			t.Fatalf("sensitive path %q leaked into managed worktree: %v", sensitive, err)
+		}
+	}
+	if tracked := strings.TrimSpace(gitRun(t, dir, "ls-files", "--", ".maestro-private")); tracked != "" {
+		t.Fatalf("private session state entered baseline: %q", tracked)
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".maestro-private")); err != nil {
+		t.Fatalf("private session state was not preserved in base: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(orch.Session().Worktree, ".maestro-private")); !os.IsNotExist(err) {
+		t.Fatalf("private session state leaked into managed worktree: %v", err)
+	}
+	if name := strings.TrimSpace(gitRun(t, dir, "config", "--get", "user.name")); name == "" {
+		t.Fatal("managed repository has no commit identity")
+	}
+	if !orch.Session().ManagedWorktree || orch.Session().BaseBranch != "main" {
+		t.Fatalf("accepted session = %+v", orch.Session())
+	}
+	if _, err := os.Stat(filepath.Join(orch.Session().Worktree, "app.py")); err != nil {
+		t.Fatalf("managed worktree is missing baseline project files: %v", err)
 	}
 }
 

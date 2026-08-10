@@ -279,6 +279,16 @@ func (f *inputFilter) filter(_ tea.Model, msg tea.Msg) tea.Msg {
 			return typed
 		}
 		text := string(typed.Runes)
+		// Some terminals split an OSC color reply so aggressively that the
+		// payload is removed but its closing introducer replaces the slash of
+		// the command typed immediately afterwards (for example "]mcp"). Only
+		// repair exact, known Maestro commands; ordinary text beginning with a
+		// bracket must remain untouched.
+		if repaired := repairOrphanOSCSlashCommand(text); repaired != text {
+			typed.Runes = []rune(repaired)
+			typed.Alt = false
+			text = repaired
+		}
 		if f.noisePending {
 			if !f.noisePendingAt.IsZero() && time.Since(f.noisePendingAt) > 100*time.Millisecond {
 				f.noisePending = false
@@ -305,10 +315,12 @@ func (f *inputFilter) filter(_ tea.Model, msg tea.Msg) tea.Msg {
 			if clean == "" {
 				return nil
 			}
+			clean = repairOrphanOSCSlashCommand(clean)
 			typed.Runes = []rune(clean)
 			typed.Alt = false
 			return typed
 		}
+		return typed
 	case tea.MouseMsg:
 		if typed.Action == tea.MouseActionMotion {
 			now := time.Now()
