@@ -36,13 +36,26 @@ func TestStdioCancellationKillsEscapedProcessGroupDescendant(t *testing.T) {
 	if _, err := client.ListTools(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := contextWithShortDeadline()
+	// Starting a race-instrumented helper can take noticeably longer when the
+	// full package suite is running in parallel. Keep the deadline bounded but
+	// long enough to ensure the escaped descendant is actually created before
+	// cancellation is exercised.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	_, _ = client.CallTool(ctx, "echo", map[string]any{"message": "hello"})
 
-	raw, err := os.ReadFile(pidFile)
-	if err != nil {
-		t.Fatalf("escaped helper child PID: %v", err)
+	var raw []byte
+	pidDeadline := time.Now().Add(2 * time.Second)
+	for {
+		var err error
+		raw, err = os.ReadFile(pidFile)
+		if err == nil {
+			break
+		}
+		if !errors.Is(err, os.ErrNotExist) || time.Now().After(pidDeadline) {
+			t.Fatalf("escaped helper child PID: %v", err)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 	pid, err := strconv.Atoi(string(raw))
 	if err != nil || pid <= 1 {
@@ -57,8 +70,4 @@ func TestStdioCancellationKillsEscapedProcessGroupDescendant(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("escaped MCP descendant %d survived cancellation", pid)
-}
-
-func contextWithShortDeadline() (context.Context, context.CancelFunc) {
-	return context.WithTimeout(context.Background(), 200*time.Millisecond)
 }

@@ -178,3 +178,24 @@ func TestTerminalSafeLineRemovesControlSequences(t *testing.T) {
 		t.Fatalf("terminalSafeLine = %q", got)
 	}
 }
+
+func TestAcceptCommandDefaultsToManagedWorktree(t *testing.T) {
+	tests := []struct {
+		name  string
+		flags map[string]string
+		want  BranchChoice
+	}{
+		{name: "plain accept", flags: map[string]string{}, want: BranchChoice{Kind: "worktree"}},
+		{name: "CLI false default", flags: map[string]string{"worktree": "false"}, want: BranchChoice{Kind: "worktree"}},
+		{name: "legacy worktree flag", flags: map[string]string{"worktree": "true"}, want: BranchChoice{Kind: "worktree"}},
+		{name: "TUI worktree value", flags: map[string]string{"worktree": "feature/custom"}, want: BranchChoice{Kind: "worktree", Name: "feature/custom"}},
+		{name: "explicit branch compatibility", flags: map[string]string{"branch": "feature/in-place"}, want: BranchChoice{Kind: "branch", Name: "feature/in-place"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := branchChoice(Command{Cmd: "accept", Flags: tt.flags}); got != tt.want {
+				t.Fatalf("branchChoice = %+v, want %+v", got, tt.want)
+			}
+		})
+	}
+}

@@ -378,9 +378,10 @@ type projectConversationState struct {
 	request   uint64
 }
 type projectConversationMsg struct {
-	state projectConversationState
-	step  orchestrator.ProjectManifestStep
-	err   error
+	state                 projectConversationState
+	step                  orchestrator.ProjectManifestStep
+	repositoryInitialized bool
+	err                   error
 }
 type workspaceListMsg struct {
 	request    uint64
@@ -764,6 +765,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.appendError("error: workspace changed while preparing MAESTRO.md; run the command again")
 			m.status.pushToast("error", "workspace changed — run the command again", 4*time.Second)
 			return m, m.arm(clearScreenCmd())
+		}
+		if msg.repositoryInitialized {
+			m.status.pushToast("info", "Git repository initialized on main", 4*time.Second)
 		}
 		m.projectFlow = &msg.state
 		if !msg.step.Ready {
@@ -1568,7 +1572,7 @@ func terminalNoiseKey(msg tea.KeyMsg) bool {
 	// whole payload is made of reports; embedded reports are stripped by the
 	// input filter before a text widget sees them.
 	s := string(msg.Runes)
-	if stripTerminalReports(s) == "" && mouseReportRe.MatchString(s) {
+	if clean := stripTerminalReports(s); clean == "" && clean != s {
 		return true
 	}
 	if csiPayloadRe.MatchString(s) || ((strings.HasPrefix(s, "[<") || strings.HasPrefix(s, "<")) && strings.Contains(s, ";")) {
@@ -1586,8 +1590,22 @@ var csiPayloadRe = regexp.MustCompile(`^(?:\[?<)?[0-9]+;[0-9]+;[0-9]+[Mm]$`)
 // leading m covers the release byte occasionally glued to the next report.
 var mouseReportRe = regexp.MustCompile(`(?:\x1b)?(?:\[)?<[0-9]+;[0-9]+;[0-9]+[Mm]|(?:\x1b)?\[[0-9]+;[0-9]+;[0-9]+[Mm]|(?:[mM])?[0-9]+;[0-9]+;[0-9]+[Mm]`)
 
+// oscColorReportRe matches xterm-compatible OSC 10/11/12 color responses,
+// including the prefix-less form produced when a terminal adapter consumes
+// ESC ] and the BEL terminator before Bubble Tea sees the key event. A late
+// background-color response can otherwise be concatenated with the user's
+// next slash command (for example "11;rgb:.../model") and sent as Chat text.
+var oscColorReportRe = regexp.MustCompile(`(?:\x1b\])?(?:10|11|12);rgb:[0-9a-fA-F]{1,4}/[0-9a-fA-F]{1,4}/[0-9a-fA-F]{1,4}(?:\x07|\x1b\\)?`)
+
+// cursorPositionReportRe matches the response to a terminal cursor-position
+// query (CPR/DSR), including the prefix-less form seen when an intermediary
+// consumes ESC. These replies can arrive just as the user types a command.
+var cursorPositionReportRe = regexp.MustCompile(`(?:\x1b)?\[[0-9]+;[0-9]+R`)
+
 func stripTerminalReports(s string) string {
-	return mouseReportRe.ReplaceAllString(s, "")
+	s = mouseReportRe.ReplaceAllString(s, "")
+	s = oscColorReportRe.ReplaceAllString(s, "")
+	return cursorPositionReportRe.ReplaceAllString(s, "")
 }
 
 func (m *Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -2045,9 +2063,13 @@ func (m *Model) updateOverlayKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		submitted, cancelled := form.update(msg)
 		if cancelled {
+			action := m.formAction
 			m.overlay = overlayNone
 			m.overlayM = nil
 			m.formAction = formActionNone
+			if action == formActionArchive || action == formActionArchiveMerge {
+				m.appendSystem("Archive cancelled.")
+			}
 			return m, nil
 		}
 		if submitted {
@@ -2587,7 +2609,7 @@ func (m *Model) send() tea.Cmd {
 		m.status.pushToast("info", "agent busy — wait or cancel", 2*time.Second)
 		return nil
 	}
-	text := m.input.Value()
+	text := normalizeSubmittedInput(m.input.Value())
 	m.followOutput = true
 	m.input.pushHistory(text)
 	m.input.Set("")
@@ -2651,6 +2673,18 @@ func (m *Model) send() tea.Cmd {
 				return nil
 			}
 			return m.renameSession(title)
+		case "archive":
+			if cmd.Flags["yes"] != "true" {
+				title := "Commit and archive this worktree?"
+				m.formAction = formActionArchive
+				if cmd.Flags["merge"] == "true" {
+					title = "Commit, merge, and archive this worktree?"
+					m.formAction = formActionArchiveMerge
+				}
+				m.overlay = overlayForm
+				m.overlayM = newFormOverlay(title, nil)
+				return nil
+			}
 		case "model":
 			if len(cmd.Args) > 0 && cmd.Args[0] != "list" {
 				id := cmd.Args[0]
@@ -2825,6 +2859,12 @@ func (m *Model) submitForm(action formAction, values map[string]string) tea.Cmd 
 		return m.renameSession(values["title"])
 	case formActionCreateWorkspace:
 		return m.createWorkspace(values["branch"])
+	case formActionArchive, formActionArchiveMerge:
+		flags := map[string]string{"yes": "true"}
+		if action == formActionArchiveMerge {
+			flags["merge"] = "true"
+		}
+		return m.dispatch(orchestrator.Command{Cmd: "archive", Flags: flags})
 	default:
 		m.status.pushToast("error", "form action is unavailable", 3*time.Second)
 		return nil
@@ -2857,9 +2897,19 @@ func (m *Model) beginProjectConversation(mode projectprofile.Mode, resume *orche
 			}
 			state.mode = recommended
 		}
+		repositoryInitialized := false
+		if state.mode == projectprofile.ModeGreenfield {
+			var err error
+			repositoryInitialized, err = m.orch.EnsureBootstrapRepository(ctx)
+			if err != nil {
+				return projectConversationMsg{state: state, err: err}
+			}
+		}
 		step, err := m.orch.ProjectManifestConversation(ctx, state.mode, state.intent, "")
 		state.intent = ""
-		return projectConversationMsg{state: state, step: step, err: err}
+		return projectConversationMsg{
+			state: state, step: step, repositoryInitialized: repositoryInitialized, err: err,
+		}
 	})
 }
 
@@ -4475,8 +4525,13 @@ func (m *Model) renderOverlay(out string) string {
 	case overlayPalette, overlayModelPicker, overlaySessionPicker, overlayEngine, overlayAsk, overlayCheckpoints, overlayGit, overlayCoachMode:
 		if list, ok := overlayList(m.overlayM); ok {
 			pickerWidth := min(dialogW, 40)
-			if m.overlay == overlayModelPicker {
+			switch m.overlay {
+			case overlayModelPicker:
 				pickerWidth = min(dialogW, 96)
+			case overlayCoachMode:
+				pickerWidth = min(dialogW, 68)
+			case overlaySessionPicker, overlayCheckpoints, overlayGit, overlayAsk:
+				pickerWidth = min(dialogW, 72)
 			}
 			content = list.View(m.styles, pickerWidth)
 		}

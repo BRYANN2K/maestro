@@ -3,10 +3,32 @@
 All notable changes to Maestro are documented here. Maestro follows
 [Semantic Versioning](https://semver.org/).
 
-## [1.0.0] — 2026-08-10
+## [1.0.0] — 2026-08-11
 
 Maestro's first public release: a spec-driven AI development environment for
 the terminal.
+
+### Release refinements
+
+- Made plain `/accept` create and select a collision-free managed worktree
+  automatically, preserving pre-existing checkout changes.
+- Made greenfield `/bootstrap` initialize a missing Git repository on `main`;
+  `/accept` retains the fallback and creates a private-state/secret-aware
+  baseline commit when the repository has no committed history.
+- Added an in-TUI confirmation for `/archive` and `/archive --merge`, avoiding
+  the hidden stdin prompt that could leave the interface waiting indefinitely.
+- Kept the project identity visible beside long session/branch names and made
+  `/git` lead with the distinguishing directory instead of a truncated path.
+- Filtered delayed OSC color and CSI cursor-position replies before they can
+  corrupt a slash command, including commands with arguments.
+- Gave Coach, session, Git, and checkpoint pickers enough room for their full
+  decision labels at the standard 120-column release size.
+- Made Learn retry one malformed structured response, then hydrate every code
+  excerpt from the trusted source snapshot instead of model-generated text.
+- Replaced the retired OpenCode Go fallback model, corrected the dedicated Go
+  endpoint, and refreshed its current model limits and pricing metadata.
+- Migrated Maestro-owned legacy skill-state directories to private `0700`
+  permissions after validating every path component and rejecting symlinks.
 
 ### Orchestration
 

@@ -12,6 +12,7 @@ coverage.*
 # Release artifacts
 /dist/
 /npm/*.tgz
+/artifacts/
 
 # Maestro runtime state
 /.maestro/

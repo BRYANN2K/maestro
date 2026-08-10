@@ -617,7 +617,16 @@ func newWorkspacePickerOverlay(workspaces []git.Workspace, current string) *list
 		if workspace.Dirty {
 			state = "changed"
 		}
-		label := fmt.Sprintf("%s  · %s · %s", safeIDEPlainText(branch), state, safeIDEPlainText(filepath.Clean(workspace.Path)))
+		// Lead with the directory identity so narrow dialogs cannot trim the
+		// distinguishing suffix of paths such as maestro and maestro-e2e. Managed
+		// worktrees include their project namespace before the branch directory.
+		path := filepath.Clean(workspace.Path)
+		directory := filepath.Base(path)
+		parent := filepath.Base(filepath.Dir(path))
+		if filepath.Base(filepath.Dir(filepath.Dir(path))) == "worktrees" {
+			directory = filepath.Join(parent, directory)
+		}
+		label := fmt.Sprintf("%s  · %s · %s", safeIDEPlainText(directory), safeIDEPlainText(branch), state)
 		seen[label]++
 		if seen[label] > 1 {
 			label = fmt.Sprintf("%s · %d", label, seen[label])

@@ -239,6 +239,24 @@ func TestLearnCoachIsExplicitAndPreparesWithoutSending(t *testing.T) {
 	}
 }
 
+func TestCoachModePickerUsesEnoughWidthForItsDecisionLabels(t *testing.T) {
+	m, _ := newTestModel(t)
+	feed(m, tea.WindowSizeMsg{Width: 120, Height: 30})
+	m.overlay = overlayCoachMode
+	m.overlayM = newCoachModeOverlay(orchestrator.CoachState{Mode: orchestrator.CoachModeOff})
+
+	view := stripANSI(m.View())
+	for _, want := range []string{
+		"Guided  · examples fade as evidence grows",
+		"Challenge · reason first, ask for help on demand",
+		"Next lesson · open the contextual activity",
+	} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("Coach mode picker wrapped or clipped %q:\n%s", want, view)
+		}
+	}
+}
+
 func TestLearnDonePersistsOnlyExplicitCompletion(t *testing.T) {
 	t.Setenv("MAESTRO_LEARN_DIR", t.TempDir())
 	m, _ := newTestModel(t)

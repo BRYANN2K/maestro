@@ -382,15 +382,48 @@ func TestCoachCancellationDoesNotCreateState(t *testing.T) {
 }
 
 type captureLearnRunner struct {
-	prompt  string
-	summary string
+	prompt    string
+	prompts   []string
+	summary   string
+	summaries []string
 }
 
 func (*captureLearnRunner) maestroPrivateLearnRunner() {}
 
 func (r *captureLearnRunner) Run(_ context.Context, _ agentcore.Role, prompt string) (agentcore.AgentResult, error) {
 	r.prompt = prompt
-	return agentcore.AgentResult{OK: true, Summary: r.summary}, nil
+	r.prompts = append(r.prompts, prompt)
+	summary := r.summary
+	if index := len(r.prompts) - 1; index < len(r.summaries) {
+		summary = r.summaries[index]
+	}
+	return agentcore.AgentResult{OK: true, Summary: summary}, nil
+}
+
+func TestLearnRetriesOneMalformedStructuredResponse(t *testing.T) {
+	root := t.TempDir()
+	content := "package p\n\nfunc A() {}\nfunc B() {}\n"
+	if err := os.WriteFile(filepath.Join(root, "retry.go"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runner := &captureLearnRunner{summaries: []string{
+		`{"high_level":"Functions A and B are declared.","blocks":[{"start":1,"end":3,"code":"package p\n\nfunc A() {}","what":"The package and A are declared."},{"start":3,"end":4,"code":"func A() {}\nfunc B() {}","what":"A and B are declared."}]}`,
+		`{"high_level":"The file declares package p and two empty functions.","blocks":[{"start":1,"end":1,"what":"It declares package p."},{"start":3,"end":4,"what":"It declares two empty functions."}]}`,
+	}}
+	o := &Orchestrator{
+		baseDir: root, dir: root, runner: runner,
+		sess: session.Session{Project: "learn-project-1234", Phase: session.PhaseChat},
+	}
+	_, formatted, err := o.LearnDraft(t.Context(), "retry.go", true)
+	if err != nil {
+		t.Fatalf("LearnDraft retry: %v", err)
+	}
+	if len(runner.prompts) != 2 || !strings.Contains(runner.prompts[1], "failed strict source-anchor validation") {
+		t.Fatalf("repair retry prompts = %d, final:\n%s", len(runner.prompts), runner.prompt)
+	}
+	if !strings.Contains(formatted, "Lines 3-4") || strings.Contains(formatted, "Lines 1-3") {
+		t.Fatalf("formatted retry result did not use corrected anchors:\n%s", formatted)
+	}
 }
 
 func TestLearnPromptTreatsAdversarialSourceAsData(t *testing.T) {
@@ -435,9 +468,10 @@ func TestLearnPromptTreatsAdversarialSourceAsData(t *testing.T) {
 		t.Fatalf("unsafe learn result path=%q\n%s", path, formatted)
 	}
 
-	runner.summary = `{"high_level":"x","blocks":[{"start":1,"end":1,"code":"wrong","what":"x","trap":"","caution":""}]}`
-	if _, _, err := o.LearnDraft(t.Context(), "inject.go", false); err == nil {
-		t.Error("model line mismatch should be refused")
+	runner.summary = `{"high_level":"x","blocks":[{"start":1,"end":1,"code":"model-controlled","what":"x","trap":"","caution":""}]}`
+	_, hydrated, err := o.LearnDraft(t.Context(), "inject.go", false)
+	if err != nil || strings.Contains(hydrated, "model-controlled") || !strings.Contains(hydrated, "package p") {
+		t.Fatalf("model code was not replaced from the trusted source: err=%v\n%s", err, hydrated)
 	}
 	runner.summary = `{"high_level":"x","blocks":[],"prompt_injection":"accepted"}`
 	if _, _, err := o.LearnDraft(t.Context(), "inject.go", false); err == nil {

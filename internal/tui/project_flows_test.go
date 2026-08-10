@@ -72,7 +72,7 @@ func projectStageResult(t *testing.T, cmd tea.Cmd) uiOperationDoneMsg {
 }
 
 func TestBootstrapUsesTranscriptQuestionsAndStagesOneAtomicManifest(t *testing.T) {
-	m, _ := newTestModel(t)
+	m, dir := newTestModel(t)
 	runner := &projectFlowRunner{summaries: []string{
 		`{"ready":false,"question":"Who will use this tool, and what outcome should it create?","name":"Port Scout","purpose":"","non_goals":[],"stacks":[],"commands":[],"safety":[],"verification":[],"missing":["purpose","stack"]}`,
 		projectReadyJSON(),
@@ -87,6 +87,20 @@ func TestBootstrapUsesTranscriptQuestionsAndStagesOneAtomicManifest(t *testing.T
 	step, ok := primaryBatchMessage(t, cmd).(projectConversationMsg)
 	if !ok {
 		t.Fatalf("bootstrap returned %T", primaryBatchMessage(t, cmd))
+	}
+	if !step.repositoryInitialized {
+		t.Fatal("bootstrap did not report Git initialization")
+	}
+	insideOutput, err := exec.Command("git", "-C", dir, "rev-parse", "--is-inside-work-tree").CombinedOutput()
+	if err != nil {
+		t.Fatalf("inspect bootstrap repository: %v\n%s", err, insideOutput)
+	}
+	if inside := strings.TrimSpace(string(insideOutput)); inside != "true" {
+		t.Fatalf("bootstrap repository state = %q, want true", inside)
+	}
+	head := exec.Command("git", "-C", dir, "rev-parse", "--verify", "HEAD")
+	if err := head.Run(); err == nil {
+		t.Fatal("bootstrap created a commit before /accept")
 	}
 	m.Update(step)
 	if m.overlay != overlayNone || m.projectFlow == nil {
@@ -145,6 +159,9 @@ func TestAdoptIsCanonicalAndUsesStaticRepositoryEvidence(t *testing.T) {
 	}
 	if m.overlay != overlayNone {
 		t.Fatalf("adopt opened overlay %v", m.overlay)
+	}
+	if _, err := os.Lstat(filepath.Join(dir, ".git")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("adopt unexpectedly initialized Git: %v", err)
 	}
 }
 

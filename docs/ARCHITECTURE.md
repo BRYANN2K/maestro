@@ -202,9 +202,11 @@ workspace identity. Loading a session validates its repository, ref, branch,
 worktree, and active spec before replacing live state. A missing historical
 base branch is never guessed.
 
-`/git` manages registered workspaces. `/accept --worktree` may create a managed
-isolated worktree. MCP stdio processes are stopped and rebound whenever the
-active workspace changes.
+`/git` manages persistent registered workspaces. Plain `/accept` always creates
+an automatically named, isolated managed worktree and preserves a dirty source
+checkout. If the project has no Git history, acceptance initializes the
+repository and creates a baseline commit first. MCP stdio processes are stopped
+and rebound whenever the active workspace changes.
 
 ## Review and archive integrity
 

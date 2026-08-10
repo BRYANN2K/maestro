@@ -78,7 +78,11 @@ func (s *StateStore) loadLocked(ctx context.Context) (State, error) {
 	if !safeStateComponent.MatchString(s.projectKey) {
 		return state, errors.New("skill state project key is unsafe")
 	}
-	root, err := s.openStateRoot(false)
+	// Opening the catalog is also the migration point for state directories
+	// created by early Maestro builds with the process umask (commonly 0755).
+	// openStateRoot validates every component and rejects symlinks before it
+	// tightens only Maestro's final directory to 0700.
+	root, err := s.openStateRoot(true)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return state, nil

@@ -363,9 +363,9 @@ func runPipeline(cmd string, args []string, opts options, out, errOut io.Writer)
 	}
 	switch cmd {
 	case "accept":
-		fs.StringVar(&branch, "branch", "", "create a branch with this name")
-		fs.BoolVar(&worktree, "worktree", false, "create a git worktree (name from -branch or auto)")
-		fs.StringVar(&branch, "name", "", "branch/worktree name")
+		fs.StringVar(&branch, "branch", "", "compatibility override: use an in-place branch")
+		fs.BoolVar(&worktree, "worktree", false, "compatibility alias: managed worktrees are already the default")
+		fs.StringVar(&branch, "name", "", "optional managed-worktree branch name")
 	case "rewind":
 		fs.StringVar(&id, "id", "", "checkpoint id")
 		fs.BoolVar(&rewindCode, "code", false, "rewind the code")
@@ -913,14 +913,14 @@ Usage:
 Commands:
   maestro chat [-m <msg>]   interactive REPL, or one-shot chat
   maestro tui               premium TUI (charm.land v2)
-  /bootstrap                in the TUI: discuss and review a new-project MAESTRO.md
+  /bootstrap                in the TUI: initialize Git, discuss, and review MAESTRO.md
   /adopt                    in the TUI: analyse an existing repo and review MAESTRO.md
   /onboard                  compatibility alias for /adopt
   /update                   in the TUI: check the latest stable npm release
   maestro propose -m <prompt>       draft a spec proposal [--recipe quick|feature|bug|architecture]
   maestro validate                  check proposal readiness
   maestro answer Q-001 <answer>     resolve a blocking clarification
-  maestro accept [--branch NAME | --worktree]   accept the proposal
+  maestro accept [--branch NAME]   accept into an automatic managed worktree
   maestro build [<id>] [--engine] [--agent] [--model]   launch the dev sub-agent
   maestro review [<id>]     run the reviewer
   maestro fix               send review findings back to dev

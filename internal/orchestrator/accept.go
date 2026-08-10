@@ -14,10 +14,12 @@ import (
 	"github.com/bryann2k/maestro/internal/spec"
 )
 
-// BranchChoice is the user's decision at the /accept branch menu.
+// BranchChoice describes the workspace strategy used by /accept. User-facing
+// commands default to an automatically named managed worktree; stay and branch
+// remain available to compatibility callers and focused tests.
 type BranchChoice struct {
 	Kind string // stay | branch | worktree
-	Name string // branch name / worktree path, auto-suggested when empty
+	Name string // branch name, auto-selected for a managed worktree when empty
 }
 
 // BranchMenu describes the choices offered after a spec is accepted.
@@ -48,7 +50,7 @@ func (o *Orchestrator) Accept(ctx context.Context, choice BranchChoice) (*spec.S
 	if choice.Kind != "stay" && choice.Kind != "branch" && choice.Kind != "worktree" {
 		return nil, fmt.Errorf("accept: unknown branch choice %q", choice.Kind)
 	}
-	if choice.Kind != "stay" && choice.Name == "" {
+	if choice.Kind == "branch" && choice.Name == "" {
 		choice.Name = prefixFor(draft.Category) + draft.ID
 	}
 	if _, err := os.Stat(workspace.store.Path(draft.ID)); err == nil {
@@ -56,6 +58,20 @@ func (o *Orchestrator) Accept(ctx context.Context, choice BranchChoice) (*spec.S
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return nil, fmt.Errorf("accept: inspect spec destination: %w", err)
 	}
+	repositorySetup, err := o.ensureAcceptRepository(ctx, workspace)
+	if err != nil {
+		return nil, fmt.Errorf("accept: prepare Git repository: %w", err)
+	}
+	if repositorySetup.Initialized {
+		fmt.Fprintf(o.out, "Initialized Git repository in %s\n", o.baseDir)
+	}
+	if repositorySetup.BaselineCommit != "" {
+		fmt.Fprintf(o.out, "Created baseline commit %s\n", repositorySetup.BaselineCommit)
+	}
+	if repositorySetup.ExcludedPrivate > 0 {
+		fmt.Fprintf(o.out, "Kept %d private or sensitive path(s) outside the baseline commit\n", repositorySetup.ExcludedPrivate)
+	}
+
 	// Staying in the checkout (or merely switching branches) carries every
 	// pre-existing index/worktree change into Maestro's eventual archive
 	// commit. Refuse that ambiguous ownership boundary; a dedicated worktree
@@ -66,7 +82,7 @@ func (o *Orchestrator) Accept(ctx context.Context, choice BranchChoice) (*spec.S
 			return nil, fmt.Errorf("accept: inspect working tree: %w", err)
 		}
 		if status.Dirty {
-			return nil, errors.New("accept: working tree has pre-existing changes; commit/stash them or choose --worktree")
+			return nil, errors.New("accept: the explicit in-place branch has pre-existing changes; rerun plain /accept for an automatic managed worktree")
 		}
 	}
 
@@ -119,22 +135,31 @@ func (o *Orchestrator) Accept(ctx context.Context, choice BranchChoice) (*spec.S
 			return nil, errors.New("accept: detached HEAD has no base branch; switch to a branch first")
 		}
 		originalBranch = branch
-		path := choice.Name
-		if !filepath.IsAbs(path) {
+		path := ""
+		if choice.Name == "" {
+			choice, path, createdBranchOID, err = o.createManagedAcceptWorktree(ctx, workspace, draft)
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			// Explicitly named worktrees retain their historical sibling path for
+			// compatibility. Plain /accept always takes the managed path above.
 			path = filepath.Join(filepath.Dir(o.baseDir), choice.Name)
-		}
-		if err := workspace.git.WorktreeAdd(ctx, path, choice.Name); err != nil {
-			return nil, err
+			if err := workspace.git.WorktreeAdd(ctx, path, choice.Name); err != nil {
+				return nil, err
+			}
 		}
 		targetDir = path
 		targetGit = git.New(path)
 		targetStore = spec.NewStore(filepath.Join(path, "specs"))
-		createdBranchOID, err = workspace.git.BranchOID(ctx, choice.Name)
-		if err != nil {
-			return nil, errors.Join(fmt.Errorf("accept: capture created worktree branch OID: %w", err), rollbackAcceptMaterialization(acceptRollbackState{
-				workspace: workspace, targetGit: targetGit, targetStore: targetStore,
-				choice: choice, originalBranch: originalBranch, targetDir: targetDir,
-			}))
+		if createdBranchOID == "" {
+			createdBranchOID, err = workspace.git.BranchOID(ctx, choice.Name)
+			if err != nil {
+				return nil, errors.Join(fmt.Errorf("accept: capture created worktree branch OID: %w", err), rollbackAcceptMaterialization(acceptRollbackState{
+					workspace: workspace, targetGit: targetGit, targetStore: targetStore,
+					choice: choice, originalBranch: originalBranch, targetDir: targetDir,
+				}))
+			}
 		}
 		targetIdentity, identityErr = readGitWorkspaceIdentity(ctx, targetDir)
 		if identityErr != nil {
@@ -152,7 +177,7 @@ func (o *Orchestrator) Accept(ctx context.Context, choice BranchChoice) (*spec.S
 	if strings.TrimSpace(tasks) == "" {
 		tasks = tasksTemplate(draft)
 	}
-	trio, err := targetStore.WriteTrioTracked(ctx, draft, design, tasks)
+	trio, err = targetStore.WriteTrioTracked(ctx, draft, design, tasks)
 	rollback := acceptRollbackState{
 		workspace: workspace, targetGit: targetGit, targetStore: targetStore, trio: trio,
 		choice: choice, originalBranch: originalBranch, targetDir: targetDir, branchOID: createdBranchOID,

@@ -78,3 +78,41 @@ func TestFormOverlayConsumesMouseInsteadOfClickingBehindIt(t *testing.T) {
 		t.Fatal("click leaked through form overlay to the workspace tab")
 	}
 }
+
+func TestConfirmationFormRequiresEnterAndSupportsEscape(t *testing.T) {
+	f := newFormOverlay("Commit and archive?", nil)
+	if submitted, cancelled := f.update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")}); submitted || cancelled {
+		t.Fatal("ordinary key dismissed confirmation")
+	}
+	view := stripANSI(f.View(NewStyles(ThemeForName("charmtone")), 40))
+	if !strings.Contains(view, "enter confirm") || !strings.Contains(view, "esc cancel") {
+		t.Fatalf("confirmation controls are not visible:\n%s", view)
+	}
+	if submitted, cancelled := f.update(tea.KeyMsg{Type: tea.KeyEnter}); !submitted || cancelled {
+		t.Fatal("enter did not confirm")
+	}
+
+	f = newFormOverlay("Commit and archive?", nil)
+	if submitted, cancelled := f.update(tea.KeyMsg{Type: tea.KeyEsc}); submitted || !cancelled {
+		t.Fatal("escape did not cancel")
+	}
+}
+
+func TestArchiveCommandUsesTUIConfirmation(t *testing.T) {
+	m, _ := newTestModel(t)
+	m.input.Set("/archive --merge")
+	if cmd := m.send(); cmd != nil {
+		t.Fatal("archive started before confirmation")
+	}
+	if m.overlay != overlayForm || m.formAction != formActionArchiveMerge {
+		t.Fatalf("archive confirmation state = overlay %v, action %v", m.overlay, m.formAction)
+	}
+	view := stripANSI(m.overlayM.View(m.styles, 60))
+	if !strings.Contains(view, "Commit, merge, and archive") {
+		t.Fatalf("merge consequence missing from confirmation:\n%s", view)
+	}
+	_, cmd := m.updateOverlayKey(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil || !m.busy || m.overlay != overlayNone {
+		t.Fatalf("confirmed archive was not dispatched: cmd=%v busy=%v overlay=%v", cmd != nil, m.busy, m.overlay)
+	}
+}

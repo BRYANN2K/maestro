@@ -15,10 +15,11 @@ import (
 const specContractVersion = 1
 
 type specTrioState struct {
-	specHash          string
-	designHash        string
-	tasksTemplateHash string
-	taskStates        []bool
+	specHash                   string
+	designHash                 string
+	tasksTemplateHash          string
+	tasksTemplateHashNoFinalLF string
+	taskStates                 []bool
 }
 
 // ensureSpecContract only validates the baseline persisted atomically by
@@ -49,7 +50,7 @@ func (o *Orchestrator) validateSpecContract() error {
 	if state.designHash != contract.DesignHash {
 		return errors.New("spec contract: design.md was modified; restore the accepted design")
 	}
-	if state.tasksTemplateHash != contract.TasksTemplateHash || len(state.taskStates) != len(contract.TaskStates) {
+	if !tasksTemplateMatches(contract.TasksTemplateHash, state) || len(state.taskStates) != len(contract.TaskStates) {
 		return errors.New("spec contract: tasks.md structure or text changed; only [ ] to [x] checkbox transitions are allowed")
 	}
 	for i := range state.taskStates {
@@ -74,7 +75,7 @@ func (o *Orchestrator) validatePendingSpecContract() (specTrioState, error) {
 	if state.designHash != contract.DesignHash {
 		return specTrioState{}, errors.New("spec contract: design.md was modified; restore the accepted design")
 	}
-	if state.tasksTemplateHash != contract.TasksTemplateHash || len(state.taskStates) != len(contract.TaskStates) {
+	if !tasksTemplateMatches(contract.TasksTemplateHash, state) || len(state.taskStates) != len(contract.TaskStates) {
 		return specTrioState{}, errors.New("spec contract: tasks.md structure or text changed; only [ ] to [x] checkbox transitions are allowed")
 	}
 	for i := range state.taskStates {
@@ -100,7 +101,7 @@ func (o *Orchestrator) validateDevSpecContractProgress(floor []bool) (specTrioSt
 	if state.designHash != contract.DesignHash {
 		return specTrioState{}, errors.New("spec contract: dev modified design.md; only implementation files and pending task checkboxes may change")
 	}
-	if state.tasksTemplateHash != contract.TasksTemplateHash || len(state.taskStates) != len(contract.TaskStates) {
+	if !tasksTemplateMatches(contract.TasksTemplateHash, state) || len(state.taskStates) != len(contract.TaskStates) {
 		return specTrioState{}, errors.New("spec contract: dev rewrote or removed tasks.md content; only [ ] to [x] checkbox transitions may change")
 	}
 	if len(floor) != len(state.taskStates) {
@@ -124,7 +125,7 @@ func (o *Orchestrator) advanceSpecContract(expected specTrioState) ([]bool, erro
 		return nil, err
 	}
 	if state.specHash != contract.SpecHash || state.designHash != contract.DesignHash ||
-		state.tasksTemplateHash != contract.TasksTemplateHash || len(state.taskStates) != len(contract.TaskStates) {
+		!tasksTemplateMatches(contract.TasksTemplateHash, state) || len(state.taskStates) != len(contract.TaskStates) {
 		return nil, errors.New("spec contract: accepted trio changed while review gates were running")
 	}
 	if !sameSpecTrioState(state, expected) {
@@ -165,6 +166,11 @@ func sameSpecTrioState(a, b specTrioState) bool {
 		}
 	}
 	return true
+}
+
+func tasksTemplateMatches(expected string, state specTrioState) bool {
+	return expected == state.tasksTemplateHash ||
+		(state.tasksTemplateHashNoFinalLF != "" && expected == state.tasksTemplateHashNoFinalLF)
 }
 
 func (o *Orchestrator) readSpecTrioState() (specTrioState, error) {
@@ -222,18 +228,28 @@ func readSpecTrioState(store *spec.Store, specID string) (specTrioState, error) 
 	if err != nil {
 		return specTrioState{}, fmt.Errorf("spec contract: tasks.md: %w", err)
 	}
-	return specTrioState{
+	state := specTrioState{
 		specHash:          contentHash(specData),
 		designHash:        contentHash(designData),
 		tasksTemplateHash: contentHash(tasksTemplate),
 		taskStates:        states,
-	}, nil
+	}
+	// Contracts written before final-LF canonicalization hashed a missing EOF
+	// newline literally. Accept that one legacy representation, but do not turn
+	// an extra blank line into an equivalent document.
+	if len(tasksTemplate) > 0 && tasksTemplate[len(tasksTemplate)-1] == '\n' &&
+		(len(tasksTemplate) == 1 || tasksTemplate[len(tasksTemplate)-2] != '\n') {
+		state.tasksTemplateHashNoFinalLF = contentHash(tasksTemplate[:len(tasksTemplate)-1])
+	}
+	return state, nil
 }
 
 // normalizeTaskCheckboxes returns an otherwise byte-identical tasks document
-// with each Markdown task marker normalized to [ ]. This makes its hash bind
-// line endings, whitespace, ordering, and task text while keeping checkbox
-// progress as a separately validated monotonic vector.
+// with each Markdown task marker normalized to [ ]. A single conventional
+// final LF is also canonicalized so an editor adding the missing EOF newline
+// while checking tasks cannot invalidate an otherwise unchanged contract.
+// The hash still binds all other line endings, whitespace, ordering, and task
+// text while checkbox progress remains a separately validated monotonic vector.
 func normalizeTaskCheckboxes(data []byte) ([]byte, []bool, error) {
 	normalized := append([]byte(nil), data...)
 	var states []bool
@@ -267,6 +283,9 @@ func normalizeTaskCheckboxes(data []byte) ([]byte, []bool, error) {
 			break
 		}
 		lineStart = lineEnd + 1
+	}
+	if len(normalized) > 0 && normalized[len(normalized)-1] != '\n' {
+		normalized = append(normalized, '\n')
 	}
 	return normalized, states, nil
 }

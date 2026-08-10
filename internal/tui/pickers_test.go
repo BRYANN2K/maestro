@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/bryann2k/maestro/internal/config"
@@ -186,6 +187,21 @@ func TestWorkspacePickerUsesExactPathsAndDisablesUnsafeRows(t *testing.T) {
 	}
 }
 
+func TestWorkspacePickerLeadsWithDistinguishingDirectory(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "maestro-e2e.Rhpvmo")
+	picker := newWorkspacePickerOverlay([]git.Workspace{{
+		Path: root, Branch: "main", Healthy: true, Current: true,
+	}}, root)
+	picker.down()
+	view := ansi.Strip(picker.View(NewStyles(Charmtone()), 40))
+	if !strings.Contains(view, "maestro-e2e.Rhpvmo") {
+		t.Fatalf("narrow picker hid the distinguishing directory:\n%s", view)
+	}
+	if got := picker.selectedValue(); got != root {
+		t.Fatalf("display compaction changed exact value: got %q, want %q", got, root)
+	}
+}
+
 func TestScrollHints(t *testing.T) {
 	// 5 items, 12 visible → no scroll.
 	if scrollUpHint(0) || scrollDownHint(0, 5) {
@@ -204,6 +220,18 @@ func TestScrollHints(t *testing.T) {
 	}
 	if scrollDownHint(8, 20) {
 		t.Error("no down hint at bottom")
+	}
+}
+
+func TestCheckpointPickerKeepsEmptyStateReadableAtReleaseWidth(t *testing.T) {
+	m, _ := newTestModel(t)
+	feed(m, tea.WindowSizeMsg{Width: 120, Height: 30})
+	m.overlay = overlayCheckpoints
+	m.overlayM = newCheckpointOverlay(m.orch)
+
+	view := stripANSI(m.View())
+	if want := "No checkpoints yet · created before build runs"; !strings.Contains(view, want) {
+		t.Fatalf("checkpoint picker clipped %q:\n%s", want, view)
 	}
 }
 

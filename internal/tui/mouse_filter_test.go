@@ -67,6 +67,78 @@ func TestInputFilterStripsMouseReportsAroundUsefulText(t *testing.T) {
 	}
 }
 
+func TestInputFilterDropsOSCColorResponsesAndPreservesCommand(t *testing.T) {
+	f := &inputFilter{}
+	for _, payload := range []string{
+		"11;rgb:213d/2743/33e7",
+		"\x1b]11;rgb:213d/2743/33e7\x07",
+		"\x1b]12;rgb:ffff/0000/aaaa\x1b\\",
+	} {
+		msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(payload)}
+		if got := f.filter(nil, msg); got != nil {
+			t.Fatalf("OSC color response %q should be dropped, got %#v", payload, got)
+		}
+	}
+
+	msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("11;rgb:213d/2743/33e7/model")}
+	got, ok := f.filter(nil, msg).(tea.KeyMsg)
+	if !ok || string(got.Runes) != "/model" {
+		t.Fatalf("OSC-prefixed command = %#v, want /model key message", got)
+	}
+}
+
+func TestInputFilterRepairsOrphanOSCIntroducerOnlyForKnownCommands(t *testing.T) {
+	f := &inputFilter{}
+	for input, want := range map[string]string{
+		"]mcp":                     "/mcp",
+		"]/mcp":                    "/mcp",
+		"]models":                  "/models",
+		"]ordinary":                "]ordinary",
+		"]rename Release showcase": "/rename Release showcase",
+	} {
+		msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(input)}
+		got, ok := f.filter(nil, msg).(tea.KeyMsg)
+		if !ok {
+			t.Fatalf("input %q should remain a key message", input)
+		}
+		if text := string(got.Runes); text != want {
+			t.Fatalf("filtered input %q = %q, want %q", input, text, want)
+		}
+	}
+}
+
+func TestInputFilterDropsCursorPositionReportsAndPreservesCommand(t *testing.T) {
+	f := &inputFilter{}
+	for _, payload := range []string{
+		"[30;1R",
+		"\x1b[30;1R",
+	} {
+		msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(payload)}
+		if got := f.filter(nil, msg); got != nil {
+			t.Fatalf("cursor position report %q should be dropped, got %#v", payload, got)
+		}
+	}
+
+	msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("][30;1R/mcp")}
+	got, ok := f.filter(nil, msg).(tea.KeyMsg)
+	if !ok || string(got.Runes) != "/mcp" {
+		t.Fatalf("CPR-prefixed command = %#v, want /mcp key message", got)
+	}
+}
+
+func TestNormalizeSubmittedInputRepairsReportsSplitAcrossKeyEvents(t *testing.T) {
+	for input, want := range map[string]string{
+		"]\x1b[30;1R/mcp": "/mcp",
+		"][30;1R/mcp":     "/mcp",
+		"]ordinary":       "]ordinary",
+		"note [30;1Rdone": "note done",
+	} {
+		if got := normalizeSubmittedInput(input); got != want {
+			t.Fatalf("normalizeSubmittedInput(%q) = %q, want %q", input, got, want)
+		}
+	}
+}
+
 func TestInputFilterDoesNotDropNormalAltBindings(t *testing.T) {
 	for _, runes := range []string{"1", "2", "←", "→"} {
 		msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(runes), Alt: true}

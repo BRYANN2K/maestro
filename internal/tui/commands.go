@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"strings"
+	"unicode"
 
 	"github.com/bryann2k/maestro/internal/orchestrator"
 )
@@ -17,7 +18,7 @@ type slashSuggestion struct {
 // completion and the command palette. Dispatch remains authoritative in the
 // orchestrator; this list only describes user-facing commands.
 var slashCatalog = []slashSuggestion{
-	{Command: "/bootstrap", Description: "shape a new project and propose MAESTRO.md", Aliases: []string{"/boostrap"}},
+	{Command: "/bootstrap", Description: "initialize Git, shape a new project, and propose MAESTRO.md", Aliases: []string{"/boostrap"}},
 	{Command: "/adopt", Description: "analyse an existing repository and propose MAESTRO.md", Aliases: []string{"/onboard"}},
 	{Command: "/propose", Description: "draft from this discussion or an explicit request"},
 	{Command: "/validate", Description: "check proposal readiness"},
@@ -51,6 +52,36 @@ var slashCatalog = []slashSuggestion{
 	{Command: "/rewind", Description: "restore a checkpoint (requires an id)"},
 	{Command: "/help", Description: "list slash commands"},
 	{Command: "/quit", Description: "close Maestro", Aliases: []string{"/exit"}},
+}
+
+func repairOrphanOSCSlashCommand(input string) string {
+	if !strings.HasPrefix(input, "]") {
+		return input
+	}
+	tail := strings.TrimPrefix(input, "]")
+	nameEnd := strings.IndexFunc(tail, unicode.IsSpace)
+	if nameEnd < 0 {
+		nameEnd = len(tail)
+	}
+	name, suffix := tail[:nameEnd], tail[nameEnd:]
+	if !strings.HasPrefix(name, "/") {
+		name = "/" + name
+	}
+	for _, suggestion := range slashCatalog {
+		if name == suggestion.Command {
+			return name + suffix
+		}
+		for _, alias := range suggestion.Aliases {
+			if name == alias {
+				return name + suffix
+			}
+		}
+	}
+	return input
+}
+
+func normalizeSubmittedInput(input string) string {
+	return repairOrphanOSCSlashCommand(stripTerminalReports(input))
 }
 
 // canonicalSlashCommand folds compatibility aliases before routing. Aliases
