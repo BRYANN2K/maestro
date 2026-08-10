@@ -47,10 +47,37 @@ type Workspace struct {
 	DisabledReason string
 }
 
+// RepositoryIdentity returns the identity visible within this client's
+// discovery boundary.
+func (c *Client) RepositoryIdentity(ctx context.Context) (Repository, error) {
+	if c.ceiling == "" {
+		return RepositoryIdentity(ctx, c.dir)
+	}
+	return c.repositoryIdentity(ctx)
+}
+
 // RepositoryIdentity returns canonical paths without trimming legal spaces or
 // newlines from repository names.
 func RepositoryIdentity(ctx context.Context, dir string) (Repository, error) {
-	c := New(dir)
+	selected, err := ProjectRoot(ctx, dir)
+	if err != nil {
+		return Repository{}, fmt.Errorf("repository identity: %w", err)
+	}
+	canonicalDir, err := canonicalPath(dir)
+	if err != nil {
+		return Repository{}, fmt.Errorf("repository identity: %w", err)
+	}
+	root, err := RepositoryRoot(ctx, dir)
+	if err != nil {
+		return Repository{}, fmt.Errorf("repository identity: %w", err)
+	}
+	if selected == canonicalDir && root != canonicalDir {
+		return Repository{}, fmt.Errorf("repository identity: refusing ambient ancestor repository %q for project %q", root, canonicalDir)
+	}
+	return New(dir).repositoryIdentity(ctx)
+}
+
+func (c *Client) repositoryIdentity(ctx context.Context) (Repository, error) {
 	worktreeOut, err := c.run(ctx, "rev-parse", "--show-toplevel")
 	if err != nil {
 		return Repository{}, fmt.Errorf("repository identity: %w", err)
@@ -72,7 +99,7 @@ func RepositoryIdentity(ctx context.Context, dir string) (Repository, error) {
 		return Repository{}, fmt.Errorf("repository identity: common dir: %w", err)
 	}
 	if !filepath.IsAbs(commonRaw) {
-		commonRaw = filepath.Join(dir, commonRaw)
+		commonRaw = filepath.Join(c.dir, commonRaw)
 	}
 	commonDir, err := canonicalPath(commonRaw)
 	if err != nil {

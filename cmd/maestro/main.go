@@ -165,7 +165,7 @@ func projectDir(opts options) string {
 		}
 		dir = cwd
 	}
-	if root, err := maestrogit.RepositoryRoot(context.Background(), dir); err == nil {
+	if root, err := maestrogit.ProjectRoot(context.Background(), dir); err == nil {
 		return root
 	}
 	return dir

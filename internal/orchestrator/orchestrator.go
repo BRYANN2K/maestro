@@ -122,7 +122,7 @@ func New(ctx context.Context, opts Options) (*Orchestrator, error) {
 		specsDir:     opts.SpecsDir,
 		store:        spec.NewStore(opts.SpecsDir),
 		sessions:     session.NewStore(opts.SessionsDir),
-		git:          git.New(opts.ProjectDir),
+		git:          git.NewProject(opts.ProjectDir),
 		cfg:          opts.Config,
 		keys:         opts.Keys,
 		settings:     opts.Settings,
@@ -191,7 +191,7 @@ func New(ctx context.Context, opts Options) (*Orchestrator, error) {
 		}
 	}
 	o.sess = sess
-	if repository, repoErr := git.RepositoryIdentity(ctx, opts.ProjectDir); repoErr == nil {
+	if repository, repoErr := o.git.RepositoryIdentity(ctx); repoErr == nil {
 		if sessionNeedsCommit && o.sess.Worktree == "" && o.sess.WorkspaceRef == "" {
 			branch, branchErr := git.New(repository.Worktree).CurrentBranch(ctx)
 			if branchErr != nil {
@@ -254,7 +254,11 @@ func New(ctx context.Context, opts Options) (*Orchestrator, error) {
 		// two different trees.
 		o.store = spec.NewStore(filepath.Join(o.dir, "specs"))
 	}
-	o.git = git.New(o.dir)
+	if o.sess.Worktree == "" {
+		o.git = git.NewProject(o.dir)
+	} else {
+		o.git = git.New(o.dir)
+	}
 	o.installWorkspace(o.dir, o.git, o.store)
 	if o.sess.Phase == session.PhaseArchive {
 		recoveryNotice, recoveryErr := o.recoverInterruptedArchive(ctx)
@@ -305,7 +309,7 @@ func canonicalProjectRoot(ctx context.Context, path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if root, err := git.RepositoryRoot(ctx, canonical); err == nil {
+	if root, err := git.ProjectRoot(ctx, canonical); err == nil {
 		return root, nil
 	}
 	return canonical, nil
@@ -320,7 +324,7 @@ func projectSessionKey(path string) string {
 		labelPath = canonical
 		identityPath = canonical
 	}
-	if identity, err := git.RepositoryIdentity(context.Background(), identityPath); err == nil {
+	if identity, err := git.NewProject(identityPath).RepositoryIdentity(context.Background()); err == nil {
 		identityPath = identity.CommonDir
 		if filepath.Base(identity.CommonDir) == ".git" {
 			labelPath = filepath.Dir(identity.CommonDir)

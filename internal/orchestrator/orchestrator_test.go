@@ -445,6 +445,49 @@ func TestNewCanonicalizesGitSubdirectoryToRepositoryRoot(t *testing.T) {
 	}
 }
 
+func TestNewDoesNotResumeHomeRepositorySessionFromChildProject(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("MAESTRO_MEMORY_DIR", filepath.Join(t.TempDir(), "memory"))
+	t.Setenv("MAESTRO_CHECKPOINTS_DIR", filepath.Join(t.TempDir(), "checkpoints"))
+	gitRun(t, home, "init", "-b", "main")
+	sessionsDir := filepath.Join(t.TempDir(), "sessions")
+
+	homeOrch, err := New(t.Context(), Options{
+		ProjectDir: home, SessionsDir: sessionsDir, Runner: &fakeRunner{},
+	})
+	if err != nil {
+		t.Fatalf("New home project: %v", err)
+	}
+	if err := homeOrch.RenameSession(t.Context(), "Home repository session"); err != nil {
+		t.Fatalf("RenameSession: %v", err)
+	}
+
+	child := filepath.Join(home, "Documents", "new-python-tool")
+	if err := os.MkdirAll(child, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	childOrch, err := New(t.Context(), Options{
+		ProjectDir: child, SessionsDir: sessionsDir, Runner: &fakeRunner{},
+	})
+	if err != nil {
+		t.Fatalf("New child project: %v", err)
+	}
+	wantChild, err := canonicalProjectDir(child)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if childOrch.WorkDirDisplay() != wantChild {
+		t.Fatalf("child work dir = %q, want %q", childOrch.WorkDirDisplay(), wantChild)
+	}
+	if childOrch.Session().ID == homeOrch.Session().ID || childOrch.Session().Project == homeOrch.Session().Project {
+		t.Fatalf("child resumed home session: home=%+v child=%+v", homeOrch.Session(), childOrch.Session())
+	}
+	if childOrch.Session().Title != "" || childOrch.Session().Worktree != "" || childOrch.Session().WorkspaceRef != "" {
+		t.Fatalf("child inherited home session state: %+v", childOrch.Session())
+	}
+}
+
 func TestNewStartsInPlainAndUnbornWorkspaces(t *testing.T) {
 	t.Run("plain directory", func(t *testing.T) {
 		dir := t.TempDir()

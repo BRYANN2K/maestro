@@ -95,6 +95,33 @@ func TestRepositoryRootPreservesTrailingSpace(t *testing.T) {
 	}
 }
 
+func TestProjectRootDoesNotEscapeIntoHomeRepository(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	run(t, home, "init", "-b", "main")
+	child := filepath.Join(home, "Documents", "new-project")
+	if err := os.MkdirAll(child, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	want, err := canonicalPath(child)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := ProjectRoot(t.Context(), child)
+	if err != nil {
+		t.Fatalf("ProjectRoot: %v", err)
+	}
+	if got != want {
+		t.Fatalf("ProjectRoot = %q, want child project %q", got, want)
+	}
+	if _, err := RepositoryIdentity(t.Context(), child); err == nil || !strings.Contains(err.Error(), "ambient ancestor") {
+		t.Fatalf("RepositoryIdentity error = %v, want ambient ancestor rejection", err)
+	}
+	if _, err := NewProject(child).CurrentBranch(t.Context()); err == nil {
+		t.Fatal("confined project client discovered the home repository")
+	}
+}
+
 func TestCurrentBranchRejectsDetachedHEAD(t *testing.T) {
 	dir := initRepo(t)
 	run(t, dir, "switch", "--detach", "HEAD")

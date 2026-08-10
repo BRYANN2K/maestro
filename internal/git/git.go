@@ -23,11 +23,24 @@ var ErrDetachedHEAD = errors.New("detached HEAD has no current branch")
 
 // Client runs git commands inside a single repository directory.
 type Client struct {
-	dir string
+	dir     string
+	ceiling string
 }
 
 // New returns a Client rooted at dir.
 func New(dir string) *Client { return &Client{dir: dir} }
+
+// NewProject returns a client confined to the selected project directory.
+// Maestro uses it for the initial workspace so an unrelated repository in an
+// ancestor (most notably ~/.git) cannot silently capture an empty child
+// project. A repository rooted at dir remains discoverable.
+func NewProject(dir string) *Client {
+	canonical, err := canonicalPath(dir)
+	if err != nil {
+		canonical = filepath.Clean(dir)
+	}
+	return &Client{dir: canonical, ceiling: filepath.Dir(canonical)}
+}
 
 // Dir returns the repository directory.
 func (c *Client) Dir() string { return c.dir }
@@ -52,6 +65,31 @@ func RepositoryRoot(ctx context.Context, dir string) (string, error) {
 		return "", fmt.Errorf("resolve repository root from %q: %w", dir, err)
 	}
 	return canonical, nil
+}
+
+// ProjectRoot resolves a normal Git checkout to its top level while treating
+// a descendant of a Git-backed home directory as its own project. A ~/.git is
+// commonly used for dotfiles and must not make every new folder share the
+// home repository's sessions, files, or Git operations.
+func ProjectRoot(ctx context.Context, dir string) (string, error) {
+	requested, err := canonicalPath(dir)
+	if err != nil {
+		return "", err
+	}
+	root, err := RepositoryRoot(ctx, requested)
+	if err != nil {
+		return requested, nil
+	}
+	if root != requested {
+		home, homeErr := os.UserHomeDir()
+		if homeErr == nil {
+			canonicalHome, canonicalErr := canonicalPath(home)
+			if canonicalErr == nil && root == canonicalHome {
+				return requested, nil
+			}
+		}
+	}
+	return root, nil
 }
 
 // RepositoryRoot returns the canonical top-level checkout for this client.
@@ -569,8 +607,16 @@ func (c *Client) run(ctx context.Context, args ...string) ([]byte, error) {
 func (c *Client) runWithEnv(ctx context.Context, overrides map[string]string, args ...string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = c.dir
-	if len(overrides) > 0 {
-		cmd.Env = mergeEnvironment(overrides)
+	effectiveOverrides := overrides
+	if c.ceiling != "" {
+		effectiveOverrides = make(map[string]string, len(overrides)+1)
+		for name, value := range overrides {
+			effectiveOverrides[name] = value
+		}
+		effectiveOverrides["GIT_CEILING_DIRECTORIES"] = c.ceiling
+	}
+	if len(effectiveOverrides) > 0 {
+		cmd.Env = mergeEnvironment(effectiveOverrides)
 	}
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr

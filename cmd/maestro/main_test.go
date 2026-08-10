@@ -116,6 +116,27 @@ func TestProjectDirCanonicalizesGitSubdirectoryToTopLevel(t *testing.T) {
 	}
 }
 
+func TestProjectDirKeepsChildOfHomeRepositoryIsolated(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	cmd := exec.Command("git", "init", "-q", "-b", "main")
+	cmd.Dir = home
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v\n%s", err, out)
+	}
+	child := filepath.Join(home, "Documents", "new-project")
+	if err := os.MkdirAll(child, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	want, err := filepath.EvalSymlinks(child)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := projectDir(options{dir: child}); got != want {
+		t.Fatalf("projectDir = %q, want isolated child %q", got, want)
+	}
+}
+
 func TestHelp(t *testing.T) {
 	out, code := runCLI(t, t.TempDir(), "help")
 	if code != 0 || !strings.Contains(out, "propose") {
