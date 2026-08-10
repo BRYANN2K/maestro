@@ -164,6 +164,51 @@ func TestCheckpointRewindCleanSnapshotRemovesLaterTrackedAndUntrackedChanges(t *
 	}
 }
 
+func TestCheckpointSupportsAllowEmptyFirstCommit(t *testing.T) {
+	dir := t.TempDir()
+	run(t, dir, "init", "-b", "main")
+	run(t, dir, "config", "user.email", "test@maestro.local")
+	run(t, dir, "config", "user.name", "Maestro Test")
+	run(t, dir, "commit", "--allow-empty", "-m", "initialize project")
+
+	c := New(dir)
+	ctx := context.Background()
+	store := NewCheckpointStore(filepath.Join(t.TempDir(), "cps"))
+	writeFile(t, dir, "brief.txt", "localhost only\n")
+	wantStatus := run(t, dir, "status", "--porcelain=v1", "-z", "--untracked-files=all")
+
+	cp, err := store.Create(ctx, c, `{"session":"empty-first-commit"}`, "rev")
+	if err != nil {
+		t.Fatalf("Create from allow-empty first commit: %v", err)
+	}
+	if cp.IndexTree == "" || cp.WorktreeTree == "" || cp.IndexTree != cp.WorktreeTree {
+		t.Fatalf("empty checkpoint trees = index %q worktree %q", cp.IndexTree, cp.WorktreeTree)
+	}
+	if got := cp.Changed; len(got) != 1 || got[0] != "brief.txt" {
+		t.Fatalf("changed paths = %v, want untracked brief", got)
+	}
+
+	writeFile(t, dir, "brief.txt", "changed later\n")
+	writeFile(t, dir, "staged-after.txt", "staged later\n")
+	run(t, dir, "add", "staged-after.txt")
+	writeFile(t, dir, "untracked-after.txt", "untracked later\n")
+
+	if _, err := store.Rewind(ctx, c, cp.ID, true, `{"session":"later"}`, "rev"); err != nil {
+		t.Fatalf("Rewind to empty tracked tree: %v", err)
+	}
+	if got := run(t, dir, "status", "--porcelain=v1", "-z", "--untracked-files=all"); got != wantStatus {
+		t.Fatalf("status after rewind = %q, want %q", got, wantStatus)
+	}
+	if got, err := os.ReadFile(filepath.Join(dir, "brief.txt")); err != nil || string(got) != "localhost only\n" {
+		t.Fatalf("restored brief = %q, %v", got, err)
+	}
+	for _, name := range []string{"staged-after.txt", "untracked-after.txt"} {
+		if _, err := os.Stat(filepath.Join(dir, name)); !os.IsNotExist(err) {
+			t.Fatalf("post-checkpoint file %q survived: %v", name, err)
+		}
+	}
+}
+
 func TestCheckpointRewindRejectsChangedHEADWithoutMutationOrRecovery(t *testing.T) {
 	dir := initRepo(t)
 	c := New(dir)

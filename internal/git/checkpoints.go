@@ -247,8 +247,18 @@ func snapshotWorktreeTree(ctx context.Context, c *Client, indexTree string) (str
 	}
 	// -u updates only paths already in the captured index. Consequently,
 	// untracked files stay out of this tree and are snapshotted separately.
-	if _, err := c.runWithIndex(ctx, indexPath, "add", "-u", "--", ":/"); err != nil {
+	// An allow-empty first commit has a valid empty index, but `git add -u --
+	// :/` rejects its root pathspec because there is nothing tracked yet. An
+	// empty tracked set already is the exact worktree tree we need, so skip the
+	// update only in that case.
+	tracked, err := c.runWithIndex(ctx, indexPath, "ls-files", "-z", "--", ":/")
+	if err != nil {
 		return "", err
+	}
+	if len(tracked) > 0 {
+		if _, err := c.runWithIndex(ctx, indexPath, "add", "-u", "--", ":/"); err != nil {
+			return "", err
+		}
 	}
 	out, err := c.runWithIndex(ctx, indexPath, "write-tree")
 	if err != nil {
@@ -557,8 +567,19 @@ func (s *CheckpointStore) restoreCode(ctx context.Context, c *Client, cp Checkpo
 	if _, err := c.run(ctx, "read-tree", cp.IndexTree); err != nil {
 		return fmt.Errorf("restore index: %w", err)
 	}
-	if _, err := c.run(ctx, "restore", "--source="+cp.WorktreeTree, "--worktree", "--", ":/"); err != nil {
-		return fmt.Errorf("restore tracked worktree: %w", err)
+	// With an empty captured index there is no tracked path for `git restore`
+	// to match. After read-tree, paths added after the checkpoint are exposed
+	// by ls-files --others and removed by the exact untracked reconciliation
+	// below. Non-empty indexes still need restore, including the valid case
+	// where every tracked file was deleted from the captured worktree tree.
+	indexEntries, err := c.run(ctx, "ls-tree", "-z", cp.IndexTree)
+	if err != nil {
+		return fmt.Errorf("inspect checkpoint index: %w", err)
+	}
+	if len(indexEntries) > 0 {
+		if _, err := c.run(ctx, "restore", "--source="+cp.WorktreeTree, "--worktree", "--", ":/"); err != nil {
+			return fmt.Errorf("restore tracked worktree: %w", err)
+		}
 	}
 	current, err := untrackedPaths(ctx, c)
 	if err != nil {
