@@ -97,9 +97,11 @@ On first use:
 
 1. Open `/providers` and connect an API provider or an existing CLI
    subscription.
-2. Use `/bootstrap` for a new project or `/onboard` for an existing repository.
-3. Discuss the change in read-only chat, then invoke `/propose` when the idea is
-   ready to become a spec.
+2. Discuss the project naturally. Use `/bootstrap` for a new project or
+   `/adopt` for an existing repository (`/onboard` remains an alias).
+3. Invoke `/propose` when the idea is ready to become a spec. If MAESTRO.md is
+   missing, Maestro completes project setup first and resumes the proposal only
+   after you accept the contract.
 4. Review and `/accept` the proposal, choose a branch or worktree, then run
    `/build`.
 5. Complete `/review`, `/docs`, and `/archive` when the evidence is ready.
@@ -119,7 +121,7 @@ spec. Only `/propose` crosses that boundary.
 | Docs | Proposes an architecture decision record | Preview before write |
 | Archive | Commits and archives an approved, reviewed change | Confirmation; merge is opt-in |
 
-The equivalent headless flow is:
+After a project contract exists, the equivalent headless lifecycle is:
 
 ```sh
 maestro propose -m "Add a PostgreSQL API"
@@ -132,15 +134,19 @@ maestro archive --yes --merge
 
 ## Start or adopt a project
 
-`/bootstrap` asks a short sequence of questions about a new project's purpose,
-users, outcomes, stack, constraints, and verification. `/onboard` first performs
-a bounded static analysis of an existing repository, then asks the user to
-confirm or correct the evidence.
+The transcript is the setup surface; project setup never opens a separate
+form. `/bootstrap` extracts confirmed decisions from the existing discussion
+and asks only for missing purpose, users, stack, boundaries, safety, and
+verification details. `/adopt` first performs a bounded static analysis of an
+existing repository, then asks only for decisions the repository cannot prove.
+`/onboard` remains a compatibility alias for `/adopt`.
 
 Both flows preview the same root-level `MAESTRO.md` contract. Nothing is written
 until the proposal is accepted. Repository discovery does not run installers,
-builds, tests, hooks, generators, MCP servers, or network requests. See
-[`docs/PROJECT_BOOTSTRAP.md`](docs/PROJECT_BOOTSTRAP.md).
+builds, tests, hooks, generators, MCP servers, or network requests. Starting
+`/propose` without a contract selects the appropriate flow, preserves the
+original proposal request, and resumes it after explicit contract acceptance.
+See [`docs/PROJECT_BOOTSTRAP.md`](docs/PROJECT_BOOTSTRAP.md).
 
 ## Sessions and Git workspaces
 
@@ -296,7 +302,7 @@ canonical TUI command list.
 ## Documentation
 
 - [Architecture](docs/ARCHITECTURE.md)
-- [Project bootstrap and onboarding](docs/PROJECT_BOOTSTRAP.md)
+- [Project bootstrap and adoption](docs/PROJECT_BOOTSTRAP.md)
 - [Coach design](docs/COACH_DESIGN.md)
 - [Agent Skills](docs/SKILLS.md)
 - [Focus-first output](docs/ADHD_OUTPUT.md)

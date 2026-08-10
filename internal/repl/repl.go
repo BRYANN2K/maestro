@@ -282,10 +282,10 @@ func runCommand(ctx context.Context, orch *orchestrator.Orchestrator, store *spe
 		fmt.Fprintln(outWriter(orch), "Settings are available in the TUI with /settings.")
 		return nil
 	case "bootstrap", "boostrap":
-		fmt.Fprintln(outWriter(orch), "Bootstrap is a reviewed interactive questionnaire. Run `maestro tui`, then use /bootstrap.")
+		fmt.Fprintln(outWriter(orch), "Bootstrap is a reviewed transcript conversation. Run `maestro tui`, then use /bootstrap.")
 		return nil
-	case "onboard":
-		fmt.Fprintln(outWriter(orch), "Onboard scans an existing repository through a reviewed questionnaire. Run `maestro tui`, then use /onboard.")
+	case "adopt", "onboard":
+		fmt.Fprintln(outWriter(orch), "Adopt combines transcript decisions with static repository analysis. Run `maestro tui`, then use /adopt.")
 		return nil
 	}
 	if orch == nil {
@@ -354,8 +354,9 @@ func runSpec(ctx context.Context, out io.Writer, store *spec.Store, args []strin
 
 func printHelp(out io.Writer) {
 	fmt.Fprintln(out, "Commands:")
-	fmt.Fprintln(out, "  /bootstrap            TUI-only reviewed questionnaire for a new project")
-	fmt.Fprintln(out, "  /onboard              TUI-only scan + questionnaire for an existing repo")
+	fmt.Fprintln(out, "  /bootstrap            TUI-only project contract conversation")
+	fmt.Fprintln(out, "  /adopt                TUI-only existing-repository contract conversation")
+	fmt.Fprintln(out, "  /onboard              compatibility alias for /adopt")
 	fmt.Fprintln(out, "  /propose              draft a spec proposal")
 	fmt.Fprintln(out, "  /validate             check proposal readiness")
 	fmt.Fprintln(out, "  /answer Q-… <text>    resolve a spec clarification")

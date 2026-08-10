@@ -530,7 +530,9 @@ func (m *Model) registerTranscriptFileRegions() {
 func (m *Model) dispatchRegionWithCmd(r Region) (tea.Model, tea.Cmd) {
 	model := m.dispatchRegion(r)
 	switch r.Action {
-	case ActionAccept, ActionAcceptHunk, ActionDiscardHunk:
+	case ActionAccept:
+		return model, tea.Batch(m.refreshModifiedFiles(), m.takePostAcceptCommand())
+	case ActionAcceptHunk, ActionDiscardHunk:
 		return model, m.refreshModifiedFiles()
 	default:
 		return model, nil
@@ -1096,6 +1098,7 @@ func (m *Model) acceptProposalCard(c *Card) {
 	}
 	c.Status = "done"
 	c.Detail = "accepted"
+	m.finishProjectManifestReview(c, true)
 }
 
 func (m *Model) discardCard(r Region) tea.Model {
@@ -1104,6 +1107,7 @@ func (m *Model) discardCard(r Region) tea.Model {
 			if c.ID == r.CardID && c.Status == "proposed" {
 				m.proposals.Discard(*c.Proposal)
 				c.Status = "discarded"
+				m.finishProjectManifestReview(c, false)
 				m.removePending(c)
 				m.completeProposalReviewIfSettled()
 				m.renderMessages()

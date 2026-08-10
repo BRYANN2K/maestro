@@ -18,7 +18,7 @@ type slashSuggestion struct {
 // orchestrator; this list only describes user-facing commands.
 var slashCatalog = []slashSuggestion{
 	{Command: "/bootstrap", Description: "shape a new project and propose MAESTRO.md", Aliases: []string{"/boostrap"}},
-	{Command: "/onboard", Description: "analyse an existing repository and propose MAESTRO.md", Aliases: []string{"/adopt"}},
+	{Command: "/adopt", Description: "analyse an existing repository and propose MAESTRO.md", Aliases: []string{"/onboard"}},
 	{Command: "/propose", Description: "draft from this discussion or an explicit request"},
 	{Command: "/validate", Description: "check proposal readiness"},
 	{Command: "/answer", Description: "resolve a spec clarification"},

@@ -1,18 +1,19 @@
 package tui
 
 import (
-	"bytes"
+	"context"
 	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/bryann2k/maestro/internal/agentcore"
 	"github.com/bryann2k/maestro/internal/editor"
+	"github.com/bryann2k/maestro/internal/orchestrator"
 	"github.com/bryann2k/maestro/internal/projectprofile"
 )
 
@@ -29,175 +30,207 @@ func primaryBatchMessage(t *testing.T, cmd tea.Cmd) tea.Msg {
 	return batch[0]()
 }
 
-func TestProjectQuestionnairesStageOneSharedManifest(t *testing.T) {
-	for _, tc := range []struct {
-		command string
-		mode    string
-	}{
-		{command: "/bootstrap", mode: "greenfield"},
-		{command: "/onboard", mode: "brownfield"},
-	} {
-		t.Run(tc.command, func(t *testing.T) {
-			m, dir := newTestModel(t)
-			if tc.command == "/onboard" {
-				if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/onboard\n"), 0o644); err != nil {
-					t.Fatal(err)
-				}
-			}
-			m.input.Set(tc.command)
-			_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-			msg := primaryBatchMessage(t, cmd)
-			if _, ok := msg.(projectFormMsg); !ok {
-				t.Fatalf("questionnaire command returned %T", msg)
-			}
-			m.Update(msg)
-			form, ok := m.overlayM.(*formOverlay)
-			if !ok || m.overlay != overlayForm {
-				t.Fatalf("questionnaire overlay = %T/%v", m.overlayM, m.overlay)
-			}
-			values := map[string]string{
-				"name":         "Premium API",
-				"purpose":      "Help teams ship a verified API.",
-				"stack":        "Go, PostgreSQL",
-				"non_goals":    "Mobile client",
-				"verification": "go test ./..., go vet ./...",
-				"safety":       "Never commit secrets, preserve public APIs",
-			}
-			for i := range form.fields {
-				form.fields[i].Value = values[form.fields[i].Key]
-			}
-			form.active = len(form.fields) - 1
-			_, cmd = m.updateOverlayKey(tea.KeyMsg{Type: tea.KeyEnter})
-			msg = primaryBatchMessage(t, cmd)
-			if _, ok := msg.(uiOperationDoneMsg); !ok {
-				t.Fatalf("manifest command returned %T", msg)
-			}
-			m.Update(msg)
-			if len(m.pending) != 1 || m.pending[0].Proposal == nil {
-				t.Fatalf("pending manifest cards = %+v", m.pending)
-			}
-			proposal := m.pending[0].Proposal
-			if filepath.Base(proposal.Path) != "MAESTRO.md" {
-				t.Fatalf("proposal path = %q", proposal.Path)
-			}
-			preview := proposal.String()
-			for _, want := range []string{"maestro_schema: 1", `mode: "` + tc.mode + `"`, "Help teams ship a verified API.", "Never commit secrets"} {
-				if !strings.Contains(preview, want) {
-					t.Fatalf("manifest preview missing %q:\n%s", want, preview)
-				}
-			}
-			if _, err := os.Stat(proposal.Path); !os.IsNotExist(err) {
-				t.Fatalf("MAESTRO.md was written before approval: %v", err)
-			}
-			m.acceptProposalCard(m.pending[0])
-			if m.pending[0].Status != "done" {
-				t.Fatalf("manifest acceptance status = %q (%s)", m.pending[0].Status, m.pending[0].Detail)
-			}
-			accepted, err := os.ReadFile(proposal.Path)
-			if err != nil {
-				t.Fatalf("accepted MAESTRO.md: %v", err)
-			}
-			for _, want := range []string{"# Maestro Project Contract", `mode: "` + tc.mode + `"`, "Help teams ship a verified API."} {
-				if !strings.Contains(string(accepted), want) {
-					t.Fatalf("accepted manifest missing %q:\n%s", want, accepted)
-				}
-			}
-		})
-	}
+type projectFlowRunner struct {
+	summaries []string
+	prompts   []string
 }
 
-func TestProjectRuleChipsPreserveCommaProseAndUneditedRender(t *testing.T) {
-	m, _ := newTestModel(t)
-	profile, answers, err := m.orch.ProjectBootstrapDefaults(t.Context())
-	if err != nil {
-		t.Fatal(err)
+func (runner *projectFlowRunner) Run(_ context.Context, role agentcore.Role, prompt string) (agentcore.AgentResult, error) {
+	runner.prompts = append(runner.prompts, prompt)
+	if len(runner.summaries) == 0 {
+		return agentcore.AgentResult{}, errors.New("unexpected project flow call")
 	}
-	answers.Name = "lossless-contract"
-	answers.Purpose = "Keep reviewed prose intact."
-	answers.Stacks = []string{"Go", "PostgreSQL"}
-	answers.NonGoals = []string{"Do not build mobile, desktop, or embedded clients."}
-	answers.Verification = []string{"Run unit, integration, and race tests before completion."}
-	answers.Safety = []string{
-		"Never read, print, or modify secrets and local credential files.",
-		"Preserve APIs, migrations, and unrelated user changes.",
-	}
-	want, err := projectprofile.Render(profile, answers)
-	if err != nil {
-		t.Fatal(err)
-	}
+	summary := runner.summaries[0]
+	runner.summaries = runner.summaries[1:]
+	return agentcore.AgentResult{Role: string(role), OK: true, Summary: summary}, nil
+}
 
-	m.openProjectForm(formActionBootstrap, profile, answers, m.orch.SnapshotWorkspace())
-	form, ok := m.overlayM.(*formOverlay)
+func projectReadyJSON() string {
+	return `{"ready":true,"question":"","name":"Port Scout","purpose":"Help developers discover open TCP ports on systems they own.","non_goals":["No vulnerability exploitation"],"stacks":["Python"],"commands":[{"name":"test","run":"python -m pytest","cwd":"."}],"safety":["Scan only systems the user owns or is authorized to test."],"verification":["Run python -m pytest."],"missing":[]}`
+}
+
+func projectStageResult(t *testing.T, cmd tea.Cmd) uiOperationDoneMsg {
+	t.Helper()
+	raw := cmd()
+	outer, ok := raw.(tea.BatchMsg)
+	if !ok || len(outer) < 2 {
+		t.Fatalf("ready project step returned %T, want outer batch", raw)
+	}
+	innerRaw := outer[len(outer)-1]()
+	if msg, ok := innerRaw.(uiOperationDoneMsg); ok {
+		return msg
+	}
+	inner, ok := innerRaw.(tea.BatchMsg)
+	if !ok || len(inner) == 0 {
+		t.Fatalf("project staging command returned %T, want batch", innerRaw)
+	}
+	msg, ok := inner[0]().(uiOperationDoneMsg)
 	if !ok {
-		t.Fatalf("project form = %T", m.overlayM)
+		t.Fatalf("project staging returned %T", inner[0]())
 	}
-	values := form.values()
-	roundTrip := answers
-	roundTrip.Stacks = splitStackFormList(values["stack"])
-	roundTrip.NonGoals = collectProjectRuleFields(values, "non_goals")
-	roundTrip.Verification = collectProjectRuleFields(values, "verification")
-	roundTrip.Safety = collectProjectRuleFields(values, "safety")
-	if !reflect.DeepEqual(roundTrip.NonGoals, answers.NonGoals) ||
-		!reflect.DeepEqual(roundTrip.Verification, answers.Verification) ||
-		!reflect.DeepEqual(roundTrip.Safety, answers.Safety) {
-		t.Fatalf("rule chip round-trip changed semantics:\n before=%+v\n after=%+v", answers, roundTrip)
+	return msg
+}
+
+func TestBootstrapUsesTranscriptQuestionsAndStagesOneAtomicManifest(t *testing.T) {
+	m, _ := newTestModel(t)
+	runner := &projectFlowRunner{summaries: []string{
+		`{"ready":false,"question":"Who will use this tool, and what outcome should it create?","name":"Port Scout","purpose":"","non_goals":[],"stacks":[],"commands":[],"safety":[],"verification":[],"missing":["purpose","stack"]}`,
+		projectReadyJSON(),
+	}}
+	m.orch.SetRunner(runner)
+
+	m.input.Set("/bootstrap Build Port Scout for Python developers")
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if progress := m.lastAssistant(); progress == nil || !progress.busy || progress.think == nil || progress.think.Role != "project setup" {
+		t.Fatalf("bootstrap did not expose visible progress: %+v", progress)
 	}
-	got, err := projectprofile.Render(profile, roundTrip)
-	if err != nil {
-		t.Fatal(err)
+	step, ok := primaryBatchMessage(t, cmd).(projectConversationMsg)
+	if !ok {
+		t.Fatalf("bootstrap returned %T", primaryBatchMessage(t, cmd))
 	}
-	if !bytes.Equal(got, want) {
-		t.Fatalf("unedited form changed manifest bytes:\n--- want ---\n%s\n--- got ---\n%s", want, got)
+	m.Update(step)
+	if m.overlay != overlayNone || m.projectFlow == nil {
+		t.Fatalf("bootstrap opened a modal or lost its transcript flow: overlay=%v flow=%+v", m.overlay, m.projectFlow)
+	}
+	if got := m.LastAssistantText(); !strings.Contains(got, "Who will use") {
+		t.Fatalf("follow-up question = %q", got)
+	}
+
+	m.input.Set("Python developers; a safe CLI for hosts they are authorized to test.")
+	_, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	step, ok = primaryBatchMessage(t, cmd).(projectConversationMsg)
+	if !ok || !step.step.Ready {
+		t.Fatalf("reply returned %#v", step)
+	}
+	_, stageCmd := m.Update(step)
+	result := projectStageResult(t, stageCmd)
+	m.Update(result)
+	if len(m.pending) != 1 || m.pending[0].Lifecycle != "project-manifest" {
+		t.Fatalf("pending project contract = %+v", m.pending)
+	}
+	proposal := m.pending[0].Proposal
+	if proposal == nil || filepath.Base(proposal.Path) != projectprofile.ManifestName {
+		t.Fatalf("manifest proposal = %+v", proposal)
+	}
+	if _, err := os.Lstat(proposal.Path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("MAESTRO.md was written before acceptance: %v", err)
+	}
+	if preview := proposal.String(); !strings.Contains(preview, "Port Scout") || !strings.Contains(preview, "python -m pytest") {
+		t.Fatalf("manifest preview lost conversational answers:\n%s", preview)
+	}
+	m.acceptProposalCard(m.pending[0])
+	if _, err := os.Stat(proposal.Path); err != nil {
+		t.Fatalf("accepted MAESTRO.md: %v", err)
+	}
+	if len(runner.prompts) != 2 || !strings.Contains(runner.prompts[0], "Build Port Scout") || !strings.Contains(runner.prompts[1], "Python developers") {
+		t.Fatalf("conversation was not carried into extraction: %#v", runner.prompts)
 	}
 }
 
-func TestOnboardRefusesRepositoryDriftBeforeStaging(t *testing.T) {
+func TestAdoptIsCanonicalAndUsesStaticRepositoryEvidence(t *testing.T) {
+	m, dir := newTestModel(t)
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/adopt\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runner := &projectFlowRunner{summaries: []string{projectReadyJSON()}}
+	m.orch.SetRunner(runner)
+	m.input.Set("/adopt")
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	step, ok := primaryBatchMessage(t, cmd).(projectConversationMsg)
+	if !ok || step.step.Mode != projectprofile.ModeBrownfield || !step.step.Ready {
+		t.Fatalf("adopt step = %#v", step)
+	}
+	if len(runner.prompts) != 1 || !strings.Contains(runner.prompts[0], `"go"`) {
+		t.Fatalf("adopt prompt omitted static Go evidence: %q", runner.prompts)
+	}
+	if m.overlay != overlayNone {
+		t.Fatalf("adopt opened overlay %v", m.overlay)
+	}
+}
+
+func TestProposeWithoutManifestBuildsContractThenResumesAfterAcceptance(t *testing.T) {
+	m, dir := newTestModel(t)
+	m.orch.SetRunner(&projectFlowRunner{summaries: []string{projectReadyJSON()}})
+	m.input.Set("/propose Build a Python tool that discovers open ports")
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	step, ok := primaryBatchMessage(t, cmd).(projectConversationMsg)
+	if !ok || !step.step.Ready || step.state.resumeCmd == nil {
+		t.Fatalf("propose prerequisite step = %#v", step)
+	}
+	_, stageCmd := m.Update(step)
+	m.Update(projectStageResult(t, stageCmd))
+	if len(m.pending) != 1 {
+		t.Fatalf("contract was not staged: %+v", m.pending)
+	}
+	m.acceptLatestPending()
+	if m.postAcceptCmd == nil {
+		t.Fatal("accepted contract did not queue the original /propose")
+	}
+	resume := m.takePostAcceptCommand()
+	done, ok := primaryBatchMessage(t, resume).(chatDoneMsg)
+	if !ok || done.err != nil {
+		t.Fatalf("resumed propose = %#v", done)
+	}
+	if m.orch.Session().Draft == nil || !strings.Contains(m.orch.Session().DraftPrompt, "Python tool") {
+		t.Fatalf("original proposal request was not resumed: %+v", m.orch.Session())
+	}
+	if _, err := os.Stat(filepath.Join(dir, projectprofile.ManifestName)); err != nil {
+		t.Fatalf("resumed before MAESTRO.md acceptance: %v", err)
+	}
+}
+
+func TestProjectConversationRefusesRepositoryDriftBeforeStaging(t *testing.T) {
 	m, dir := newTestModel(t)
 	manifest := filepath.Join(dir, "go.mod")
 	if err := os.WriteFile(manifest, []byte("module example.com/before\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-
-	m.input.Set("/onboard")
-	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	formMsg, ok := primaryBatchMessage(t, cmd).(projectFormMsg)
-	if !ok {
-		t.Fatal("/onboard did not return a project questionnaire")
-	}
-	m.Update(formMsg)
-	form, ok := m.overlayM.(*formOverlay)
-	if !ok {
-		t.Fatalf("project form = %T", m.overlayM)
-	}
-	for index := range form.fields {
-		if form.fields[index].Key == "purpose" {
-			form.fields[index].Value = "Build against reviewed repository facts."
-		}
+	m.orch.SetRunner(&projectFlowRunner{summaries: []string{projectReadyJSON()}})
+	step, err := m.orch.ProjectManifestConversation(t.Context(), projectprofile.ModeBrownfield, "", "")
+	if err != nil || !step.Ready {
+		t.Fatalf("project conversation = %+v, %v", step, err)
 	}
 	if err := os.WriteFile(manifest, []byte("module example.com/after\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-
-	cmd = m.submitForm(formActionOnboard, form.values())
-	result, ok := primaryBatchMessage(t, cmd).(uiOperationDoneMsg)
-	if !ok {
-		t.Fatalf("stale questionnaire returned %T", result)
-	}
+	result := primaryBatchMessage(t, m.runProjectManifest(step.Mode, step.Profile, step.Answers)).(uiOperationDoneMsg)
 	if !errors.Is(result.err, projectprofile.ErrRepositoryChanged) {
-		t.Fatalf("stale questionnaire error = %v", result.err)
-	}
-	if result.err == nil || !strings.Contains(result.err.Error(), "run /onboard again") {
-		t.Fatalf("stale questionnaire message is not actionable: %v", result.err)
-	}
-	m.Update(result)
-	if len(m.pending) != 0 {
-		t.Fatalf("repository drift staged proposal(s): %+v", m.pending)
+		t.Fatalf("stale project contract error = %v", result.err)
 	}
 	if _, err := os.Lstat(filepath.Join(dir, projectprofile.ManifestName)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("repository drift wrote MAESTRO.md: %v", err)
 	}
-	if len(m.messages) == 0 || !strings.Contains(m.messages[len(m.messages)-1].Text, "run /onboard again") {
-		t.Fatalf("repository drift was not visible in the transcript: %+v", m.messages)
+}
+
+func TestCancelledProjectConversationCannotStageALateResult(t *testing.T) {
+	m, _ := newTestModel(t)
+	m.projectRequest = 7
+	m.projectActive = true
+	m.busy = true
+	m.cancelRun = func() {}
+	m.cancelActiveTask()
+	if !m.cancelling || m.projectRequest != 8 {
+		t.Fatalf("cancellation did not invalidate project request: cancelling=%v request=%d", m.cancelling, m.projectRequest)
+	}
+
+	late := projectConversationMsg{
+		state: projectConversationState{request: 7},
+		step:  orchestrator.ProjectManifestStep{Ready: true},
+	}
+	m.Update(late)
+	if m.busy || m.cancelling || m.projectActive || len(m.pending) != 0 {
+		t.Fatalf("late result mutated UI: busy=%v cancelling=%v active=%v pending=%d", m.busy, m.cancelling, m.projectActive, len(m.pending))
+	}
+}
+
+func TestUnrelatedAcceptanceDoesNotCancelProjectConversation(t *testing.T) {
+	m, _ := newTestModel(t)
+	m.projectFlow = &projectConversationState{mode: projectprofile.ModeGreenfield}
+	if cmd := m.takePostAcceptCommand(); cmd != nil {
+		t.Fatal("unrelated acceptance unexpectedly scheduled a project command")
+	}
+	if m.projectFlow == nil {
+		t.Fatal("unrelated acceptance cancelled project setup")
 	}
 }
 

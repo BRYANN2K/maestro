@@ -62,7 +62,7 @@ func TestRunHelp(t *testing.T) {
 	if !strings.Contains(out, "/propose") || !strings.Contains(out, "/archive") {
 		t.Errorf("help output = %q", out)
 	}
-	for _, command := range []string{"/bootstrap", "/onboard", "/rename <title>", "/resume [id]", "/git list|create|select", "/learn guided|challenge|off", "/learn <path> [--deep]", "/skills list|show", "/skills run <id>", "/mcp list|status", "/mcp tools [server|all]", "/mcp reconnect <server|all>"} {
+	for _, command := range []string{"/bootstrap", "/adopt", "/onboard", "/rename <title>", "/resume [id]", "/git list|create|select", "/learn guided|challenge|off", "/learn <path> [--deep]", "/skills list|show", "/skills run <id>", "/mcp list|status", "/mcp tools [server|all]", "/mcp reconnect <server|all>"} {
 		if !strings.Contains(out, command) {
 			t.Errorf("help missing %q: %q", command, out)
 		}
@@ -148,7 +148,7 @@ func TestRunMCPStatusReconnectAndTools(t *testing.T) {
 }
 
 func TestProjectQuestionnairesRedirectToTUIWithoutWriting(t *testing.T) {
-	for _, command := range []string{"/bootstrap", "/boostrap", "/onboard"} {
+	for _, command := range []string{"/bootstrap", "/boostrap", "/adopt", "/onboard"} {
 		t.Run(command, func(t *testing.T) {
 			dir := t.TempDir()
 			out := runRepl(t, dir, command+"\n/quit\n")

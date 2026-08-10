@@ -89,9 +89,9 @@ func run(args []string, out, errOut io.Writer) error {
 	case "propose":
 		return runPropose(sub[1:], opts, out, errOut)
 	case "bootstrap", "boostrap":
-		return exitf(2, "bootstrap is a reviewed interactive questionnaire; run 'maestro tui', then use /bootstrap")
-	case "onboard":
-		return exitf(2, "onboard is a reviewed interactive repository questionnaire; run 'maestro tui', then use /onboard")
+		return exitf(2, "bootstrap is a reviewed transcript conversation; run 'maestro tui', then use /bootstrap")
+	case "adopt", "onboard":
+		return exitf(2, "adopt is a reviewed transcript conversation with static repository analysis; run 'maestro tui', then use /adopt")
 	case "accept", "validate", "answer", "build", "review", "fix", "docs", "archive", "resume",
 		"rename", "git", "rewind", "remember", "reflect", "rules", "commit", "learn",
 		"skills", "skill", "mcp", "provider", "model", "auth":
@@ -913,8 +913,9 @@ Usage:
 Commands:
   maestro chat [-m <msg>]   interactive REPL, or one-shot chat
   maestro tui               premium TUI (charm.land v2)
-  /bootstrap                in the TUI: review a new-project questionnaire and MAESTRO.md
-  /onboard                  in the TUI: scan an existing repo, then review the same MAESTRO.md
+  /bootstrap                in the TUI: discuss and review a new-project MAESTRO.md
+  /adopt                    in the TUI: analyse an existing repo and review MAESTRO.md
+  /onboard                  compatibility alias for /adopt
   /update                   in the TUI: check the latest stable npm release
   maestro propose -m <prompt>       draft a spec proposal [--recipe quick|feature|bug|architecture]
   maestro validate                  check proposal readiness

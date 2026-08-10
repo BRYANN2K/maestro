@@ -59,7 +59,7 @@ type Unit struct {
 }
 
 // ProjectProfile is the common backend schema used by both /bootstrap and
-// /onboard. Root is runtime-only and is never written to MAESTRO.md.
+// /adopt. Root is runtime-only and is never written to MAESTRO.md.
 type ProjectProfile struct {
 	SchemaVersion        int        `json:"schema_version"`
 	Mode                 Mode       `json:"mode"`
@@ -94,10 +94,10 @@ type Answers struct {
 // deterministic draft and must be reconciled by a human rather than replaced.
 var ErrManifestConflict = errors.New("existing MAESTRO.md differs from the proposed contract")
 
-// ErrRepositoryChanged means facts used by a project questionnaire no longer
+// ErrRepositoryChanged means facts used by a project setup conversation no longer
 // describe the repository. Callers must restart discovery instead of staging
 // a contract assembled from stale manifests, lockfiles, inventory, or HEAD.
-var ErrRepositoryChanged = errors.New("repository changed since the project questionnaire")
+var ErrRepositoryChanged = errors.New("repository changed since project setup")
 
 // RepositoryChangedError makes repository drift actionable without exposing
 // raw repository content in an error or silently choosing stale/new facts.
@@ -106,11 +106,11 @@ type RepositoryChangedError struct {
 }
 
 func (e *RepositoryChangedError) Error() string {
-	command := "/onboard"
+	command := "/adopt"
 	if e.Mode == ModeGreenfield {
 		command = "/bootstrap"
 	}
-	return "project questionnaire expired: repository changed (Git HEAD, manifests, lockfiles, or file inventory); run " + command + " again"
+	return "project setup expired: repository changed (Git HEAD, manifests, lockfiles, or file inventory); run " + command + " again"
 }
 
 func (e *RepositoryChangedError) Unwrap() error { return ErrRepositoryChanged }

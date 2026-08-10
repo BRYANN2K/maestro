@@ -1,8 +1,21 @@
-# Project bootstrap and onboarding
+# Project bootstrap and adoption
 
-`/bootstrap` creates the Maestro contract for a greenfield directory.
-`/onboard` statically analyses a brownfield repository and reconciles the same
-contract. `/resume` remains reserved for loading a Maestro session.
+`/bootstrap` prepares the Maestro contract for a greenfield directory.
+`/adopt` statically analyses a brownfield repository and reconciles the same
+contract. `/onboard` remains an alias for `/adopt`; `/resume` remains reserved
+for loading a Maestro session.
+
+There is no setup modal. The normal transcript is the setup surface:
+
+- if the user discusses the project first, Maestro extracts only decisions the
+  user confirmed and asks for the material gaps;
+- if `/bootstrap` is the first command, Maestro asks focused questions about
+  purpose, users, stack, non-goals, safety boundaries, and verification;
+- `/adopt` combines those confirmed decisions with bounded repository evidence,
+  then asks only for facts that static analysis cannot establish;
+- if `/propose` is invoked without MAESTRO.md, Maestro chooses greenfield or
+  brownfield setup, preserves the complete proposal request, and resumes it
+  only after the user accepts MAESTRO.md.
 
 Both commands propose, but do not immediately write, one root `MAESTRO.md`.
 The proposal is an atomic contract: it is accepted or declined as a whole.
@@ -41,7 +54,7 @@ Secret-like files, credentials, private registries, cloud/Kubernetes state and
 Terraform state are denied. Repository instructions are evidence candidates,
 not executable policy.
 
-`/onboard` is re-entrant. A repeated scan with unchanged evidence is a no-op;
+`/adopt` is re-entrant. A repeated scan with unchanged evidence is a no-op;
 drift is presented as a diff. Existing conflicting human content is never
 silently overwritten.
 

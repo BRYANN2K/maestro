@@ -151,6 +151,7 @@ type Model struct {
 	workspaceRequest   uint64
 	sessionRequest     uint64
 	coachRequest       uint64
+	projectRequest     uint64
 	interactionRequest uint64
 	workspaceListStop  context.CancelFunc
 	sessionListStop    context.CancelFunc
@@ -179,9 +180,9 @@ type Model struct {
 	overlay       overlayKind
 	overlayM      overlayModel
 	formAction    formAction
-	formBase      *projectprofile.Answers
-	formProfile   *projectprofile.ProjectProfile
-	formWorkspace orchestrator.WorkspaceSnapshot
+	projectFlow   *projectConversationState
+	projectActive bool
+	postAcceptCmd *orchestrator.Command
 	coachOffer    *coachOffer
 	pendingCmd    *orchestrator.Command
 	ide           *IDEState
@@ -332,14 +333,16 @@ type chatDoneMsg struct {
 	sessionWorkDir string
 }
 type uiOperationDoneMsg struct {
-	err          error
-	systemText   string
-	successToast string
-	card         *Card
-	sessionID    string
-	workDir      string
-	refreshFiles bool
-	sessionTitle string
+	err               error
+	systemText        string
+	successToast      string
+	card              *Card
+	sessionID         string
+	workDir           string
+	refreshFiles      bool
+	sessionTitle      string
+	resumeCmd         *orchestrator.Command
+	finishProjectFlow bool
 }
 type editorFinishedMsg struct{ err error }
 type modFilesMsg struct {
@@ -360,13 +363,17 @@ type askRequestMsg struct{ req *tools.AskRequest }
 type toastTickMsg struct{}
 type activityTickMsg struct{ at time.Time }
 type modelsRefreshedMsg struct{ err error }
-type projectFormMsg struct {
-	action    formAction
-	profile   projectprofile.ProjectProfile
-	answers   projectprofile.Answers
+type projectConversationState struct {
+	mode      projectprofile.Mode
+	intent    string
+	resumeCmd *orchestrator.Command
 	workspace orchestrator.WorkspaceSnapshot
-	note      string
-	err       error
+	request   uint64
+}
+type projectConversationMsg struct {
+	state projectConversationState
+	step  orchestrator.ProjectManifestStep
+	err   error
 }
 type workspaceListMsg struct {
 	request    uint64
@@ -605,7 +612,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.refreshFiles {
 			refresh = m.refreshModifiedFiles()
 		}
-		return m, tea.Batch(m.arm(), clearScreenCmd(), refresh, m.refreshBranchDisplay())
+		var resume tea.Cmd
+		if msg.finishProjectFlow || msg.resumeCmd != nil {
+			resume = m.resumeProjectCommand(msg.resumeCmd)
+		}
+		return m, tea.Batch(m.arm(), clearScreenCmd(), refresh, m.refreshBranchDisplay(), resume)
 	case permRequestMsg:
 		// A cancelled run can leave its already-delivered Bubble Tea message
 		// behind after the gate has returned through ctx.Done. Never resurrect
@@ -678,25 +689,52 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			msg.target.finishAction(m.orch, msg)
 		}
 		return m, m.arm()
-	case projectFormMsg:
+	case projectConversationMsg:
+		if msg.state.request != m.projectRequest {
+			if m.cancelling {
+				m.finalizeLastAssistantWithToolStatus("cancelled")
+				m.projectActive = false
+				m.busy = false
+				m.cancelRun = nil
+				m.cancelling = false
+				m.runStart = time.Time{}
+			}
+			return m, m.arm(clearScreenCmd())
+		}
+		m.projectActive = false
 		m.busy = false
 		m.cancelRun = nil
+		m.cancelling = false
 		m.runStart = time.Time{}
 		if msg.err != nil {
+			m.finalizeLastAssistantWithToolStatus("error")
+			m.projectFlow = nil
 			m.appendError("error: " + msg.err.Error())
 			m.status.pushToast("error", truncateRunes(msg.err.Error(), 60), 5*time.Second)
 			return m, m.arm(clearScreenCmd())
 		}
-		if !m.orch.WorkspaceIsCurrent(msg.workspace) {
-			m.appendError("error: workspace changed while preparing the project questionnaire; run the command again")
+		if !m.orch.WorkspaceIsCurrent(msg.state.workspace) {
+			m.finalizeLastAssistantWithToolStatus("error")
+			m.projectFlow = nil
+			m.appendError("error: workspace changed while preparing MAESTRO.md; run the command again")
 			m.status.pushToast("error", "workspace changed — run the command again", 4*time.Second)
 			return m, m.arm(clearScreenCmd())
 		}
-		m.openProjectForm(msg.action, msg.profile, msg.answers, msg.workspace)
-		if msg.note != "" {
-			m.status.pushToast("info", msg.note, 3*time.Second)
+		m.projectFlow = &msg.state
+		if !msg.step.Ready {
+			if last := m.lastAssistant(); last != nil && last.busy {
+				last.Text = msg.step.Question
+				last.cachedValid = false
+			} else {
+				m.appendAssistant(msg.step.Question)
+			}
+			m.finalizeLastAssistantWithToolStatus("done")
+			m.status.pushToast("info", "reply in the chat to continue project setup", 4*time.Second)
+			m.renderMessages()
+			return m, m.arm(clearScreenCmd())
 		}
-		return m, m.arm(clearScreenCmd())
+		m.finalizeLastAssistantWithToolStatus("done")
+		return m, tea.Batch(m.arm(clearScreenCmd()), m.runProjectManifest(msg.step.Mode, msg.step.Profile, msg.step.Answers))
 	case workspaceListMsg:
 		if msg.request != m.workspaceRequest || m.overlay != overlayGit {
 			return m, m.arm()
@@ -1593,7 +1631,8 @@ func (m *Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if msg.Type == tea.KeyRunes && m.proposalShortcutAvailable() {
 		switch msg.String() {
 		case "a":
-			return m.acceptLatestPending(), m.refreshModifiedFiles()
+			model := m.acceptLatestPending()
+			return model, tea.Batch(m.refreshModifiedFiles(), m.takePostAcceptCommand())
 		case "d":
 			return m.discardLatestPending(), nil
 		case "[":
@@ -1807,6 +1846,9 @@ func (m *Model) cancelActiveTask() tea.Model {
 	if m.cancelRun == nil {
 		return m
 	}
+	if m.projectActive {
+		m.projectRequest++
+	}
 	m.cancelRun()
 	m.cancelRun = nil
 	// Permission prompts belong to the run being cancelled. Resolve them
@@ -1963,9 +2005,6 @@ func (m *Model) updateOverlayKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.overlay = overlayNone
 			m.overlayM = nil
 			m.formAction = formActionNone
-			m.formBase = nil
-			m.formProfile = nil
-			m.formWorkspace = orchestrator.WorkspaceSnapshot{}
 			return m, nil
 		}
 		if submitted {
@@ -2078,7 +2117,8 @@ func (m *Model) updateOverlayKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case msg.Type == tea.KeyRunes && msg.String() == "v":
 			return m.toggleNextConcealed(), nil
 		case msg.Type == tea.KeyRunes && msg.String() == "a" && m.proposalShortcutAvailable():
-			return m.acceptLatestPending(), m.refreshModifiedFiles()
+			model := m.acceptLatestPending()
+			return model, tea.Batch(m.refreshModifiedFiles(), m.takePostAcceptCommand())
 		case msg.Type == tea.KeyRunes && msg.String() == "d" && m.proposalShortcutAvailable():
 			return m.discardLatestPending(), nil
 		}
@@ -2526,9 +2566,9 @@ func (m *Model) send() tea.Cmd {
 			m.overlayM = newCheckpointOverlay(m.orch)
 			return nil
 		case "bootstrap":
-			return m.loadProjectForm(formActionBootstrap)
-		case "onboard":
-			return m.loadProjectForm(formActionOnboard)
+			return m.beginProjectConversation(projectprofile.ModeGreenfield, nil, projectCommandIntent(cmd))
+		case "adopt":
+			return m.beginProjectConversation(projectprofile.ModeBrownfield, nil, projectCommandIntent(cmd))
 		case "git":
 			return m.openWorkspacePicker()
 		case "resume":
@@ -2604,6 +2644,16 @@ func (m *Model) send() tea.Cmd {
 		case "usage":
 			m.appendSystem(m.usageSummary())
 			return nil
+		case "cancel":
+			if m.projectFlow != nil {
+				m.projectRequest++
+				m.projectActive = false
+				m.projectFlow = nil
+				m.postAcceptCmd = nil
+				m.appendSystem("project setup cancelled")
+				m.status.pushToast("info", "project setup cancelled", 2*time.Second)
+				return nil
+			}
 		case "quit", "exit":
 			return tea.Quit
 		}
@@ -2633,7 +2683,28 @@ func (m *Model) send() tea.Cmd {
 			m.overlayM = newEngineOverlay(m.orch, "dev")
 			return nil
 		}
+		if cmd.Cmd == "propose" {
+			present, err := m.orch.ProjectManifestPresent(context.Background())
+			if err != nil {
+				m.appendError("error: " + err.Error())
+				return nil
+			}
+			if !present {
+				if m.projectFlow != nil {
+					m.projectFlow.resumeCmd = cloneOrchestratorCommand(&cmd)
+					if intent := projectCommandIntent(cmd); intent != "" {
+						m.projectFlow.intent = intent
+					}
+					m.appendSystem("Finish the current project setup question; /propose will resume after MAESTRO.md is accepted.")
+					return nil
+				}
+				return m.beginProjectConversation("", &cmd, projectCommandIntent(cmd))
+			}
+		}
 		return m.dispatch(cmd)
+	}
+	if m.projectFlow != nil {
+		return m.continueProjectConversation(text)
 	}
 	requestText := promptWithContext(text, m.contextRefs)
 	m.contextRefs = nil
@@ -2692,26 +2763,6 @@ func (m *Model) runLearn(path string, deep bool) tea.Cmd {
 
 func (m *Model) submitForm(action formAction, values map[string]string) tea.Cmd {
 	switch action {
-	case formActionBootstrap, formActionOnboard:
-		if m.formBase == nil || m.formProfile == nil || !m.orch.WorkspaceIsCurrent(m.formWorkspace) {
-			m.status.pushToast("error", "project questionnaire expired", 3*time.Second)
-			m.formBase = nil
-			m.formProfile = nil
-			m.formWorkspace = orchestrator.WorkspaceSnapshot{}
-			return nil
-		}
-		answers := *m.formBase
-		profile := *m.formProfile
-		m.formBase = nil
-		m.formProfile = nil
-		m.formWorkspace = orchestrator.WorkspaceSnapshot{}
-		answers.Name = strings.TrimSpace(values["name"])
-		answers.Purpose = strings.TrimSpace(values["purpose"])
-		answers.Stacks = splitStackFormList(values["stack"])
-		answers.NonGoals = collectProjectRuleFields(values, "non_goals")
-		answers.Verification = collectProjectRuleFields(values, "verification")
-		answers.Safety = collectProjectRuleFields(values, "safety")
-		return m.runProjectManifest(action, profile, answers)
 	case formActionRenameSession:
 		return m.renameSession(values["title"])
 	case formActionCreateWorkspace:
@@ -2722,133 +2773,92 @@ func (m *Model) submitForm(action formAction, values map[string]string) tea.Cmd 
 	}
 }
 
-func (m *Model) loadProjectForm(action formAction) tea.Cmd {
+func (m *Model) beginProjectConversation(mode projectprofile.Mode, resume *orchestrator.Command, intent string) tea.Cmd {
 	if m.busy || m.streaming() {
 		m.status.pushToast("info", "agent busy — wait or cancel", 2*time.Second)
 		return nil
 	}
+	m.projectFlow = nil
+	m.postAcceptCmd = nil
+	m.projectRequest++
+	m.projectActive = true
 	m.busy = true
 	m.runStart = time.Now()
+	m.beginProjectSetupProgress("reviewing the discussion and repository evidence")
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancelRun = cancel
-	workspace := m.orch.SnapshotWorkspace()
+	state := projectConversationState{
+		mode: mode, intent: strings.TrimSpace(intent), resumeCmd: cloneOrchestratorCommand(resume),
+		workspace: m.orch.SnapshotWorkspace(), request: m.projectRequest,
+	}
 	return m.startRun(func() tea.Msg {
-		switch action {
-		case formActionBootstrap:
-			profile, answers, err := m.orch.ProjectBootstrapDefaults(ctx)
-			return projectFormMsg{
-				action: action, profile: profile, answers: answers, workspace: workspace,
-				note: fmt.Sprintf("new project · %d detected stack(s)", len(profile.Stacks)), err: err,
+		if state.mode == "" {
+			recommended, err := m.orch.RecommendedProjectMode(ctx)
+			if err != nil {
+				return projectConversationMsg{state: state, err: err}
 			}
-		case formActionOnboard:
-			profile, answers, err := m.orch.ProjectOnboardProfile(ctx)
-			return projectFormMsg{
-				action: action, profile: profile, answers: answers, workspace: workspace,
-				note: fmt.Sprintf("repository analysed · %d unit(s) · %d command(s)", len(profile.Units), len(profile.Commands)), err: err,
-			}
-		default:
-			return projectFormMsg{action: action, err: errors.New("unknown project questionnaire")}
+			state.mode = recommended
 		}
+		step, err := m.orch.ProjectManifestConversation(ctx, state.mode, state.intent, "")
+		state.intent = ""
+		return projectConversationMsg{state: state, step: step, err: err}
 	})
 }
 
-func (m *Model) openProjectForm(action formAction, profile projectprofile.ProjectProfile, answers projectprofile.Answers, workspace orchestrator.WorkspaceSnapshot) {
-	title := "Bootstrap project"
-	if action == formActionOnboard {
-		title = "Onboard repository"
+func (m *Model) continueProjectConversation(reply string) tea.Cmd {
+	if m.projectFlow == nil {
+		return nil
 	}
-	m.formAction = action
-	m.formBase = &answers
-	m.formProfile = &profile
-	m.formWorkspace = workspace
-	m.overlay = overlayForm
-	fields := []formField{
-		{Key: "name", Label: "Project name", Value: answers.Name, Placeholder: "acme-api", Required: true, Help: "Stable product or repository name."},
-		{Key: "purpose", Label: "Purpose", Value: answers.Purpose, Placeholder: "Who it helps and what outcome it creates", Required: true, Help: "One clear outcome; implementation details belong later."},
-		{Key: "stack", Label: "Stack", Value: strings.Join(answers.Stacks, ", "), Placeholder: "Go, PostgreSQL, React", Required: true, Help: "Comma-separated languages, frameworks and infrastructure."},
+	if !m.orch.WorkspaceIsCurrent(m.projectFlow.workspace) {
+		m.projectFlow = nil
+		m.appendError("error: workspace changed while preparing MAESTRO.md; run /bootstrap or /adopt again")
+		return nil
 	}
-	fields = append(fields, projectRuleFields("non_goals", "Non-goal", answers.NonGoals, "Mobile client or multi-region deployment", false)...)
-	fields = append(fields, projectRuleFields("verification", "Verification", answers.Verification, "go test ./... or manual acceptance check", true)...)
-	fields = append(fields, projectRuleFields("safety", "Safety boundary", answers.Safety, "Never commit secrets; preserve public APIs", true)...)
-	m.overlayM = newFormOverlay(title, fields)
-}
-
-// Stack values intentionally remain concise CSV. Prose rules do not use this
-// parser: each rule gets an independent form field so commas remain data.
-func splitStackFormList(value string) []string {
-	parts := strings.FieldsFunc(value, func(r rune) bool { return r == ',' || r == '\n' })
-	out := make([]string, 0, len(parts))
-	seen := map[string]bool{}
-	for _, part := range parts {
-		part = strings.TrimSpace(part)
-		key := strings.ToLower(part)
-		if part == "" || seen[key] {
-			continue
-		}
-		seen[key] = true
-		out = append(out, part)
-	}
-	return out
-}
-
-// projectRuleFields represents each prose list entry as one editable "chip".
-// One trailing empty chip lets users add an item without introducing an
-// ambiguous delimiter into commands or natural-language rules.
-func projectRuleFields(key, label string, values []string, placeholder string, required bool) []formField {
-	fields := make([]formField, 0, len(values)+1)
-	for index, value := range values {
-		fieldKey := key
-		if index > 0 {
-			fieldKey = fmt.Sprintf("%s_%d", key, index+1)
-		}
-		fields = append(fields, formField{
-			Key: fieldKey, Label: fmt.Sprintf("%s %d", label, index+1), Value: value,
-			Placeholder: placeholder, Required: required && index == 0,
-			Help: "One rule per field; commas are preserved. The final empty field adds another rule.",
-		})
-	}
-	index := len(values)
-	fieldKey := key
-	if index > 0 {
-		fieldKey = fmt.Sprintf("%s_%d", key, index+1)
-	}
-	fields = append(fields, formField{
-		Key: fieldKey, Label: fmt.Sprintf("%s %d", label, index+1), Placeholder: placeholder,
-		Required: required && len(values) == 0,
-		Help:     "One rule per field; commas are preserved. Leave this final field empty to keep the current list.",
+	m.busy = true
+	m.runStart = time.Now()
+	m.projectRequest++
+	m.projectActive = true
+	ctx, cancel := context.WithCancel(context.Background())
+	m.cancelRun = cancel
+	m.beginProjectSetupProgress("reviewing your answer against the project contract")
+	state := *m.projectFlow
+	state.request = m.projectRequest
+	return m.startRun(func() tea.Msg {
+		step, err := m.orch.ProjectManifestConversation(ctx, state.mode, state.intent, reply)
+		state.intent = ""
+		return projectConversationMsg{state: state, step: step, err: err}
 	})
-	return fields
 }
 
-func collectProjectRuleFields(values map[string]string, key string) []string {
-	var out []string
-	for index := 0; ; index++ {
-		fieldKey := key
-		if index > 0 {
-			fieldKey = fmt.Sprintf("%s_%d", key, index+1)
-		}
-		value, ok := values[fieldKey]
-		if !ok {
-			break
-		}
-		if value = strings.TrimSpace(value); value != "" {
-			out = append(out, value)
-		}
+func (m *Model) beginProjectSetupProgress(detail string) {
+	m.appendAssistant("")
+	progress := m.lastAssistant()
+	progress.busy = true
+	progress.think = &thinkingState{
+		Role: "project setup", Status: "running", Detail: detail, Started: m.runStart,
 	}
-	return out
+	progress.cachedValid = false
+	m.scrollToBottomIfAttached()
 }
 
-func (m *Model) runProjectManifest(action formAction, profile projectprofile.ProjectProfile, answers projectprofile.Answers) tea.Cmd {
+func (m *Model) runProjectManifest(mode projectprofile.Mode, profile projectprofile.ProjectProfile, answers projectprofile.Answers) tea.Cmd {
 	if m.busy || m.streaming() {
 		m.status.pushToast("info", "agent busy — wait or cancel", 2*time.Second)
 		return nil
 	}
 	if m.proposals == nil {
+		m.projectFlow = nil
+		m.postAcceptCmd = nil
+		m.appendError("error: proposal store unavailable")
 		m.status.pushToast("error", "proposal store unavailable", 4*time.Second)
 		return nil
 	}
 	m.busy = true
 	m.runStart = time.Now()
+	var resume *orchestrator.Command
+	if m.projectFlow != nil {
+		resume = cloneOrchestratorCommand(m.projectFlow.resumeCmd)
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancelRun = cancel
 	return m.startRun(func() tea.Msg {
@@ -2858,30 +2868,81 @@ func (m *Model) runProjectManifest(action formAction, profile projectprofile.Pro
 			err     error
 			name    = "bootstrap"
 		)
-		if action == formActionOnboard {
-			name = "onboard"
+		if mode == projectprofile.ModeBrownfield {
+			name = "adopt"
 		}
 		path, content, err = projectprofile.Draft(ctx, profile, answers)
 		if err != nil {
-			return uiOperationDoneMsg{err: err}
+			return uiOperationDoneMsg{err: err, finishProjectFlow: true}
+		}
+		if err := ctx.Err(); err != nil {
+			return uiOperationDoneMsg{err: err, finishProjectFlow: true}
 		}
 		prop, err := m.proposals.Stage(path, string(content))
 		if err != nil {
-			return uiOperationDoneMsg{err: err}
+			return uiOperationDoneMsg{err: err, finishProjectFlow: true}
+		}
+		if err := ctx.Err(); err != nil {
+			m.proposals.Discard(prop)
+			return uiOperationDoneMsg{err: err, finishProjectFlow: true}
 		}
 		if len(prop.Hunks) == 0 {
 			m.proposals.Discard(prop)
-			return uiOperationDoneMsg{systemText: "MAESTRO.md already matches the reviewed project contract", successToast: "project contract is current"}
+			return uiOperationDoneMsg{
+				systemText: "MAESTRO.md already matches the reviewed project contract", successToast: "project contract is current",
+				resumeCmd: resume, finishProjectFlow: true,
+			}
 		}
 		return uiOperationDoneMsg{
 			card: &Card{
 				ID: name + "-" + prop.ID, Kind: "write", Name: name,
-				Status: "proposed", Detail: path, Proposal: &prop,
+				Status: "proposed", Detail: path, Proposal: &prop, Lifecycle: "project-manifest",
 			},
 			systemText:   "Review the MAESTRO.md contract, then accept or discard the proposal.",
 			successToast: "MAESTRO.md ready for review",
 		}
 	})
+}
+
+func cloneOrchestratorCommand(command *orchestrator.Command) *orchestrator.Command {
+	if command == nil {
+		return nil
+	}
+	clone := *command
+	clone.Args = append([]string(nil), command.Args...)
+	clone.Flags = make(map[string]string, len(command.Flags))
+	for key, value := range command.Flags {
+		clone.Flags[key] = value
+	}
+	return &clone
+}
+
+func projectCommandIntent(command orchestrator.Command) string {
+	parts := make([]string, 0, len(command.Args)+1)
+	if value := strings.TrimSpace(command.Flags["m"]); value != "" {
+		parts = append(parts, value)
+	}
+	parts = append(parts, command.Args...)
+	return strings.TrimSpace(strings.Join(parts, " "))
+}
+
+func (m *Model) resumeProjectCommand(command *orchestrator.Command) tea.Cmd {
+	if command == nil {
+		m.projectFlow = nil
+		return nil
+	}
+	m.projectFlow = nil
+	m.appendSystem("MAESTRO.md is ready. Resuming /propose.")
+	return m.dispatch(*cloneOrchestratorCommand(command))
+}
+
+func (m *Model) takePostAcceptCommand() tea.Cmd {
+	command := m.postAcceptCmd
+	m.postAcceptCmd = nil
+	if command == nil {
+		return nil
+	}
+	return m.resumeProjectCommand(command)
 }
 
 func (m *Model) renameSession(title string) tea.Cmd {
@@ -3384,6 +3445,8 @@ func (m *Model) applyLoadedSession(id, workDir string) {
 	m.invalidateSessionListRequest()
 	m.invalidateWorkspaceListRequest()
 	m.invalidateCoachRequest()
+	m.projectRequest++
+	m.projectActive = false
 	m.coachOffer = nil
 	if m.ide != nil {
 		m.ide.Save()
@@ -3398,6 +3461,8 @@ func (m *Model) applyLoadedSession(id, workDir string) {
 	}
 	m.pending = nil
 	m.pendingCmd = nil
+	m.projectFlow = nil
+	m.postAcceptCmd = nil
 	m.contextRefs = nil
 	m.cardRows = map[string]int{}
 	m.toolCards = map[string]*Card{}
@@ -3495,11 +3560,24 @@ func (m *Model) discardPendingCard(c *Card) tea.Model {
 	m.proposals.Discard(*c.Proposal)
 	c.Status = "discarded"
 	c.Detail = "discarded"
+	m.finishProjectManifestReview(c, false)
 	m.removePending(c)
 	m.completeProposalReviewIfSettled()
 	m.invalidateMessageCaches()
 	m.renderMessages()
 	return m
+}
+
+func (m *Model) finishProjectManifestReview(card *Card, accepted bool) {
+	if card == nil || card.Lifecycle != "project-manifest" {
+		return
+	}
+	if accepted && m.projectFlow != nil {
+		m.postAcceptCmd = cloneOrchestratorCommand(m.projectFlow.resumeCmd)
+	} else {
+		m.postAcceptCmd = nil
+	}
+	m.projectFlow = nil
 }
 
 func (m *Model) pendingDecisionCard() *Card {

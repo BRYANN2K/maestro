@@ -72,7 +72,7 @@ func TestSlashAliasesNormalizeWithoutCatalogDuplicates(t *testing.T) {
 		{alias: "/usages", canonical: "/usage"},
 		{alias: "/exit", canonical: "/quit"},
 		{alias: "/boostrap", canonical: "/bootstrap"},
-		{alias: "/adopt", canonical: "/onboard"},
+		{alias: "/onboard", canonical: "/adopt"},
 		{alias: "/MODELS", canonical: "/model"},
 	}
 	visible := make(map[string]bool, len(slashCatalog))

@@ -18,8 +18,6 @@ type formAction int
 
 const (
 	formActionNone formAction = iota
-	formActionBootstrap
-	formActionOnboard
 	formActionRenameSession
 	formActionCreateWorkspace
 )
@@ -37,8 +35,8 @@ type formField struct {
 	cursor      int // rune offset, never a byte offset
 }
 
-// formOverlay is a compact, keyboard-complete form shared by bootstrap,
-// session rename and workspace creation. It deliberately owns no product
+// formOverlay is a compact, keyboard-complete form shared by short utility
+// actions such as session rename and workspace creation. It deliberately owns no product
 // behavior; completion returns a validated map to the calling Model.
 type formOverlay struct {
 	title  string
@@ -171,8 +169,8 @@ func (f *formOverlay) View(styles Styles, width int) string {
 	progress := fmt.Sprintf("%d/%d", f.active+1, len(f.fields))
 	b.WriteString(styles.Hint.Render(progress+" · ↑/↓ move between answers") + "\n\n")
 
-	// A three-row window keeps the form usable on 40x10 terminals while the
-	// progress counter makes the complete questionnaire explicit.
+	// A three-row window keeps utility forms usable on 40x10 terminals while
+	// the progress counter keeps every field discoverable.
 	start := clamp(f.active-1, 0, max(len(f.fields)-3, 0))
 	end := min(start+3, len(f.fields))
 	for i := start; i < end; i++ {

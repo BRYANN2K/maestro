@@ -176,6 +176,18 @@ func Render(profile ProjectProfile, answers Answers) ([]byte, error) {
 	return content, nil
 }
 
+// NormalizeAnswers applies the exact same validation and normalization used
+// by Render without producing a document. Conversational frontends use it to
+// validate model-extracted answers before deciding that a project contract is
+// ready for human review.
+func NormalizeAnswers(profile ProjectProfile, answers Answers) (Answers, error) {
+	_, normalized, err := normalizeContract(profile, answers)
+	if err != nil {
+		return Answers{}, err
+	}
+	return normalized, nil
+}
+
 // ReconcileExisting allows an exact no-op and otherwise fails closed. A
 // future structured reconciler can expand this boundary without changing the
 // staging API or ever silently overwriting human edits.

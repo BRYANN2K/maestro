@@ -48,8 +48,9 @@ the terminal.
 
 ### Project continuity
 
-- Added `/bootstrap` for new projects and `/onboard` for bounded static
-  repository discovery; both produce the same reviewable `MAESTRO.md` contract.
+- Added conversational `/bootstrap` for new projects and `/adopt` (`/onboard`
+  alias) for bounded static repository discovery; both produce the same
+  reviewable `MAESTRO.md` contract.
 - Added generated session titles, `/rename`, and `/resume` with durable
   per-project state.
 - Added `/git` for selecting or creating registered Git workspaces.
