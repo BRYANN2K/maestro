@@ -756,6 +756,9 @@ func runTUI(opts options, out, errOut io.Writer) error {
 	orch.SetGate(perm)
 	orch.SetDevTools([]agentcore.Tool{proposals.StagingWriteTool(props)})
 	m := tui.New(orch, props, perm)
+	// Release checks are TUI-only, read-only, cached for 24 hours, and use the
+	// public npm stable dist-tag. Dev builds fail closed and remain offline.
+	_ = m.EnableUpdateChecks(agentcore.Version)
 	if draft := tui.LoadDraft(); draft != "" {
 		m.InputSet(draft)
 	}
@@ -912,6 +915,7 @@ Commands:
   maestro tui               premium TUI (charm.land v2)
   /bootstrap                in the TUI: review a new-project questionnaire and MAESTRO.md
   /onboard                  in the TUI: scan an existing repo, then review the same MAESTRO.md
+  /update                   in the TUI: check the latest stable npm release
   maestro propose -m <prompt>       draft a spec proposal [--recipe quick|feature|bug|architecture]
   maestro validate                  check proposal readiness
   maestro answer Q-001 <answer>     resolve a blocking clarification

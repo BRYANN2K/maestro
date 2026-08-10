@@ -459,7 +459,7 @@ func (s *settingsOverlay) itemSummary(index int) (label, value, status string) {
 func (s *settingsOverlay) sectionSummary() string {
 	switch s.section {
 	case settingsGeneral:
-		return "2 saved preferences"
+		return "3 saved preferences"
 	case settingsAppearance:
 		if s.state.Theme != s.committedTheme {
 			return "previewing " + s.state.Theme + " · saved " + s.committedTheme
@@ -636,6 +636,8 @@ func (s *settingsOverlay) settingDetail(row settingRow) settingsDetail {
 		}
 	case settingEditorMode:
 		detail.body = "Standard keeps direct editing keys. Vim enables modal navigation in the embedded IDE."
+	case settingUpdates:
+		detail.body = "Check the public npm stable release metadata at most once every 24 hours. No telemetry is sent and Maestro never installs updates automatically."
 	case settingTheme:
 		detail.body = "Preview the full TUI and embedded editor without writing settings.json."
 		if s.state.Theme != s.committedTheme {

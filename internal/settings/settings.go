@@ -44,6 +44,10 @@ type Settings struct {
 	PermissionMode string                  `json:"permission_mode,omitempty"`
 	Theme          string                  `json:"theme,omitempty"`
 	EditorMode     string                  `json:"editor_mode,omitempty"` // standard | vim
+	// DisableUpdateChecks is opt-out so settings written before this feature
+	// preserve the privacy-conscious default: one public npm metadata request
+	// per 24 hours, with no telemetry and no automatic installation.
+	DisableUpdateChecks bool `json:"disable_update_checks,omitempty"`
 }
 
 // Defaults returns a Settings with sane first-run values.

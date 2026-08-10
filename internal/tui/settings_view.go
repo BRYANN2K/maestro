@@ -19,6 +19,7 @@ const (
 	settingPermission settingKind = "permission"
 	settingTheme      settingKind = "theme"
 	settingEditorMode settingKind = "editor_mode"
+	settingUpdates    settingKind = "updates"
 	settingEngine     settingKind = "engine"
 	settingAgent      settingKind = "agent"
 	settingRoleModel  settingKind = "role_model"
@@ -58,7 +59,7 @@ type settingsSection struct {
 }
 
 var settingsSections = []settingsSection{
-	{settingsGeneral, "General", "safety and editor"},
+	{settingsGeneral, "General", "safety, editor, updates"},
 	{settingsAppearance, "Appearance", "theme preview"},
 	{settingsAgents, "Agents", "task routes"},
 	{settingsProviders, "Providers", "native and plans"},
@@ -466,6 +467,7 @@ func (s *settingsOverlay) rows() []settingRow {
 		return []settingRow{
 			{Label: "Permission mode", Kind: settingPermission},
 			{Label: "Editor mode", Kind: settingEditorMode},
+			{Label: "Update checks", Kind: settingUpdates},
 		}
 	case settingsAppearance:
 		return []settingRow{{Label: "Theme", Kind: settingTheme}}
@@ -496,6 +498,11 @@ func (s *settingsOverlay) value(row settingRow) string {
 		return defaultString(s.state.Theme, "charmtone")
 	case settingEditorMode:
 		return defaultString(s.state.EditorMode, "standard")
+	case settingUpdates:
+		if s.state.DisableUpdateChecks {
+			return "off"
+		}
+		return "on · every 24h"
 	case settingEngine:
 		return engineDisplayName(defaultString(s.state.RoleDefaults[row.Role].Engine, "native"))
 	case settingAgent:
@@ -770,6 +777,8 @@ func (s *settingsOverlay) change(m *Model, row settingRow, delta int) {
 		return
 	case settingEditorMode:
 		next.EditorMode = cycleValue(next.EditorMode, []string{"standard", "vim"}, delta)
+	case settingUpdates:
+		next.DisableUpdateChecks = !next.DisableUpdateChecks
 	case settingEngine:
 		route := next.RoleDefaults[row.Role]
 		route.Engine = cycleValue(route.Engine, []string{"native", "legacy"}, delta)
@@ -813,6 +822,9 @@ func (s *settingsOverlay) change(m *Model, row settingRow, delta int) {
 		return
 	}
 	s.state = next
+	if row.Kind == settingUpdates && next.DisableUpdateChecks {
+		m.availableUpdate = ""
+	}
 	s.refreshEffectiveRoutes(m.orch)
 	if m.perm != nil {
 		m.perm.SetMode(next.PermissionMode)

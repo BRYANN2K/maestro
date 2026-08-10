@@ -29,6 +29,7 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	s.ModelSlots["large"] = "openai/gpt-4o"
 	s.PermissionMode = PermAllow
 	s.Theme = "dark"
+	s.DisableUpdateChecks = true
 	if err := s.Save(ctx, path); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
@@ -40,7 +41,7 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	if got.RoleDefaults[RoleDev] != (RoleDefaults{Engine: "legacy", Agent: "codex", Model: "gpt-4o", ReasoningEffort: "high", ReasoningSet: true}) {
 		t.Errorf("dev defaults = %+v", got.RoleDefaults[RoleDev])
 	}
-	if got.ModelSlots["large"] != "openai/gpt-4o" || got.PermissionMode != PermAllow || got.Theme != "dark" {
+	if got.ModelSlots["large"] != "openai/gpt-4o" || got.PermissionMode != PermAllow || got.Theme != "dark" || !got.DisableUpdateChecks {
 		t.Errorf("Load mismatch: %+v", got)
 	}
 }

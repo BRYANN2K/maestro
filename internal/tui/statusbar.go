@@ -195,6 +195,9 @@ func (m *Model) renderStatusline() {
 			statusSeg{Text: map[bool]string{true: "FOLLOW", false: "FREE"}[m.followAgent], Color: map[bool]color.Color{true: m.styles.T.Color(TokenJulep), false: m.styles.T.Color(TokenSmoke)}[m.followAgent], Bold: m.followAgent},
 			statusSeg{Text: position, Color: m.styles.T.Color(TokenSmoke), Right: true},
 		)
+		if m.availableUpdate != "" {
+			segs = append(segs, statusSeg{Text: "UPDATE v" + m.availableUpdate, Color: m.styles.T.Color(TokenMustard), Bold: true, Right: true})
+		}
 		sb.setSegs(segs...)
 		return
 	}
@@ -243,6 +246,9 @@ func (m *Model) renderStatusline() {
 		Color: mutedText,
 		Right: true,
 	})
+	if m.availableUpdate != "" {
+		segs = append(segs, statusSeg{Text: "UPDATE v" + m.availableUpdate, Color: m.styles.T.Color(TokenMustard), Bold: true, Right: true})
+	}
 	sb.setSegs(segs...)
 }
 

@@ -41,6 +41,7 @@ var slashCatalog = []slashSuggestion{
 	{Command: "/model", Description: "choose the active model", Aliases: []string{"/models"}},
 	{Command: "/providers", Description: "connect subscriptions and API providers", Aliases: []string{"/provider"}},
 	{Command: "/settings", Description: "open Maestro settings"},
+	{Command: "/update", Description: "check for a newer stable Maestro release"},
 	{Command: "/mcp", Description: "inspect MCP integrations · native engine only"},
 	{Command: "/skills", Description: "inspect enabled skills and their sources"},
 	{Command: "/usage", Description: "show context, cost, and tool usage", Aliases: []string{"/usages"}},

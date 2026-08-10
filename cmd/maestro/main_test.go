@@ -124,7 +124,7 @@ func TestHelp(t *testing.T) {
 	if strings.Contains(out, "OAuth flows") {
 		t.Errorf("help advertises OAuth as usable before runtime support: %q", out)
 	}
-	for _, command := range []string{"/bootstrap", "/onboard", "maestro rename <title>", "maestro resume [id]", "maestro git list", "maestro learn status|next|done|later", "maestro skills list", "maestro skills run <id>", "maestro mcp list|status", "maestro mcp tools [server|all]", "maestro mcp reconnect <server|all>"} {
+	for _, command := range []string{"/bootstrap", "/onboard", "/update", "maestro rename <title>", "maestro resume [id]", "maestro git list", "maestro learn status|next|done|later", "maestro skills list", "maestro skills run <id>", "maestro mcp list|status", "maestro mcp tools [server|all]", "maestro mcp reconnect <server|all>"} {
 		if !strings.Contains(out, command) {
 			t.Errorf("help missing %q: %q", command, out)
 		}

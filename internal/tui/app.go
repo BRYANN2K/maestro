@@ -224,6 +224,12 @@ type Model struct {
 	focused           bool           // terminal focus (OS notifications)
 	msgRows           []int          // message → content start row (timeline)
 	forceFullRender   bool           // timeline renders the whole transcript
+
+	updateChecker      releaseChecker
+	updateCheckPending bool
+	updateCheckManual  bool
+	updateManualQueued bool
+	availableUpdate    string
 }
 
 // New builds the TUI model for an orchestrator.
@@ -415,7 +421,7 @@ func (m *Model) askPump() tea.Cmd {
 func (m *Model) Init() tea.Cmd {
 	go m.pumpStream()
 	m.sidebar.refresh(m.orch)
-	return tea.Batch(m.eventPump(), m.permPump(), m.askPump(), m.refreshBranchDisplay(), m.frameTicks())
+	return tea.Batch(m.eventPump(), m.permPump(), m.askPump(), m.refreshBranchDisplay(), m.checkForUpdates(false, false), m.frameTicks())
 }
 
 func (m *Model) refreshBranchDisplay() tea.Cmd {
@@ -504,6 +510,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.BlurMsg:
 		m.focused = false
 		return m, m.arm()
+	case updateCheckMsg:
+		return m, m.handleUpdateCheck(msg)
 	case streamMsg:
 		m.advanceStreamPulse(time.Now())
 		m.handleEvent(msg.ev)
@@ -2581,6 +2589,8 @@ func (m *Model) send() tea.Cmd {
 			return nil
 		case "settings":
 			return m.openSettings(settingsGeneral, true)
+		case "update":
+			return m.handleUpdateCommand(cmd.Args)
 		case "mcp":
 			if len(cmd.Args) == 0 {
 				return m.openSettings(settingsIntegrations, false)

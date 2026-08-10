@@ -64,6 +64,26 @@ With Go 1.26.5 or newer:
 go install github.com/bryann2k/maestro/cmd/maestro@v1.0.0
 ```
 
+### Update notifications
+
+The TUI checks the public npm stable release metadata in the background at
+most once every 24 hours. When a newer version exists, Maestro shows a quiet,
+persistent `UPDATE v…` status and points `/update` to the exact npm install
+command. The check does not delay startup, send telemetry, contact GitHub
+Actions, or install anything automatically.
+
+```text
+/update          force a fresh check
+/update status   show the current update-check policy
+/update off      disable automatic checks
+/update on       enable automatic checks
+```
+
+The same preference is available under `Settings → General → Update checks`.
+Set `MAESTRO_NO_UPDATE_CHECK=1` for a process-level opt-out. Network and
+registry failures remain silent during automatic checks; an explicit
+`/update` reports the failure without exposing response bodies.
+
 ## Quick start
 
 Run Maestro from the repository you want it to understand:
