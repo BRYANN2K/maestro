@@ -55,6 +55,8 @@ type IDEState struct {
 	treeCache       []treeEntry
 	fileCacheValid  bool
 	treeCacheValid  bool
+	filesLoading    bool
+	gutterDeferred  bool
 	project         string
 	git             *git.Client
 	themePicker     *themePickerState
@@ -100,6 +102,19 @@ func (t *themePickerState) View(styles Styles, width int) string {
 
 // NewIDE builds the IDE state for the project.
 func NewIDE(m *Model, project string, g *git.Client) *IDEState {
+	return newIDE(m, project, g, false)
+}
+
+// newDeferredIDE builds the immediately usable editor shell without running
+// Git commands on Bubble Tea's event loop. The file tree and gutter arrive in
+// the existing background workspace refresh. This path is used when an agent
+// is actively streaming, where even a short synchronous Git command can make
+// keyboard and mouse input appear frozen behind queued model deltas.
+func newDeferredIDE(m *Model, project string, g *git.Client) *IDEState {
+	return newIDE(m, project, g, true)
+}
+
+func newIDE(m *Model, project string, g *git.Client, deferGit bool) *IDEState {
 	ed := editor.NewEditor(project)
 	if m != nil && m.orch != nil {
 		ed.SetKeymap(m.orch.SettingsSnapshot().EditorMode)
@@ -168,11 +183,18 @@ func NewIDE(m *Model, project string, g *git.Client) *IDEState {
 	}
 	ui := editor.NewUI(ed, m.styles.T.EditorPalette())
 	ui.Gutter = editor.NewGutter(g)
-	ui.Gutter.Refresh(context.Background(), ed.Buffer().Path)
+	if deferGit {
+		ui.Gutter.Path = ed.Buffer().Path
+	} else {
+		ui.Gutter.Refresh(context.Background(), ed.Buffer().Path)
+	}
 	state := &IDEState{
 		Ed: ed, UI: ui, Focus: ideEditor,
 		treeExpanded: map[string]bool{},
 		project:      project, git: g,
+		fileCacheValid: deferGit,
+		filesLoading:   deferGit,
+		gutterDeferred: deferGit,
 	}
 	if m != nil && m.status != nil {
 		state.notify = func(level, message string) {
@@ -226,7 +248,11 @@ func (s *IDEState) OpenFileAt(path string) bool {
 		}
 		return false
 	}
-	s.UI.Gutter.Refresh(context.Background(), full)
+	if s.gutterDeferred {
+		s.clearGutter(full)
+	} else {
+		s.UI.Gutter.Refresh(context.Background(), full)
+	}
 	s.UI.SetScroll(0)
 	s.Focus = ideEditor
 	return true
@@ -624,7 +650,12 @@ func (s *IDEState) handleAction(m *Model, action editor.EditAction) tea.Cmd {
 	case editor.ActGitWorkspace:
 		// overlay renders from editor state
 	case editor.ActPicker:
-		s.refreshFiles()
+		// The latest completed workspace scan already owns the cache. Starting a
+		// fresh git ls-files here used to block the event loop for up to five
+		// seconds while an agent was streaming.
+		if !s.filesLoading && !m.streaming() {
+			s.refreshFiles()
+		}
 		s.Ed.Picker.Start("Files", s.files(), func(path string) {
 			s.OpenFileAt(path)
 			m.followAgent = false
@@ -659,8 +690,31 @@ func (s *IDEState) applyFileRefresh(project string, files []string) {
 	}
 	s.fileCache = append(s.fileCache[:0], files...)
 	s.fileCacheValid = true
+	s.filesLoading = false
 	s.treeCacheValid = false
 	if s.treeSel >= len(s.fileCache) {
 		s.treeSel = max(len(s.fileCache)-1, 0)
 	}
+}
+
+// applyGutterRefresh installs a gutter computed off the event loop only when
+// it still belongs to the visible workspace and buffer.
+func (s *IDEState) applyGutterRefresh(project, path string, gutter *editor.Gutter) {
+	if gutter == nil || filepath.Clean(project) != filepath.Clean(s.project) || s.Ed == nil || s.Ed.Buffer() == nil {
+		return
+	}
+	if filepath.Clean(path) != filepath.Clean(s.Ed.Buffer().Path) {
+		return
+	}
+	s.UI.Gutter = gutter
+	s.gutterDeferred = false
+}
+
+func (s *IDEState) clearGutter(path string) {
+	if s == nil || s.UI == nil || s.UI.Gutter == nil {
+		return
+	}
+	s.UI.Gutter.Path = path
+	s.UI.Gutter.Signs = map[int]editor.Sign{}
+	s.UI.Gutter.Hunks = nil
 }

@@ -33,27 +33,33 @@ func (t Tab) String() string {
 func (m *Model) ActiveTab() Tab { return m.activeTab }
 
 // SwitchTab selects a workspace without destroying the other workspace's state.
-func (m *Model) SwitchTab(tab Tab) { m.switchTab(tab) }
+func (m *Model) SwitchTab(tab Tab) { _ = m.switchTab(tab) }
 
 // ToggleIDE preserves the original /ide and :q behavior while the UI uses
 // explicit tabs as its source of truth.
-func (m *Model) ToggleIDE() {
+func (m *Model) ToggleIDE() tea.Cmd {
 	if m.activeTab == TabIDE {
 		m.closeIDE()
-		return
+		return nil
 	}
-	m.switchTab(TabIDE)
+	return m.switchTab(TabIDE)
 }
 
-func (m *Model) switchTab(tab Tab) {
+func (m *Model) switchTab(tab Tab) tea.Cmd {
 	if tab != TabHarness && tab != TabIDE {
-		return
+		return nil
 	}
+	var cmd tea.Cmd
 	if tab == TabIDE {
 		created := m.ide == nil
 		if created {
 			project := m.orch.WorkDirDisplay()
-			m.ide = NewIDE(m, project, git.New(project))
+			if m.streaming() {
+				m.ide = newDeferredIDE(m, project, git.New(project))
+				cmd = m.refreshModifiedFiles()
+			} else {
+				m.ide = NewIDE(m, project, git.New(project))
+			}
 		}
 		m.ensureIDEProportions()
 		m.activeTab = TabIDE
@@ -70,6 +76,7 @@ func (m *Model) switchTab(tab Tab) {
 	if m.activeTab == TabHarness && m.followOutput {
 		m.viewport.GotoBottom()
 	}
+	return cmd
 }
 
 func (m *Model) closeIDE() {
@@ -86,12 +93,11 @@ func (m *Model) closeIDE() {
 	}
 }
 
-func (m *Model) cycleTab() {
+func (m *Model) cycleTab() tea.Cmd {
 	if m.activeTab == TabHarness {
-		m.switchTab(TabIDE)
-		return
+		return m.switchTab(TabIDE)
 	}
-	m.switchTab(TabHarness)
+	return m.switchTab(TabHarness)
 }
 
 // tabForKey uses Alt-runes as the portable workspace shortcuts. Synthetic

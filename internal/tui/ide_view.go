@@ -19,7 +19,11 @@ func (m *Model) renderIDE() string {
 	bodyH := m.bodyHeight()
 
 	if b := ide.Ed.Buffer(); b != nil && ide.UI.Gutter != nil && ide.UI.Gutter.Path != b.Path {
-		ide.UI.Gutter.Refresh(m.ctx(), b.Path)
+		if ide.gutterDeferred {
+			ide.clearGutter(b.Path)
+		} else {
+			ide.UI.Gutter.Refresh(m.ctx(), b.Path)
+		}
 	}
 
 	// The mockup is a workspace grid, not three cards. Two quiet vertical
@@ -683,7 +687,11 @@ func (m *Model) renderTree(width, height int) string {
 	if bar := ide.treeScroll.View(m.styles); bar != "" {
 		treeBlock = lipgloss.JoinHorizontal(lipgloss.Top, treeBlock, bar)
 	}
-	return treeBlock + "\n" + m.styles.Hint.Render(fmt.Sprintf("  %d files", len(ide.files())))
+	footer := fmt.Sprintf("  %d files", len(ide.files()))
+	if ide.filesLoading {
+		footer = "  loading files…"
+	}
+	return treeBlock + "\n" + m.styles.Hint.Render(footer)
 }
 
 func (m *Model) renderChangedTree(width, height int) string {

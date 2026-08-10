@@ -528,6 +528,9 @@ func (m *Model) registerTranscriptFileRegions() {
 }
 
 func (m *Model) dispatchRegionWithCmd(r Region) (tea.Model, tea.Cmd) {
+	if r.Action == ActionSwitchTab {
+		return m, m.switchTab(r.Tab)
+	}
 	model := m.dispatchRegion(r)
 	switch r.Action {
 	case ActionAccept:
@@ -542,7 +545,7 @@ func (m *Model) dispatchRegionWithCmd(r Region) (tea.Model, tea.Cmd) {
 func (m *Model) dispatchRegion(r Region) tea.Model {
 	switch r.Action {
 	case ActionSwitchTab:
-		m.switchTab(r.Tab)
+		_ = m.switchTab(r.Tab)
 	case ActionOpenFile:
 		if m.activeTab == TabIDE && m.ide != nil {
 			entries := m.ide.treeEntries()

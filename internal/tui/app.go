@@ -323,7 +323,12 @@ func (m *Model) LastAssistantText() string {
 
 // ---- events -------------------------------------------------------------
 
-type streamMsg struct{ ev agentcore.StreamEvent }
+type streamMsg struct {
+	// ev keeps direct test/headless injection source-compatible. The live pump
+	// fills events so a burst of token deltas produces one UI frame.
+	ev     agentcore.StreamEvent
+	events []agentcore.StreamEvent
+}
 type chatDoneMsg struct {
 	err            error
 	systemText     string
@@ -349,6 +354,8 @@ type modFilesMsg struct {
 	files         []git.NumStat
 	ideFiles      []string
 	ideFilesReady bool
+	ideGutter     *editor.Gutter
+	ideGutterPath string
 	revision      uint64
 	workspace     orchestrator.WorkspaceSnapshot
 }
@@ -410,8 +417,38 @@ func (m *Model) pumpStream() {
 	}
 }
 
+const (
+	streamFrameWindow = 16 * time.Millisecond
+	streamFrameLimit  = 128
+)
+
 func (m *Model) eventPump() tea.Cmd {
-	return func() tea.Msg { return streamMsg{ev: <-m.events} }
+	return func() tea.Msg {
+		first := <-m.events
+		events := []agentcore.StreamEvent{first}
+		if first.Type != agentcore.EvTextDelta && first.Type != agentcore.EvReasoningDelta {
+			return streamMsg{events: events}
+		}
+
+		// Providers can emit hundreds of tiny deltas per second. Updating the
+		// model for every event forces Bubble Tea to rebuild the entire IDE frame
+		// just as often, starving keyboard and mouse messages. Collect at most one
+		// display frame of ordered events; semantic events end the batch early.
+		timer := time.NewTimer(streamFrameWindow)
+		defer timer.Stop()
+		for len(events) < streamFrameLimit {
+			select {
+			case ev := <-m.events:
+				events = append(events, ev)
+				if ev.Type != agentcore.EvTextDelta && ev.Type != agentcore.EvReasoningDelta {
+					return streamMsg{events: events}
+				}
+			case <-timer.C:
+				return streamMsg{events: events}
+			}
+		}
+		return streamMsg{events: events}
+	}
 }
 
 func (m *Model) permPump() tea.Cmd {
@@ -521,8 +558,16 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.handleUpdateCheck(msg)
 	case streamMsg:
 		m.advanceStreamPulse(time.Now())
-		m.handleEvent(msg.ev)
-		if msg.ev.Type == agentcore.EvDone {
+		events := msg.events
+		if len(events) == 0 {
+			events = []agentcore.StreamEvent{msg.ev}
+		}
+		done := false
+		for _, ev := range events {
+			m.handleEvent(ev)
+			done = done || ev.Type == agentcore.EvDone
+		}
+		if done {
 			// End of a turn: re-diff the working tree for the sidebar
 			// "Changed" panel, off the event loop, and force a full
 			// terminal repaint so no streaming diff residue survives.
@@ -1595,7 +1640,7 @@ func (m *Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if tab, ok := tabForKey(msg); ok {
-			m.switchTab(tab)
+			return m, m.switchTab(tab)
 		}
 		return m, nil
 	}
@@ -1618,12 +1663,10 @@ func (m *Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.updateOverlayKey(msg)
 	}
 	if m.isCtrlTab(msg) {
-		m.cycleTab()
-		return m, nil
+		return m, m.cycleTab()
 	}
 	if tab, ok := tabForKey(msg); ok {
-		m.switchTab(tab)
-		return m, nil
+		return m, m.switchTab(tab)
 	}
 	// Proposal decisions are valid from the empty Agent composer and from the
 	// IDE's HITL rail. Previously those focused widgets swallowed `a`/`d`
@@ -2415,19 +2458,34 @@ func (m *Model) refreshAfterCompletion(source uint8) tea.Cmd {
 // beginModifiedFilesRefresh maintains a single scan in flight. Requests that
 // arrive while it runs only advance the desired revision; completion starts
 // exactly one scan for the newest revision.
+var ideListFiles = editor.ListFiles
+
 func (m *Model) beginModifiedFilesRefresh() tea.Cmd {
 	if m.modFilesInFlight || m.orch == nil {
 		return nil
 	}
 	revision := m.modFilesRequested
 	workspace := m.orch.SnapshotWorkspace()
+	ideGutterPath := ""
+	if m.ide != nil && m.ide.Ed != nil && m.ide.Ed.Buffer() != nil {
+		ideGutterPath = m.ide.Ed.Buffer().Path
+	}
 	m.modFilesInFlight = true
 	m.modFilesRunning = revision
 	return func() tea.Msg {
+		var gutter *editor.Gutter
+		if ideGutterPath != "" {
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			gutter = editor.NewGutter(git.New(workspace.WorkDir()))
+			gutter.Refresh(ctx, ideGutterPath)
+			cancel()
+		}
 		return modFilesMsg{
 			files:         m.orch.ModifiedFilesFor(context.Background(), workspace),
-			ideFiles:      editor.ListFiles(workspace.WorkDir(), 500),
+			ideFiles:      ideListFiles(workspace.WorkDir(), 500),
 			ideFilesReady: true,
+			ideGutter:     gutter,
+			ideGutterPath: ideGutterPath,
 			revision:      revision,
 			workspace:     workspace,
 		}
@@ -2455,6 +2513,7 @@ func (m *Model) finishModifiedFilesRefresh(msg modFilesMsg) tea.Cmd {
 		m.sidebar.setFiles(msg.files)
 		if msg.ideFilesReady && m.ide != nil {
 			m.ide.applyFileRefresh(msg.workspace.WorkDir(), msg.ideFiles)
+			m.ide.applyGutterRefresh(msg.workspace.WorkDir(), msg.ideGutterPath, msg.ideGutter)
 		}
 		return nil
 	}
@@ -2543,8 +2602,7 @@ func (m *Model) send() tea.Cmd {
 		}
 		switch cmd.Cmd {
 		case "ide":
-			m.ToggleIDE()
-			return nil
+			return m.ToggleIDE()
 		case "follow":
 			m.followAgent = !m.followAgent
 			if len(cmd.Args) > 0 {

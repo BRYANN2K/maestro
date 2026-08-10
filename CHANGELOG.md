@@ -41,6 +41,8 @@ the terminal.
 - Added an integrated code workspace with file navigation, multiple buffers,
   syntax highlighting, Git gutter, Markdown preview, selection-based Maestro
   actions, proposal diffs, and optional Vim behavior.
+- Kept the IDE responsive during active model streams by batching display
+  deltas and moving file-tree and Git-gutter scans off the TUI event loop.
 - Added a canonical slash-command catalog shared by completion, the command
   palette, and help.
 - Added focus-first human output with bounded steps, explicit progress labels,
