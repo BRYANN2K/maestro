@@ -1,0 +1,42 @@
+# Binaries
+/maestro
+/bin/
+*.exe
+
+# Go
+/vendor/
+*.test
+*.out
+coverage.*
+
+# Release artifacts
+/dist/
+/npm/*.tgz
+
+# Maestro runtime state
+/.maestro/
+/maestro/learn/
+/specs/archive/
+
+# OS / editor
+.DS_Store
+*.swp
+.idea/
+.vscode/
+
+# Local config (project-level)
+.maestrorc
+/maestrorc
+.env
+.env.*
+!.env.example
+
+# Python caches
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Runtime databases (token-optimizer sessions, trends)
+*.db
+*.db-shm
+*.db-wal

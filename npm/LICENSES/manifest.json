@@ -1,0 +1,860 @@
+{
+  "schema": 1,
+  "command": "./cmd/maestro",
+  "targets": [
+    "darwin/amd64",
+    "darwin/arm64",
+    "linux/amd64",
+    "linux/arm64",
+    "windows/amd64",
+    "windows/arm64"
+  ],
+  "modules": [
+    {
+      "path": "charm.land/lipgloss/v2",
+      "version": "v2.0.5",
+      "targets": [
+        "darwin/amd64",
+        "darwin/arm64",
+        "linux/amd64",
+        "linux/arm64",
+        "windows/amd64",
+        "windows/arm64"
+      ],
+      "files": [
+        {
+          "path": "LICENSES/modules/charm.land/lipgloss/v2/LICENSE",
+          "sha256": "3f531fb89f23b218fbe16b24fb5950418fa1f0046db5cfddb2c1e0d6d39bfcc0"
+        }
+      ]
+    },
+    {
+      "path": "github.com/alecthomas/chroma/v2",
+      "version": "v2.27.0",
+      "targets": [
+        "darwin/amd64",
+        "darwin/arm64",
+        "linux/amd64",
+        "linux/arm64",
+        "windows/amd64",
+        "windows/arm64"
+      ],
+      "files": [
+        {
+          "path": "LICENSES/modules/github.com/alecthomas/chroma/v2/COPYING",
+          "sha256": "13654b052f885cb3fa47d7343e13975d9c8a64c3bcd84993c35d5eb01f22b23f"
+        }
+      ]
+    },
+    {
+      "path": "github.com/atotto/clipboard",
+      "version": "v0.1.4",
+      "targets": [
+        "darwin/amd64",
+        "darwin/arm64",
+        "linux/amd64",
+        "linux/arm64",
+        "windows/amd64",
+        "windows/arm64"
+      ],
+      "files": [
+        {
+          "path": "LICENSES/modules/github.com/atotto/clipboard/LICENSE",
+          "sha256": "2c4bac8e2a97180d6e7758c37de85d1cda1859aaf85b56da15d935d2d9a5564f"
+        }
+      ]
+    },
+    {
+      "path": "github.com/aymanbagabas/go-osc52/v2",
+      "version": "v2.0.1",
+      "targets": [
+        "darwin/amd64",
+        "darwin/arm64",
+        "linux/amd64",
+        "linux/arm64",
+        "windows/amd64",
+        "windows/arm64"
+      ],
+      "files": [
+        {
+          "path": "LICENSES/modules/github.com/aymanbagabas/go-osc52/v2/LICENSE",
+          "sha256": "11319e34d9dac2f45392f14f4f62e28b24173cfa13d39b32e7b7b66c2f3bdccd"
+        }
+      ]
+    },
+    {
+      "path": "github.com/aymerick/douceur",
+      "version": "v0.2.0",
+      "targets": [
+        "darwin/amd64",
+        "darwin/arm64",
+        "linux/amd64",
+        "linux/arm64",
+        "windows/amd64",
+        "windows/arm64"
+      ],
+      "files": [
+        {
+          "path": "LICENSES/modules/github.com/aymerick/douceur/LICENSE",
+          "sha256": "a91ec19456c4efb3d9fc22dc9c1ec60ec3701a9e8f4be511ebcf908c04288ffb"
+        }
+      ]
+    },
+    {
+      "path": "github.com/charmbracelet/bubbles",
+      "version": "v1.0.0",
+      "targets": [
+        "darwin/amd64",
+        "darwin/arm64",
+        "linux/amd64",
+        "linux/arm64",
+        "windows/amd64",
+        "windows/arm64"
+      ],
+      "files": [
+        {
+          "path": "LICENSES/modules/github.com/charmbracelet/bubbles/LICENSE",
+          "sha256": "69793670485e4ae8bf28fcbe5639141f604256d5bb6c1862571f3a32823fa221"
+        }
+      ]
+    },
+    {
+      "path": "github.com/charmbracelet/bubbletea",
+      "version": "v1.3.10",
+      "targets": [
+        "darwin/amd64",
+        "darwin/arm64",
+        "linux/amd64",
+        "linux/arm64",
+        "windows/amd64",
+        "windows/arm64"
+      ],
+      "files": [
+        {
+          "path": "LICENSES/modules/github.com/charmbracelet/bubbletea/LICENSE",
+          "sha256": "69793670485e4ae8bf28fcbe5639141f604256d5bb6c1862571f3a32823fa221"
+        }
+      ]
+    },
+    {
+      "path": "github.com/charmbracelet/colorprofile",
+      "version": "v0.4.3",
+      "targets": [
+        "darwin/amd64",
+        "darwin/arm64",
+        "linux/amd64",
+        "linux/arm64",
+        "windows/amd64",
+        "windows/arm64"
+      ],
+      "files": [
+        {
+          "path": "LICENSES/modules/github.com/charmbracelet/colorprofile/LICENSE",
+          "sha256": "57d6eeeb336030b89c0e0d12cf869f84b97a481cd00b350ef21fca995da5a39a"
+        }
+      ]
+    },
+    {
+      "path": "github.com/charmbracelet/glamour",
+      "version": "v1.0.0",
+      "targets": [
+        "darwin/amd64",
+        "darwin/arm64",
+        "linux/amd64",
+        "linux/arm64",
+        "windows/amd64",
+        "windows/arm64"
+      ],
+      "files": [
+        {
+          "path": "LICENSES/modules/github.com/charmbracelet/glamour/LICENSE",
+          "sha256": "30bf812ed0c30e86192cb609b74cf5f2a7303553f7e10ddbfc926172af115b89"
+        }
+      ]
+    },
+    {
+      "path": "github.com/charmbracelet/lipgloss",
+      "version": "v1.1.1-0.20250404203927-76690c660834",
+      "targets": [
+        "darwin/amd64",
+        "darwin/arm64",
+        "linux/amd64",
+        "linux/arm64",
+        "windows/amd64",
+        "windows/arm64"
+      ],
+      "files": [
+        {
+          "path": "LICENSES/modules/github.com/charmbracelet/lipgloss/LICENSE",
+          "sha256": "699cffa88b62691ea09706d356e5ee0982e87ca2b1c58ca682f27d6ae87f9efc"
+        }
+      ]
+    },
+    {
+      "path": "github.com/charmbracelet/ultraviolet",
+      "version": "v0.0.0-20251205161215-1948445e3318",
+      "targets": [
+        "darwin/amd64",
+        "darwin/arm64",
+        "linux/amd64",
+        "linux/arm64",
+        "windows/amd64",
+        "windows/arm64"
+      ],
+      "files": [
+        {
+          "path": "LICENSES/modules/github.com/charmbracelet/ultraviolet/LICENSE",
+          "sha256": "8a77c755a1d1fbdc932e86f0449549121820b6f4cc1234b12fcfc8d38013c1de"
+        }
+      ]
+    },
+    {
+      "path": "github.com/charmbracelet/x/ansi",
+      "version": "v0.11.7",
+      "targets": [
+        "darwin/amd64",
+        "darwin/arm64",
+        "linux/amd64",
+        "linux/arm64",
+        "windows/amd64",
+        "windows/arm64"
+      ],
+      "files": [
+        {
+          "path": "LICENSES/modules/github.com/charmbracelet/x/ansi/LICENSE",
+          "sha256": "0baa4a5942a801d93f4050d2bc0039d8c037105fcd335230d118eec99a11782b"
+        }
+      ]
+    },
+    {
+      "path": "github.com/charmbracelet/x/cellbuf",
+      "version": "v0.0.15",
+      "targets": [
+        "darwin/amd64",
+        "darwin/arm64",
+        "linux/amd64",
+        "linux/arm64",
+        "windows/amd64",
+        "windows/arm64"
+      ],
+      "files": [
+        {
+          "path": "LICENSES/modules/github.com/charmbracelet/x/cellbuf/LICENSE",
+          "sha256": "0baa4a5942a801d93f4050d2bc0039d8c037105fcd335230d118eec99a11782b"
+        }
+      ]
+    },
+    {
+      "path": "github.com/charmbracelet/x/exp/slice",
+      "version": "v0.0.0-20250327172914-2fdc97757edf",
+      "targets": [
+        "darwin/amd64",
+        "darwin/arm64",
+        "linux/amd64",
+        "linux/arm64",
+        "windows/amd64",
+        "windows/arm64"
+      ],
+      "files": [
+        {
+          "path": "LICENSES/modules/github.com/charmbracelet/x/exp/slice/LICENSE",
+          "sha256": "0baa4a5942a801d93f4050d2bc0039d8c037105fcd335230d118eec99a11782b"
+        }
+      ]
+    },
+    {
+      "path": "github.com/charmbracelet/x/term",
+      "version": "v0.2.2",
+      "targets": [
+        "darwin/amd64",
+        "darwin/arm64",
+        "linux/amd64",
+        "linux/arm64",
+        "windows/amd64",
+        "windows/arm64"
+      ],
+      "files": [
+        {
+          "path": "LICENSES/modules/github.com/charmbracelet/x/term/LICENSE",
+          "sha256": "0baa4a5942a801d93f4050d2bc0039d8c037105fcd335230d118eec99a11782b"
+        }
+      ]
+    },
+    {
+      "path": "github.com/charmbracelet/x/termios",
+      "version": "v0.1.1",
+      "targets": [
+        "darwin/amd64",
+        "darwin/arm64",
+        "linux/amd64",
+        "linux/arm64"
+      ],
+      "files": [
+        {
+          "path": "LICENSES/modules/github.com/charmbracelet/x/termios/LICENSE",
+          "sha256": "0baa4a5942a801d93f4050d2bc0039d8c037105fcd335230d118eec99a11782b"
+        }
+      ]
+    },
+    {
+      "path": "github.com/charmbracelet/x/windows",
+      "version": "v0.2.2",
+      "targets": [
+        "darwin/amd64",
+        "darwin/arm64",
+        "linux/amd64",
+        "linux/arm64",
+        "windows/amd64",
+        "windows/arm64"
+      ],
+      "files": [
+        {
+          "path": "LICENSES/modules/github.com/charmbracelet/x/windows/LICENSE",
+          "sha256": "0baa4a5942a801d93f4050d2bc0039d8c037105fcd335230d118eec99a11782b"
+        }
+      ]
+    },
+    {
+      "path": "github.com/clipperhouse/displaywidth",
+      "version": "v0.11.0",
+      "targets": [
+        "darwin/amd64",
+        "darwin/arm64",
+        "linux/amd64",
+        "linux/arm64",
+        "windows/amd64",
+        "windows/arm64"
+      ],
+      "files": [
+        {
+          "path": "LICENSES/modules/github.com/clipperhouse/displaywidth/LICENSE",
+          "sha256": "fcdcc889a11c39c73d36019b838af41b418eb7811af12b746ace40c3074bb96c"
+        }
+      ]
+    },
+    {
+      "path": "github.com/clipperhouse/uax29/v2",
+      "version": "v2.7.0",
+      "targets": [
+        "darwin/amd64",
+        "darwin/arm64",
+        "linux/amd64",
+        "linux/arm64",
+        "windows/amd64",
+        "windows/arm64"
+      ],
+      "files": [
+        {
+          "path": "LICENSES/modules/github.com/clipperhouse/uax29/v2/LICENSE",
+          "sha256": "07e9e3daaccc707c9b7d535ed1405a65d37919fdd42197fe55e68820e974688c"
+        }
+      ]
+    },
+    {
+      "path": "github.com/dlclark/regexp2/v2",
+      "version": "v2.2.1",
+      "targets": [
+        "darwin/amd64",
+        "darwin/arm64",
+        "linux/amd64",
+        "linux/arm64",
+        "windows/amd64",
+        "windows/arm64"
+      ],
+      "files": [
+        {
+          "path": "LICENSES/modules/github.com/dlclark/regexp2/v2/LICENSE",
+          "sha256": "9be5d04bb4d706914d5bf943710da4afeb42048f7c529902fb57c82762a991a9"
+        }
+      ]
+    },
+    {
+      "path": "github.com/erikgeiser/coninput",
+      "version": "v0.0.0-20211004153227-1c3628e74d0f",
+      "targets": [
+        "windows/amd64",
+        "windows/arm64"
+      ],
+      "files": [
+        {
+          "path": "LICENSES/modules/github.com/erikgeiser/coninput/LICENSE",
+          "sha256": "0a00deeeb36bb7b8ccbb9003100b665e584d9384e66c8c26f29b5929ecaa745b"
+        }
+      ]
+    },
+    {
+      "path": "github.com/gorilla/css",
+      "version": "v1.0.1",
+      "targets": [
+        "darwin/amd64",
+        "darwin/arm64",
+        "linux/amd64",
+        "linux/arm64",
+        "windows/amd64",
+        "windows/arm64"
+      ],
+      "files": [
+        {
+          "path": "LICENSES/modules/github.com/gorilla/css/LICENSE",
+          "sha256": "af11d643d903cb178a641d7512879285287844f7a6c0611e2d0c6b131e50188b"
+        }
+      ]
+    },
+    {
+      "path": "github.com/lucasb-eyer/go-colorful",
+      "version": "v1.4.1",
+      "targets": [
+        "darwin/amd64",
+        "darwin/arm64",
+        "linux/amd64",
+        "linux/arm64",
+        "windows/amd64",
+        "windows/arm64"
+      ],
+      "files": [
+        {
+          "path": "LICENSES/modules/github.com/lucasb-eyer/go-colorful/LICENSE",
+          "sha256": "1e4cf2a117516ec1b54041d68ed4f5d331878b04de3386f4790e7b5b9c04e1ec"
+        }
+      ]
+    },
+    {
+      "path": "github.com/mattn/go-isatty",
+      "version": "v0.0.20",
+      "targets": [
+        "darwin/amd64",
+        "darwin/arm64",
+        "linux/amd64",
+        "linux/arm64",
+        "windows/amd64",
+        "windows/arm64"
+      ],
+      "files": [
+        {
+          "path": "LICENSES/modules/github.com/mattn/go-isatty/LICENSE",
+          "sha256": "08eab1118c80885fa1fa6a6dd7303f65a379fcb3733e063d20d1bbc2c76e6fa1"
+        }
+      ]
+    },
+    {
+      "path": "github.com/mattn/go-localereader",
+      "version": "v0.0.1",
+      "targets": [
+        "windows/amd64",
+        "windows/arm64"
+      ],
+      "files": [
+        {
+          "path": "LICENSES/modules/github.com/mattn/go-localereader/LICENSE",
+          "sha256": "dceede03550621e65ec7b79fcba87cf6dbb9d31132a8ae71a8fe8ceec0af7da3"
+        }
+      ],
+      "license_source": "https://github.com/mattn/go-localereader/blob/2491eb6c1c75720122ef321ed7acc3a8d9de95b1/LICENSE",
+      "note": "The v0.0.1 module archive says MIT in README.md but predates the upstream LICENSE file; this exact current upstream license is pinned by commit."
+    },
+    {
+      "path": "github.com/mattn/go-runewidth",
+      "version": "v0.0.23",
+      "targets": [
+        "darwin/amd64",
+        "darwin/arm64",
+        "linux/amd64",
+        "linux/arm64",
+        "windows/amd64",
+        "windows/arm64"
+      ],
+      "files": [
+        {
+          "path": "LICENSES/modules/github.com/mattn/go-runewidth/LICENSE",
+          "sha256": "88a2379b3ca34bf5c57127aff9dcb802bbb60ece0805cdbda65b3bd115f971d9"
+        }
+      ]
+    },
+    {
+      "path": "github.com/microcosm-cc/bluemonday",
+      "version": "v1.0.27",
+      "targets": [
+        "darwin/amd64",
+        "darwin/arm64",
+        "linux/amd64",
+        "linux/arm64",
+        "windows/amd64",
+        "windows/arm64"
+      ],
+      "files": [
+        {
+          "path": "LICENSES/modules/github.com/microcosm-cc/bluemonday/LICENSE.md",
+          "sha256": "a8e8489f1168b5f3e0ebb43d7fe1c78a2fd7db9939c1a6cb555940a4b631f8d2"
+        }
+      ]
+    },
+    {
+      "path": "github.com/muesli/ansi",
+      "version": "v0.0.0-20230316100256-276c6243b2f6",
+      "targets": [
+        "darwin/amd64",
+        "darwin/arm64",
+        "linux/amd64",
+        "linux/arm64",
+        "windows/amd64",
+        "windows/arm64"
+      ],
+      "files": [
+        {
+          "path": "LICENSES/modules/github.com/muesli/ansi/LICENSE",
+          "sha256": "43f65e00e8919fa43c5f45bb2ae578b6d3ee823eb99aa14c85c9ecd06e0350b5"
+        }
+      ]
+    },
+    {
+      "path": "github.com/muesli/cancelreader",
+      "version": "v0.2.2",
+      "targets": [
+        "darwin/amd64",
+        "darwin/arm64",
+        "linux/amd64",
+        "linux/arm64",
+        "windows/amd64",
+        "windows/arm64"
+      ],
+      "files": [
+        {
+          "path": "LICENSES/modules/github.com/muesli/cancelreader/LICENSE",
+          "sha256": "8c139dbbc83b4fb055b4100b6b9402f7de3dd6bbca05015bdfcc4b392c8cfd5f"
+        }
+      ]
+    },
+    {
+      "path": "github.com/muesli/reflow",
+      "version": "v0.3.0",
+      "targets": [
+        "darwin/amd64",
+        "darwin/arm64",
+        "linux/amd64",
+        "linux/arm64",
+        "windows/amd64",
+        "windows/arm64"
+      ],
+      "files": [
+        {
+          "path": "LICENSES/modules/github.com/muesli/reflow/LICENSE",
+          "sha256": "233e8cf9a812999ccee4d3edb270b0f11ab3539658e680bcb873604915ca5038"
+        }
+      ]
+    },
+    {
+      "path": "github.com/muesli/termenv",
+      "version": "v0.16.0",
+      "targets": [
+        "darwin/amd64",
+        "darwin/arm64",
+        "linux/amd64",
+        "linux/arm64",
+        "windows/amd64",
+        "windows/arm64"
+      ],
+      "files": [
+        {
+          "path": "LICENSES/modules/github.com/muesli/termenv/LICENSE",
+          "sha256": "233e8cf9a812999ccee4d3edb270b0f11ab3539658e680bcb873604915ca5038"
+        }
+      ]
+    },
+    {
+      "path": "github.com/rivo/uniseg",
+      "version": "v0.4.7",
+      "targets": [
+        "darwin/amd64",
+        "darwin/arm64",
+        "linux/amd64",
+        "linux/arm64",
+        "windows/amd64",
+        "windows/arm64"
+      ],
+      "files": [
+        {
+          "path": "LICENSES/modules/github.com/rivo/uniseg/LICENSE.txt",
+          "sha256": "a59885f5f0f3b3c07cf9444db5fe399b6f0791eac82055f7b85cc65500551039"
+        }
+      ]
+    },
+    {
+      "path": "github.com/santhosh-tekuri/jsonschema/v6",
+      "version": "v6.0.2",
+      "targets": [
+        "darwin/amd64",
+        "darwin/arm64",
+        "linux/amd64",
+        "linux/arm64",
+        "windows/amd64",
+        "windows/arm64"
+      ],
+      "files": [
+        {
+          "path": "LICENSES/modules/github.com/santhosh-tekuri/jsonschema/v6/LICENSE",
+          "sha256": "c8858a5a76440bbca484e134cf7df46385d090dd18b2c58e650f939258802e5b"
+        }
+      ]
+    },
+    {
+      "path": "github.com/xo/terminfo",
+      "version": "v0.0.0-20220910002029-abceb7e1c41e",
+      "targets": [
+        "darwin/amd64",
+        "darwin/arm64",
+        "linux/amd64",
+        "linux/arm64",
+        "windows/amd64",
+        "windows/arm64"
+      ],
+      "files": [
+        {
+          "path": "LICENSES/modules/github.com/xo/terminfo/LICENSE",
+          "sha256": "1f5f51151ba96f0492ce288bd007242f924fdad9f04002e175e951644340a891"
+        }
+      ]
+    },
+    {
+      "path": "github.com/yuin/goldmark",
+      "version": "v1.7.17",
+      "targets": [
+        "darwin/amd64",
+        "darwin/arm64",
+        "linux/amd64",
+        "linux/arm64",
+        "windows/amd64",
+        "windows/arm64"
+      ],
+      "files": [
+        {
+          "path": "LICENSES/modules/github.com/yuin/goldmark/LICENSE",
+          "sha256": "c1d6f653c38c80294dc7994647ba0dcc508ce64a86996303c804efa2f7982bff"
+        }
+      ]
+    },
+    {
+      "path": "github.com/yuin/goldmark-emoji",
+      "version": "v1.0.6",
+      "targets": [
+        "darwin/amd64",
+        "darwin/arm64",
+        "linux/amd64",
+        "linux/arm64",
+        "windows/amd64",
+        "windows/arm64"
+      ],
+      "files": [
+        {
+          "path": "LICENSES/modules/github.com/yuin/goldmark-emoji/LICENSE",
+          "sha256": "64ce0d485c3558737f049b960abc5dde745f4122daaae1869ebc066566cc35f1"
+        }
+      ]
+    },
+    {
+      "path": "golang.org/x/net",
+      "version": "v0.38.0",
+      "targets": [
+        "darwin/amd64",
+        "darwin/arm64",
+        "linux/amd64",
+        "linux/arm64",
+        "windows/amd64",
+        "windows/arm64"
+      ],
+      "files": [
+        {
+          "path": "LICENSES/modules/golang.org/x/net/LICENSE",
+          "sha256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad"
+        },
+        {
+          "path": "LICENSES/modules/golang.org/x/PATENTS",
+          "sha256": "96f408bfae65bf137fc2525d3ecb030271c50c1e90799f87abf8846d8dd505cc"
+        }
+      ]
+    },
+    {
+      "path": "golang.org/x/sync",
+      "version": "v0.21.0",
+      "targets": [
+        "darwin/amd64",
+        "darwin/arm64",
+        "linux/amd64",
+        "linux/arm64",
+        "windows/amd64",
+        "windows/arm64"
+      ],
+      "files": [
+        {
+          "path": "LICENSES/modules/golang.org/x/sync/LICENSE",
+          "sha256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad"
+        },
+        {
+          "path": "LICENSES/modules/golang.org/x/PATENTS",
+          "sha256": "96f408bfae65bf137fc2525d3ecb030271c50c1e90799f87abf8846d8dd505cc"
+        }
+      ]
+    },
+    {
+      "path": "golang.org/x/sys",
+      "version": "v0.46.0",
+      "targets": [
+        "darwin/amd64",
+        "darwin/arm64",
+        "linux/amd64",
+        "linux/arm64",
+        "windows/amd64",
+        "windows/arm64"
+      ],
+      "files": [
+        {
+          "path": "LICENSES/modules/golang.org/x/sys/LICENSE",
+          "sha256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad"
+        },
+        {
+          "path": "LICENSES/modules/golang.org/x/PATENTS",
+          "sha256": "96f408bfae65bf137fc2525d3ecb030271c50c1e90799f87abf8846d8dd505cc"
+        }
+      ]
+    },
+    {
+      "path": "golang.org/x/term",
+      "version": "v0.36.0",
+      "targets": [
+        "darwin/amd64",
+        "darwin/arm64",
+        "linux/amd64",
+        "linux/arm64",
+        "windows/amd64",
+        "windows/arm64"
+      ],
+      "files": [
+        {
+          "path": "LICENSES/modules/golang.org/x/term/LICENSE",
+          "sha256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad"
+        },
+        {
+          "path": "LICENSES/modules/golang.org/x/PATENTS",
+          "sha256": "96f408bfae65bf137fc2525d3ecb030271c50c1e90799f87abf8846d8dd505cc"
+        }
+      ]
+    },
+    {
+      "path": "golang.org/x/text",
+      "version": "v0.39.0",
+      "targets": [
+        "darwin/amd64",
+        "darwin/arm64",
+        "linux/amd64",
+        "linux/arm64",
+        "windows/amd64",
+        "windows/arm64"
+      ],
+      "files": [
+        {
+          "path": "LICENSES/modules/golang.org/x/text/LICENSE",
+          "sha256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad"
+        },
+        {
+          "path": "LICENSES/modules/golang.org/x/PATENTS",
+          "sha256": "96f408bfae65bf137fc2525d3ecb030271c50c1e90799f87abf8846d8dd505cc"
+        }
+      ]
+    },
+    {
+      "path": "gopkg.in/yaml.v3",
+      "version": "v3.0.1",
+      "targets": [
+        "darwin/amd64",
+        "darwin/arm64",
+        "linux/amd64",
+        "linux/arm64",
+        "windows/amd64",
+        "windows/arm64"
+      ],
+      "files": [
+        {
+          "path": "LICENSES/modules/gopkg.in/yaml.v3/LICENSE",
+          "sha256": "d18f6323b71b0b768bb5e9616e36da390fbd39369a81807cca352de4e4e6aa0b"
+        },
+        {
+          "path": "LICENSES/modules/gopkg.in/yaml.v3/NOTICE",
+          "sha256": "f6c2dd3a67b576eafb89b80200b8b1627230bf3821a0c14cb99a22ac19107d00"
+        }
+      ]
+    }
+  ],
+  "supplemental": [
+    {
+      "name": "Liberation Mono embedded font",
+      "source": "github.com/alecthomas/chroma/v2@v2.27.0/formatters/svg/font_liberation_mono.go",
+      "applies_to_modules": [
+        "github.com/alecthomas/chroma/v2"
+      ],
+      "files": [
+        {
+          "path": "LICENSES/data/Liberation-Mono-OFL-1.1",
+          "sha256": "3cca0e176bf83076bb6c26a74d25ce2439eb980fe976d59a2481bbeeb0538dfd"
+        }
+      ]
+    },
+    {
+      "name": "Unicode data tables",
+      "source": "https://www.unicode.org/license.txt",
+      "applies_to_modules": [
+        "github.com/clipperhouse/displaywidth",
+        "github.com/clipperhouse/uax29/v2",
+        "github.com/mattn/go-runewidth",
+        "github.com/rivo/uniseg",
+        "golang.org/x/text"
+      ],
+      "files": [
+        {
+          "path": "LICENSES/data/Unicode-LICENSE-v3",
+          "sha256": "e7a93b009565cfce55919a381437ac4db883e9da2126fa28b91d12732bc53d96"
+        }
+      ]
+    },
+    {
+      "name": "GitHub gemoji data",
+      "source": "https://github.com/github/gemoji/blob/0eca75db9301421efc8710baf7a7576793ae452a/LICENSE",
+      "applies_to_modules": [
+        "github.com/yuin/goldmark-emoji"
+      ],
+      "files": [
+        {
+          "path": "LICENSES/data/github-gemoji-LICENSE",
+          "sha256": "7ea1d1fd0602e6623b9a65e791499a0ea5a2f5f60f91bfad78cbaeee19da26e6"
+        }
+      ]
+    },
+    {
+      "name": "models.dev fallback catalog data",
+      "source": "https://github.com/anomalyco/models.dev/blob/cb66b68fd29b0505b0ce45ba4f60a76b978d3fe9/LICENSE",
+      "current_files": [
+        "internal/agentcore/catalog.go"
+      ],
+      "files": [
+        {
+          "path": "LICENSES/data/models.dev-LICENSE",
+          "sha256": "dc2dc41c9fea2fd3c41c21c6f484844cab367800b88ff24781f980ad3a9d160a"
+        }
+      ]
+    },
+    {
+      "name": "Historical Crush-derived code (deleted and not shipped)",
+      "source": "https://github.com/charmbracelet/crush/blob/v0.86.0/LICENSE.md (SHA-256 identical to git:backup/pre-v1-cleanup-20260809:Archive/LICENSE.crush, blob 950d0d85cee17e533b53572b19ba34d689d42680)",
+      "archived_ports": [
+        "Archive/internal/tui/glamour.go",
+        "Archive/internal/tui/diff.go",
+        "Archive/internal/tui/list.go",
+        "Archive/internal/tui/pills.go"
+      ],
+      "files": [
+        {
+          "path": "LICENSES/provenance/Crush-FSL-1.1-MIT",
+          "sha256": "3faa5d4f3a51f07e4963b993f27af4b9344d7c509fa20aa856dd878788ba5f18"
+        }
+      ]
+    }
+  ]
+}

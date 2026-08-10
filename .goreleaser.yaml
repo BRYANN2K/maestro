@@ -1,0 +1,64 @@
+version: 2
+
+project_name: maestro
+
+builds:
+  - id: maestro
+    main: ./cmd/maestro
+    binary: maestro
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X main.version={{ .Version }}
+      - -X github.com/bryann2k/maestro/internal/agentcore.Version={{ .Version }}
+
+archives:
+  - id: maestro
+    ids:
+      - maestro
+    formats:
+      - tar.gz
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE
+      - THIRD_PARTY_NOTICES.md
+      - LICENSES/**
+      - README.md
+      - CHANGELOG.md
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+changelog:
+  use: git
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - "^ci:"
+
+release:
+  github:
+    owner: BRYANN2K
+    name: maestro
+  prerelease: auto
+
+metadata:
+  mod_timestamp: "{{ .CommitTimestamp }}"
