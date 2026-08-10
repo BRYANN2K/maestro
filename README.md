@@ -4,6 +4,10 @@
 
 <p align="center">Turn an idea into a reviewed change—without losing control of the code.</p>
 
+<p align="center">
+  <img src="docs/assets/maestro-hero.png" alt="Maestro's terminal interface, ready to turn an idea into a reviewed change" width="100%">
+</p>
+
 Maestro is an open-source, spec-driven AI development environment for the
 terminal. Its orchestrator turns a conversation into a reviewable spec,
 delegates implementation to focused agents, checks the result, drafts the
@@ -17,6 +21,19 @@ The default interface is a responsive TUI with streaming tool cards, explicit
 approval prompts, project-aware sessions, task-specific model routes, and an
 integrated code workspace. The same lifecycle is available through headless
 commands for scripts and CI.
+
+## Inside Maestro
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/assets/model-routing.png" alt="Independent model and reasoning settings for Chat, Build, Review, and Docs"></td>
+    <td width="50%"><img src="docs/assets/maestro-ide.png" alt="Maestro's integrated code workspace with project context and lifecycle status"></td>
+  </tr>
+  <tr>
+    <td align="center"><strong>Independent model routing</strong><br>Choose the model and reasoning effort for each task.</td>
+    <td align="center"><strong>One integrated workspace</strong><br>Keep the project, spec, lifecycle, and implementation together.</td>
+  </tr>
+</table>
 
 ## Install
 
