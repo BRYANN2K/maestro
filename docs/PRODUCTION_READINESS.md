@@ -74,7 +74,7 @@ Configure the npm package's trusted publisher once with these exact values:
 | Organization or user | `BRYANN2K` |
 | Repository | `maestro` |
 | Workflow filename | `release.yml` |
-| Environment | `release` |
+| Environment | Leave empty |
 | Allowed action | `npm publish` |
 
 The workflow is idempotent. A rerun verifies the seven expected GitHub assets

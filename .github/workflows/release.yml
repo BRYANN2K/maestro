@@ -16,14 +16,13 @@ permissions:
   id-token: write
 
 concurrency:
-  group: release-${{ inputs.tag || github.ref_name }}
+  group: publication-${{ inputs.tag || github.ref_name }}
   cancel-in-progress: false
 
 jobs:
   release:
     name: GitHub and npm release
     runs-on: ubuntu-latest
-    environment: release
     env:
       RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
     steps:
