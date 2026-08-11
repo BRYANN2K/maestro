@@ -60,6 +60,32 @@ pseudo-terminal and exercise startup, Settings, model selection, one project
 flow, one session restore, Skills, MCP status, Learn, IDE, compact rendering,
 and clean exit.
 
+## Release automation
+
+The `Release` GitHub Actions workflow publishes tagged commits to GitHub
+Releases and npm. npm authentication uses trusted publishing with short-lived
+OIDC credentials; no long-lived `NPM_TOKEN` is passed to `npm publish`.
+
+Configure the npm package's trusted publisher once with these exact values:
+
+| Setting | Value |
+| --- | --- |
+| Provider | GitHub Actions |
+| Organization or user | `BRYANN2K` |
+| Repository | `maestro` |
+| Workflow filename | `release.yml` |
+| Environment | `release` |
+| Allowed action | `npm publish` |
+
+The workflow is idempotent. A rerun verifies the seven expected GitHub assets
+and compares the published npm tarball's SHA-1 with a package rebuilt from the
+tag before it skips either publication. Reconcile an existing tag from the
+default branch with:
+
+```sh
+gh workflow run Release --ref main -f tag=v1.0.0
+```
+
 ## Hardened boundaries
 
 ### Credentials and configuration
