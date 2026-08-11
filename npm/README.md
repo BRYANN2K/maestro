@@ -50,3 +50,7 @@ go install github.com/bryann2k/maestro/cmd/maestro@v1.0.0
 
 [MIT](./LICENSE). Third-party notices and license texts are included in the npm
 package.
+
+Maestro is free and open source. If it helps you,
+[follow **@bryann2k_dev** on X](https://x.com/bryann2k_dev). That's all I ask in
+return.

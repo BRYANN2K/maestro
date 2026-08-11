@@ -2,25 +2,39 @@
 
 <p align="center"><strong>Code in Concert.</strong></p>
 
-<p align="center">Turn an idea into a reviewed change—without losing control of the code.</p>
+<p align="center">Turn an idea into a reviewed, documented change—without giving up control of your code.</p>
+
+<p align="center">
+  <a href="https://x.com/bryann2k_dev"><img src="https://img.shields.io/badge/Follow-%40bryann2k__dev-000000?logo=x&amp;logoColor=white" alt="Follow @bryann2k_dev on X"></a>
+</p>
 
 <p align="center">
   <img src="docs/assets/maestro-hero.png" alt="Maestro's terminal interface, ready to turn an idea into a reviewed change" width="100%">
 </p>
 
-Maestro is an open-source, spec-driven AI development environment for the
-terminal. Its orchestrator turns a conversation into a reviewable spec,
-delegates implementation to focused agents, checks the result, drafts the
-documentation, and archives the completed work.
+Maestro is an open-source, terminal-native AI development environment built
+around reviewable specs and explicit user control. It turns a conversation
+into a structured plan, coordinates focused agents to implement it, checks the
+result, drafts the documentation, and archives the finished work. You decide
+when each phase begins.
 
 ```text
 idea → spec → build → review → docs → archive
 ```
 
-The default interface is a responsive TUI with streaming tool cards, explicit
-approval prompts, project-aware sessions, task-specific model routes, and an
-integrated code workspace. The same lifecycle is available through headless
-commands for scripts and CI.
+## Why Maestro
+
+- **Review the plan before the code.** Maestro turns your intent into a
+  structured spec that you can inspect and accept before implementation starts.
+- **Stay in control at every boundary.** Proposing, accepting, building,
+  reviewing, documenting, and archiving are separate, explicit actions.
+- **Use the right model for each job.** Route Chat, Build, Review, and Docs to
+  different models and reasoning levels.
+- **Keep changes isolated and reviewable.** Builds run in managed Git worktrees,
+  with deterministic checks and read-only review built into the lifecycle.
+- **Work interactively or automate the flow.** Use the responsive TUI for daily
+  development or the same lifecycle through headless commands in scripts and
+  CI.
 
 ## Inside Maestro
 
@@ -340,4 +354,12 @@ make release-check  # complete local release gate
 make build          # bin/maestro
 ```
 
-Maestro is released under the [MIT License](LICENSE).
+## Support the project
+
+Maestro is free, open source, and released under the [MIT License](LICENSE). If
+it earns a place in your workflow,
+[follow **@bryann2k_dev** on X](https://x.com/bryann2k_dev). That's all I ask in
+return.
+
+Found a bug or have an idea?
+[Open an issue](https://github.com/BRYANN2K/maestro/issues).
