@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg
+  xmlns="http://www.w3.org/2000/svg"
+  width="1536"
+  height="1024"
+  viewBox="0 0 1536 1024"
+  role="img"
+  aria-labelledby="maestro-logo-title maestro-logo-description"
+>
+  <title id="maestro-logo-title">Maestro</title>
+  <desc id="maestro-logo-description">
+    Maestro's geometric conductor mark above its uppercase wordmark.
+  </desc>
+
+  <defs>
+    <radialGradient id="background" cx="50%" cy="47%" r="72%">
+      <stop offset="0" stop-color="#12171b" />
+      <stop offset="0.68" stop-color="#0f1418" />
+      <stop offset="1" stop-color="#0b0e11" />
+    </radialGradient>
+    <linearGradient id="ivory" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#faf6ed" />
+      <stop offset="0.55" stop-color="#f7f2e9" />
+      <stop offset="1" stop-color="#f3eee5" />
+    </linearGradient>
+    <linearGradient id="coral" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ff6548" />
+      <stop offset="1" stop-color="#f04432" />
+    </linearGradient>
+  </defs>
+
+  <rect width="1536" height="1024" fill="url(#background)" />
+
+  <g
+    fill="none"
+    stroke="url(#ivory)"
+    stroke-width="25"
+    stroke-linecap="butt"
+    stroke-linejoin="miter"
+    stroke-miterlimit="4"
+  >
+    <path d="M351 239.5H596L764 383L932 239.5H1175" />
+    <path d="M351 303.5H590L708 406" />
+    <path d="M828 406L946 303.5H1175" />
+    <path d="M351 367.5H582L687 457" />
+    <path d="M849 457L954 367.5H1175" />
+    <path d="M351 431.5H568L764 596L968 431.5H1175" />
+    <path d="M351 495.5H571V559.5H351" />
+    <path d="M1175 495.5H957V559.5H1175" />
+  </g>
+
+  <path
+    d="M745 429L804 479L745 530L733 508L769 479L733 450Z"
+    fill="url(#coral)"
+  />
+
+  <g fill="url(#ivory)">
+    <path d="M351 659H375L402 712L430 659H455V759H434L433 697L410 743H395L372 697L371 759H351Z" />
+
+    <path
+      fill-rule="evenodd"
+      d="M526 659H554L594 759H570L562 737H518L510 759H487ZM540 681L528 716H552Z"
+    />
+
+    <path d="M627 659H702V679H649V699H694V718H650V739H702V759H627Z" />
+
+    <path d="M806.313 666C809.066 668.165 811.621 670.422 814.001 673C812.414 676.903 809.867 679.335 806.875 682.25L802 687C798.99 685.214 796.042 683.369 793.125 681.438C786.096 677.091 779.141 676.222 771 677C767.445 677.882 764.778 679.318 762 681.75C760.482 685.163 761.033 687.455 762 691C768.2 696.938 779.144 697.868 787.25 699.5C798.095 701.781 806.108 705.043 813.383 713.633C816.363 718.279 816.374 723.203 816.438 728.562C816.473 736.104 813.861 742.317 809 748C798.771 755.818 789.566 758.577 776.812 758.5C760.869 758.408 748.918 752.642 738 741C739.61 736.926 742.538 734.235 745.624 731.25L748 729C754.923 734.494 761.964 739.526 771 740C778.327 740.473 785.653 739.658 791.125 735.312C792.523 731.615 792.465 728.675 791 725C783.566 720.373 775.151 718.792 766.73 716.732C756.541 714.135 746.392 710.772 739.812 702.125C735.661 694.968 735.194 688.124 736 680C736.908 676.969 738.197 674.588 740 672C755.149 652.029 789.091 653.394 806.313 666Z" />
+
+    <path d="M844 659H926V679H895V759H873V679H844Z" />
+
+    <path
+      fill-rule="evenodd"
+      d="M959 659H997C1025 659 1041 671 1041 692C1041 705 1034 715 1021 721L1044 759H1019L998 725H981V759H959ZM981 679V706H999C1012 706 1019 701 1019 692C1019 683 1012 679 999 679Z"
+    />
+
+    <path
+      fill-rule="evenodd"
+      d="M1124 657C1155 657 1176 678 1176 708.5C1176 739 1155 760 1124 760C1094 760 1073 739 1073 708.5C1073 678 1094 657 1124 657ZM1124 678C1106 678 1094 690 1094 708.5C1094 727 1106 739 1124 739C1143 739 1155 727 1155 708.5C1155 690 1143 678 1124 678Z"
+    />
+  </g>
+</svg>

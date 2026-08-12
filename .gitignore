@@ -14,6 +14,9 @@ coverage.*
 /npm/*.tgz
 /artifacts/
 
+# Local brand exports
+/docs/brand/maestro-brand-kit.png
+
 # Maestro runtime state
 /.maestro/
 /maestro/learn/

@@ -1,4 +1,6 @@
-<h1 align="center">Maestro</h1>
+<h1 align="center">
+  <img src="docs/brand/exports/maestro-logo-horizontal.svg" alt="Maestro" width="720">
+</h1>
 
 <p align="center"><strong>Code in Concert.</strong></p>
 
