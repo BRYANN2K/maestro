@@ -5,8 +5,8 @@ import React, {
   useRef,
   useState,
 } from "react";
-import { useKeyboard, usePaste } from "@opentui/react";
-import type { ScrollBoxRenderable, TextareaRenderable } from "@opentui/core";
+import { useKeyboard, usePaste, useRenderer } from "@opentui/react";
+import { CliRenderEvents, type ScrollBoxRenderable, type TextareaRenderable } from "@opentui/core";
 import { T, clean } from "./theme";
 
 type Entry = {
@@ -28,18 +28,33 @@ export function FocusRoot({
   modal?: string | null;
 }) {
   const [id, set] = useState("composer");
+  const renderer = useRenderer();
   const entries = useRef(new Map<string, Entry>()).current;
   useEffect(() => {
     set(modal ? (entries.has("modal-search") ? "modal-search" : "modal-close") : "composer");
   }, [modal]);
   useEffect(() => {
-    // Dialogs can overflow even on large terminals. Reveal the focused
-    // control in its containing viewport after the layout has settled.
-    const timer = setTimeout(() => {
-      for (const entry of entries.values()) entry.scroll?.()?.scrollChildIntoView(id);
-    }, 0);
-    return () => clearTimeout(timer);
-  }, [id, modal]);
+    // Wait for actual layout, including asynchronously loaded dialog content.
+    // Relative geometry ignores manual scrolling, so focus does not fight it.
+    const positions = new WeakMap<ScrollBoxRenderable, string>();
+    const reveal = () => {
+      for (const entry of entries.values()) {
+        const scroll = entry.scroll?.();
+        const child = scroll?.content.findDescendantById(id);
+        if (!scroll || !child || !child.height || !scroll.viewport.height) continue;
+        const position = [
+          child.x - scroll.content.x, child.y - scroll.content.y,
+          child.width, child.height, scroll.viewport.width, scroll.viewport.height,
+        ].join(":");
+        if (positions.get(scroll) === position) continue;
+        positions.set(scroll, position);
+        scroll.scrollChildIntoView(id);
+      }
+    };
+    renderer.on(CliRenderEvents.FRAME, reveal);
+    renderer.requestRender();
+    return () => { renderer.off(CliRenderEvents.FRAME, reveal); };
+  }, [id, modal, renderer]);
   useKeyboard((key) => {
     const available = [...entries.keys()].filter((k) =>
       modal ? k.startsWith("modal-") : !k.startsWith("modal-"),

@@ -97,7 +97,7 @@ You can also download an archive from the
 [1.1.0 release](https://github.com/BRYANN2K/maestro/releases/tag/v1.1.0)
 or build from source:
 
-**Build requirements:** Go 1.26.5+, Bun 1.3.14 and Python 3.11+ (`python3` on PATH).
+**Build requirements:** Go 1.26.6+, Bun 1.3.14 and Python 3.11+ (`python3` on PATH).
 
 ```sh
 git clone https://github.com/BRYANN2K/maestro.git

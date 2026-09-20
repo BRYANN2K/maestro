@@ -12,7 +12,7 @@ workspace identity; approvals and review evidence never transfer to the new bran
 
 ## Build and start
 
-Prerequisites: Go 1.26.5+, Bun 1.3.14, Python 3.11+ available as `python3`.
+Prerequisites: Go 1.26.6+, Bun 1.3.14, Python 3.11+ available as `python3`.
 
 ```sh
 make build

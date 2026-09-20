@@ -43,7 +43,7 @@ telemetry. Updating the npm package selects a separate versioned cache entry.
 
 Prebuilt archives and `checksums.txt` are available from the
 [Maestro 1.1.0 release](https://github.com/BRYANN2K/maestro/releases/tag/v1.1.0).
-Developers need Go 1.26.5+, Bun 1.3.14 and Python 3.11+. From the source checkout:
+Developers need Go 1.26.6+, Bun 1.3.14 and Python 3.11+. From the source checkout:
 
 ```sh
 make build

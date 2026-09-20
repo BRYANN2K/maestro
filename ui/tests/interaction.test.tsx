@@ -19,6 +19,8 @@ async function mount(client = new FakeClient(), width = 160, height = 48) {
       await Bun.sleep(20);
     });
     await setup.renderOnce();
+    // Focus reveal runs after layout; render the resulting scroll position.
+    await setup.renderOnce();
   };
   const frame = () => setup.captureCharFrame();
   const click = async (text: string, last = false) => {
@@ -233,16 +235,25 @@ test("opening a new dialog restores text focus after a command click", async () 
 });
 
 test("compact connection form scrolls keyboard focus into view", async () => {
+  let deliverAccounts!: () => void;
+  const accountsReady = new Promise<void>(resolve => { deliverAccounts = resolve; });
   class AccountsClient extends FakeClient {
     override async request<T = any>(op: string, args: Record<string, unknown> = {}): Promise<T> {
       const result = await super.request<any>(op, args);
-      if (op === "providers") result.accounts = ["OpenAI", "Anthropic", "Google", "GitHub"].map(id => ({id, label: id, authenticated: false}));
+      if (op === "providers") {
+        await accountsReady;
+        result.accounts = ["OpenAI", "Anthropic", "Google", "GitHub"].map(id => ({id, label: id, authenticated: false}));
+      }
       return result;
     }
   }
   const ui = await mount(new AccountsClient(), 80, 24);
   try {
     await ui.key("p", { ctrl: true });
+    expect(ui.frame()).toContain("openai");
+    // Late account discovery changes layout while the same input stays focused.
+    await act(async () => { deliverAccounts(); });
+    await ui.settle();
     expect(ui.frame()).toContain("openai");
     await ui.key("TAB");
     expect(ui.frame()).toContain("Base URL");
