@@ -1,12 +1,14 @@
 package editor
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"unicode/utf8"
 )
 
@@ -142,17 +144,31 @@ func (s *SessionStore) Clear() {
 // CrashStore persists dirty buffers at exit for atomic crash recovery
 // (§5.2.3): restored on the next launch.
 type CrashStore struct {
-	dir string
+	mu sync.Mutex
+
+	dir           string
+	previewDigest [sha256.Size]byte
+	previewValid  bool
 }
 
 // NewCrashStore builds a crash store at dir.
 func NewCrashStore(dir string) *CrashStore { return &CrashStore{dir: dir} }
 
 // SetDir switches the store root.
-func (c *CrashStore) SetDir(dir string) { c.dir = dir }
+func (c *CrashStore) SetDir(dir string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.dir = dir
+	c.previewValid = false
+}
 
 // Save records the dirty buffers.
 func (c *CrashStore) Save(e *Editor) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	// A later save supersedes any recovery snapshot that was previewed. A
+	// delayed acknowledgement must never remove this newer crash state.
+	c.previewValid = false
 	if c.dir == "" {
 		return nil
 	}
@@ -190,28 +206,69 @@ func crashJSON(e *Editor) string {
 
 // Restore recovers dirty buffers; returns them for the user to re-open.
 func (c *CrashStore) Restore() ([]BufferState, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.previewValid = false
+	states, _, _, err := c.restoreLocked(true)
+	return states, err
+}
+
+// PreviewRestore reads and validates crash state without consuming it. Async
+// UI hydration uses this two-phase form so a stale result cannot destroy the
+// only recovery copy before the event loop accepts it.
+func (c *CrashStore) PreviewRestore() ([]BufferState, bool, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	states, present, digest, err := c.restoreLocked(false)
+	c.previewValid = present && err == nil
+	if c.previewValid {
+		c.previewDigest = digest
+	}
+	return states, present, err
+}
+
+// AcknowledgeRestore consumes the exact snapshot returned by PreviewRestore.
+// If Save replaced it before this worker runs, the newer state is preserved.
+func (c *CrashStore) AcknowledgeRestore() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.dir == "" || !c.previewValid {
+		return
+	}
+	c.previewValid = false
+	path := filepath.Join(c.dir, "crash.json")
+	data, err := readEditorState(path)
+	if err != nil || sha256.Sum256(data) != c.previewDigest {
+		return
+	}
+	_ = os.Remove(path)
+}
+
+func (c *CrashStore) restoreLocked(consume bool) ([]BufferState, bool, [sha256.Size]byte, error) {
 	if c.dir == "" {
-		return nil, nil
+		return nil, false, [sha256.Size]byte{}, nil
 	}
 	data, err := readEditorState(filepath.Join(c.dir, "crash.json"))
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, nil
+			return nil, false, [sha256.Size]byte{}, nil
 		}
-		return nil, err
+		return nil, true, [sha256.Size]byte{}, err
 	}
 	var state SessionState
 	if err := json.Unmarshal(data, &state); err != nil {
-		return nil, err
+		return nil, true, [sha256.Size]byte{}, err
 	}
-	_ = os.Remove(filepath.Join(c.dir, "crash.json"))
+	if consume {
+		_ = os.Remove(filepath.Join(c.dir, "crash.json"))
+	}
 	safe := make([]BufferState, 0, len(state.Buffers))
 	for _, bs := range state.Buffers {
 		if _, ok := restoreBufferState(state.Project, bs); ok {
 			safe = append(safe, bs)
 		}
 	}
-	return safe, nil
+	return safe, true, sha256.Sum256(data), nil
 }
 
 // RestoreBuffers loads the recovered states into the editor.

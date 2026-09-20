@@ -49,22 +49,29 @@ func GreenfieldDefaults(ctx context.Context, start string) (ProjectProfile, Answ
 	if err != nil {
 		return ProjectProfile{}, Answers{}, err
 	}
-	fingerprint, err := workspaceFingerprint(ctx, root)
+	key := profileCacheKey(ModeGreenfield, root)
+	profile, err := cachedProfile(ctx, key, func(ctx context.Context) (ProjectProfile, string, bool, error) {
+		state, stateErr := inspectWorkspace(ctx, root, true)
+		if stateErr != nil {
+			return ProjectProfile{}, "", false, stateErr
+		}
+		profile := ProjectProfile{
+			SchemaVersion:        SchemaVersion,
+			Mode:                 ModeGreenfield,
+			Root:                 root,
+			Name:                 safeFact(filepath.Base(root)),
+			Units:                []Unit{{Path: "."}},
+			DiscoveryFingerprint: state.discoveryFingerprint,
+			Unknowns: []string{
+				"Project purpose has not been confirmed.",
+				"Project stack has not been selected.",
+				"Project commands have not been confirmed.",
+			},
+		}
+		return profile, state.validationFingerprint, state.cacheable, nil
+	})
 	if err != nil {
 		return ProjectProfile{}, Answers{}, err
-	}
-	profile := ProjectProfile{
-		SchemaVersion:        SchemaVersion,
-		Mode:                 ModeGreenfield,
-		Root:                 root,
-		Name:                 safeFact(filepath.Base(root)),
-		Units:                []Unit{{Path: "."}},
-		DiscoveryFingerprint: fingerprint,
-		Unknowns: []string{
-			"Project purpose has not been confirmed.",
-			"Project stack has not been selected.",
-			"Project commands have not been confirmed.",
-		},
 	}
 	return profile, AnswersFromProfile(profile), nil
 }
@@ -88,30 +95,37 @@ func Discover(ctx context.Context, start string, mode Mode) (ProjectProfile, err
 	if err != nil {
 		return ProjectProfile{}, err
 	}
+	key := profileCacheKey(mode, root)
+	return cachedProfile(ctx, key, func(ctx context.Context) (ProjectProfile, string, bool, error) {
+		return discoverBrownfieldUncached(ctx, root)
+	})
+}
+
+func discoverBrownfieldUncached(ctx context.Context, root string) (ProjectProfile, string, bool, error) {
 
 	profile := ProjectProfile{
 		SchemaVersion: SchemaVersion,
-		Mode:          mode,
+		Mode:          ModeBrownfield,
 		Root:          root,
 		Name:          safeFact(filepath.Base(root)),
 	}
 	gitRoot, gitErr := repositoryRoot(ctx, root)
 	if ctxErr := ctx.Err(); ctxErr != nil {
-		return ProjectProfile{}, ctxErr
+		return ProjectProfile{}, "", false, ctxErr
 	}
 	if gitErr == nil {
 		profile.Root = gitRoot
 		profile.Name = safeFact(filepath.Base(gitRoot))
 		root = gitRoot
 	}
-	beforeFingerprint, err := workspaceFingerprint(ctx, root)
+	beforeState, err := inspectWorkspace(ctx, root, true)
 	if err != nil {
-		return ProjectProfile{}, err
+		return ProjectProfile{}, "", false, err
 	}
 
 	view, usedGitInventory, inventoryErr := inventory(ctx, root, gitErr == nil)
 	if inventoryErr != nil {
-		return ProjectProfile{}, inventoryErr
+		return ProjectProfile{}, "", false, inventoryErr
 	}
 	if !usedGitInventory {
 		profile.addUnknown("Git inventory was unavailable; used a bounded filesystem inventory.")
@@ -141,19 +155,44 @@ func Discover(ctx context.Context, start string, mode Mode) (ProjectProfile, err
 	}
 	d.scan(ctx, view.Candidates)
 	if err := ctx.Err(); err != nil {
-		return ProjectProfile{}, err
+		return ProjectProfile{}, "", false, err
 	}
 	d.finish()
 	profile.addUnknown("Project purpose requires human confirmation.")
 	profile.normalize()
-	profile.DiscoveryFingerprint, err = workspaceFingerprint(ctx, root)
+	afterState, err := inspectWorkspace(ctx, root, true)
 	if err != nil {
-		return ProjectProfile{}, err
+		return ProjectProfile{}, "", false, err
 	}
-	if profile.DiscoveryFingerprint != beforeFingerprint {
-		return ProjectProfile{}, &RepositoryChangedError{Mode: mode}
+	profile.DiscoveryFingerprint = afterState.discoveryFingerprint
+	if profile.DiscoveryFingerprint != beforeState.discoveryFingerprint {
+		return ProjectProfile{}, "", false, &RepositoryChangedError{Mode: ModeBrownfield}
 	}
-	return profile, nil
+	return profile, afterState.validationFingerprint, afterState.cacheable, nil
+}
+
+func profileCacheKey(mode Mode, root string) string {
+	return string(mode) + "\x00" + root
+}
+
+func cachedProfile(
+	ctx context.Context,
+	key string,
+	discover func(context.Context) (ProjectProfile, string, bool, error),
+) (ProjectProfile, error) {
+	return sharedProfileCache.resolve(ctx, key, func(ctx context.Context, cached *profileCacheEntry) (ProjectProfile, string, bool, error) {
+		if cached != nil {
+			current, cacheable, validationErr := workspaceValidationFingerprint(ctx, cached.profile.Root)
+			if validationErr == nil && cacheable && current == cached.validationFingerprint {
+				return cached.profile, current, true, nil
+			}
+			sharedProfileCache.invalidate(key, cached.validationFingerprint)
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return ProjectProfile{}, "", false, ctxErr
+			}
+		}
+		return discover(ctx)
+	})
 }
 
 // AnswersFromProfile creates the common review schema for either mode.

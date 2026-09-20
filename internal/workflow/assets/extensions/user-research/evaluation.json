@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "extension": "user-research",
+  "purpose": "Editorial cases for human or agent evaluation; structural tests do not establish these decisions.",
+  "cases": [
+    {
+      "id": "relevant",
+      "prompt": "understand why users abandon a journey before changing it.",
+      "expected": "select",
+      "reason": "Reduce uncertainty about people, their tasks, and their context through proportionate observation."
+    },
+    {
+      "id": "irrelevant",
+      "prompt": "apply an already reproduced deterministic fix with no unknown user need.",
+      "expected": "do-not-select",
+      "reason": "No responsibility of this domain is affected."
+    },
+    {
+      "id": "existing",
+      "prompt": "understand why users abandon a journey before changing it. The project already has an implementation and evidence of this capability, but no dedicated document.",
+      "expected": "inspect-and-reuse",
+      "reason": "Inspect evidence, classify coverage, and address only gaps; missing documentation does not mean the domain practice is absent."
+    },
+    {
+      "id": "insufficient",
+      "prompt": "An interview guide is ready, but no session has occurred; understanding of users remains unverified.",
+      "expected": "failed-or-unverified",
+      "reason": "Compare against the approved criterion outcome; producing a file does not establish that the outcome was achieved."
+    }
+  ]
+}

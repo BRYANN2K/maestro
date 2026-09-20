@@ -65,6 +65,18 @@ func SupportsReadOnly(agent Agent) bool {
 	return ok && capable.SupportsReadOnly()
 }
 
+func sendAgentEvent(ctx context.Context, ch chan<- agentcore.StreamEvent, ev agentcore.StreamEvent) bool {
+	if ctx.Err() != nil {
+		return false
+	}
+	select {
+	case ch <- ev:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
 // lineStreamer runs a subprocess and translates each stdout line into
 // events. One EvDone is emitted after a clean exit; a non-zero exit emits
 // EvError first.
@@ -94,7 +106,8 @@ func lineStreamerWithInput(ctx context.Context, binary string, timeout time.Dura
 	// and retry logs there, which otherwise corrupt the alternate screen.
 	stderr := newTailBuffer(legacyStderrCaptureLimit)
 	cmd.Stderr = stderr
-	if err := cmd.Start(); err != nil {
+	process, err := startProcessTree(cmd)
+	if err != nil {
 		cancel()
 		return nil, fmt.Errorf("%s: %w", binary, err)
 	}
@@ -142,11 +155,11 @@ func lineStreamerWithInput(ctx context.Context, binary string, timeout time.Dura
 			}
 		}
 		scanErr := sc.Err()
-		err := cmd.Wait()
+		err := process.Wait()
 		if outputExceeded {
-			ch <- agentcore.NewEvent(&seq, agentcore.RoleDev, agentcore.EvError, agentcore.StreamError{
+			sendAgentEvent(parentCtx, ch, agentcore.NewEvent(&seq, agentcore.RoleDev, agentcore.EvError, agentcore.StreamError{
 				Message: fmt.Sprintf("%s output exceeded %d bytes", binary, legacyStreamOutputLimit),
-			})
+			}))
 			return
 		}
 		// The orchestrator turns context cancellation into one lifecycle
@@ -154,28 +167,28 @@ func lineStreamerWithInput(ctx context.Context, binary string, timeout time.Dura
 		// which used to render two errors after Escape-Escape.
 		if ctx.Err() != nil {
 			if parentCtx.Err() == nil {
-				ch <- agentcore.NewEvent(&seq, agentcore.RoleDev, agentcore.EvError, agentcore.StreamError{
+				sendAgentEvent(parentCtx, ch, agentcore.NewEvent(&seq, agentcore.RoleDev, agentcore.EvError, agentcore.StreamError{
 					Message: fmt.Sprintf("%s timed out after %s", binary, timeout),
-				})
+				}))
 			}
 			return
 		}
 		if scanErr != nil {
-			ch <- agentcore.NewEvent(&seq, agentcore.RoleDev, agentcore.EvError, agentcore.StreamError{
+			sendAgentEvent(ctx, ch, agentcore.NewEvent(&seq, agentcore.RoleDev, agentcore.EvError, agentcore.StreamError{
 				Message: processFailureMessage(binary, fmt.Errorf("read stdout: %w", scanErr), stderr.String()),
-			})
+			}))
 			return
 		}
 		if err != nil {
-			ch <- agentcore.NewEvent(&seq, agentcore.RoleDev, agentcore.EvError, agentcore.StreamError{
+			sendAgentEvent(ctx, ch, agentcore.NewEvent(&seq, agentcore.RoleDev, agentcore.EvError, agentcore.StreamError{
 				Message: processFailureMessage(binary, err, stderr.String()),
-			})
+			}))
 			return
 		}
 		if !hasTranslatedDone {
 			translatedDone = agentcore.Done{}
 		}
-		ch <- agentcore.NewEvent(&seq, agentcore.RoleDev, agentcore.EvDone, translatedDone)
+		sendAgentEvent(ctx, ch, agentcore.NewEvent(&seq, agentcore.RoleDev, agentcore.EvDone, translatedDone))
 	}()
 	return ch, nil
 }
@@ -194,7 +207,7 @@ func blobParser(ctx context.Context, binary string, timeout time.Duration, workD
 	stderr := newTailBuffer(legacyStderrCaptureLimit)
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
-	err = cmd.Run()
+	err = runProcessTree(cmd)
 	commandCtxErr := ctx.Err()
 	parentCtxErr := parentCtx.Err()
 	cancel()
@@ -206,28 +219,30 @@ func blobParser(ctx context.Context, binary string, timeout time.Duration, workD
 			// Cancellation is represented by the caller's context, not by a
 			// translated partial blob or an additional provider error event.
 			if parentCtxErr == nil {
-				ch <- agentcore.NewEvent(&seq, agentcore.RoleDev, agentcore.EvError, agentcore.StreamError{
+				sendAgentEvent(parentCtx, ch, agentcore.NewEvent(&seq, agentcore.RoleDev, agentcore.EvError, agentcore.StreamError{
 					Message: fmt.Sprintf("%s timed out after %s", binary, timeout),
-				})
+				}))
 			}
 			return
 		}
 		if stdout.Truncated() {
-			ch <- agentcore.NewEvent(&seq, agentcore.RoleDev, agentcore.EvError, agentcore.StreamError{
+			sendAgentEvent(parentCtx, ch, agentcore.NewEvent(&seq, agentcore.RoleDev, agentcore.EvError, agentcore.StreamError{
 				Message: fmt.Sprintf("%s output exceeded %d bytes", binary, legacyBlobOutputLimit),
-			})
+			}))
 			return
 		}
 		for _, ev := range translate(stdout.String()) {
-			ch <- agentcore.NewEvent(&seq, agentcore.RoleDev, ev.Type, ev.Content)
+			if !sendAgentEvent(parentCtx, ch, agentcore.NewEvent(&seq, agentcore.RoleDev, ev.Type, ev.Content)) {
+				return
+			}
 		}
 		if err != nil {
-			ch <- agentcore.NewEvent(&seq, agentcore.RoleDev, agentcore.EvError, agentcore.StreamError{
+			sendAgentEvent(parentCtx, ch, agentcore.NewEvent(&seq, agentcore.RoleDev, agentcore.EvError, agentcore.StreamError{
 				Message: processFailureMessage(binary, err, stderr.String()),
-			})
+			}))
 			return
 		}
-		ch <- agentcore.NewEvent(&seq, agentcore.RoleDev, agentcore.EvDone, agentcore.Done{})
+		sendAgentEvent(parentCtx, ch, agentcore.NewEvent(&seq, agentcore.RoleDev, agentcore.EvDone, agentcore.Done{}))
 	}()
 	return ch, nil
 }
@@ -328,7 +343,6 @@ func sanitizeDiagnostic(s string) string {
 // errors fail before a vendor CLI can start in Maestro's own process cwd.
 func commandInDir(ctx context.Context, binary, workDir string, args ...string) (*exec.Cmd, error) {
 	cmd := exec.CommandContext(ctx, binary, args...)
-	configureProcessTree(cmd)
 	if workDir == "" {
 		return cmd, nil
 	}

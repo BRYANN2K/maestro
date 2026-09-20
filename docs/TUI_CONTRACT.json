@@ -1,0 +1,75 @@
+{
+  "schema_version": "2.0",
+  "kind": "terminal-ui",
+  "application": {
+    "name": "maestro",
+    "language": "en",
+    "stack": [
+      "OpenTUI 0.5.11",
+      "React 19.2.4",
+      "TypeScript 5.9.3",
+      "Bun 1.3.14"
+    ],
+    "launch": "maestro"
+  },
+  "minimum_size": {
+    "columns": 80,
+    "rows": 24
+  },
+  "layout": {
+    "three_panes_at_columns": 136,
+    "changes_rail_at_columns": 108,
+    "small_terminal_conversation_toggle": "ctrl+g"
+  },
+  "phases": [
+    "Explore",
+    "Specify",
+    "Build",
+    "Verify",
+    "Deliver"
+  ],
+  "screens": [
+    "contract",
+    "execution-plan",
+    "verification-evidence",
+    "conversation",
+    "connections",
+    "model-selector",
+    "permission",
+    "approval",
+    "history",
+    "files",
+    "commands"
+  ],
+  "keybindings": {
+    "ctrl+k": "commands",
+    "ctrl+p": "connections",
+    "ctrl+l": "models",
+    "ctrl+g": "conversation",
+    "ctrl+c": "cancel",
+    "ctrl+q": "quit",
+    "tab": "focus next",
+    "shift+tab": "focus previous",
+    "enter": "activate or send",
+    "shift+enter": "composer newline",
+    "ctrl+j": "composer newline",
+    "escape": "close or cancel prompt"
+  },
+  "approval": {
+    "confirmation": true,
+    "digest_bound": true,
+    "stale_contract": "reject"
+  },
+  "data": {
+    "source": "Go orchestrator and Stipulate artifacts",
+    "production_demo_records": false,
+    "secrets": "masked input; Go-owned vault"
+  },
+  "classic_contract": "TUI_CLASSIC_CONTRACT.json",
+  "verification": [
+    "ui/tests/interaction.test.tsx",
+    "internal/cockpit/host_test.go",
+    "internal/workflow/approval_revision_test.go",
+    "cmd/maestro/opentui_pty_unix_test.go"
+  ]
+}

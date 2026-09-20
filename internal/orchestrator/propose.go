@@ -52,6 +52,9 @@ func (o *Orchestrator) ProposeWithRecipe(ctx context.Context, prompt string, req
 }
 
 func (o *Orchestrator) proposeWithContext(ctx context.Context, prompt, discussion string, requestedRecipe spec.Recipe) (string, error) {
+	if err := o.requireLegacyWorkflow(); err != nil {
+		return "", err
+	}
 	if strings.TrimSpace(prompt) == "" {
 		return "", errors.New("propose: describe your idea with /propose <request>, or discuss it with Maestro before running /propose")
 	}
@@ -241,6 +244,7 @@ func silentStructuredRunner(runner Runner) Runner {
 	case *nativeRunner:
 		clone := *typed
 		clone.silent = true
+		clone.noTools = true
 		return &clone
 	case *legacyRunner:
 		clone := *typed

@@ -3,10 +3,12 @@
 package tools
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -21,15 +23,35 @@ import (
 var defaultGuard = newFileGuard()
 
 const maxReadBytes int64 = 2 << 20
+const maxFileGuardEntries = 4 << 10
+
+const (
+	maxGrepFileBytes   int64 = 1 << 20
+	maxGrepScanBytes         = 64 << 20
+	maxGrepFiles             = 4 << 10
+	maxGrepLineBytes         = 4 << 10
+	maxGrepOutputBytes       = 64 << 10
+	maxBashOutputBytes       = 64 << 10
+)
+
+const (
+	grepLineTruncated = "… [line truncated]"
+	grepOutputLimit   = "… grep output truncated"
+	grepScanLimit     = "… grep scan truncated"
+	bashOutputLimit   = "\n… output truncated"
+)
 
 // fileGuard enforces the read-before-edit contract: a write to an existing
 // file requires a prior read, and the file must not have changed on disk
 // since that read (staleness guard, borrowed from opencode). New files are
-// exempt. The guard is process-wide so every tool shares one source of
-// truth, and reads/writes outside the tools never interfere with it.
+// exempt. Each default tool registry owns a guard, so authorization cannot
+// leak between runs or workspaces; standalone constructors share the bounded
+// fallback guard for backwards compatibility.
 type fileGuard struct {
 	mu     sync.Mutex
 	stamps map[string]time.Time
+	order  []string
+	next   int
 }
 
 func newFileGuard() *fileGuard {
@@ -40,14 +62,22 @@ func newFileGuard() *fileGuard {
 func (g *fileGuard) recordRead(path string, mod time.Time) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	path = canonicalGuardPath(path)
+	if _, exists := g.stamps[path]; !exists {
+		if len(g.order) < maxFileGuardEntries {
+			g.order = append(g.order, path)
+		} else {
+			delete(g.stamps, g.order[g.next])
+			g.order[g.next] = path
+			g.next = (g.next + 1) % len(g.order)
+		}
+	}
 	g.stamps[path] = mod
 }
 
 // recordWrite refreshes the stamp after a successful write.
 func (g *fileGuard) recordWrite(path string, mod time.Time) {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	g.stamps[path] = mod
+	g.recordRead(path, mod)
 }
 
 // checkWrite returns an error when writing to an existing file that was
@@ -61,7 +91,7 @@ func (g *fileGuard) checkWrite(path string) error {
 		return fmt.Errorf("write %s: %w", path, err)
 	}
 	g.mu.Lock()
-	stamp, read := g.stamps[path]
+	stamp, read := g.stamps[canonicalGuardPath(path)]
 	g.mu.Unlock()
 	if !read {
 		return fmt.Errorf("write %s: file exists but was never read — read it before editing", path)
@@ -70,6 +100,14 @@ func (g *fileGuard) checkWrite(path string) error {
 		return fmt.Errorf("write %s: file modified since it was read — re-read it before editing", path)
 	}
 	return nil
+}
+
+func canonicalGuardPath(path string) string {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return filepath.Clean(path)
+	}
+	return filepath.Clean(abs)
 }
 
 // Permission levels attached to ToolSpec.
@@ -93,9 +131,10 @@ func New() *Registry {
 // Default returns the registry with the standard tools.
 func Default() *Registry {
 	r := New()
-	r.Add(NewRead())
+	guard := newFileGuard()
+	r.Add(newRead(guard))
 	r.Add(NewGrep())
-	r.Add(NewWrite())
+	r.Add(newWrite(guard))
 	r.Add(NewBash())
 	r.Add(NewAsk(nil))
 	return r
@@ -152,6 +191,10 @@ func obj(props map[string]any) map[string]any {
 
 // NewRead returns the read tool: read a file from disk.
 func NewRead() agentcore.Tool {
+	return newRead(defaultGuard)
+}
+
+func newRead(guard *fileGuard) agentcore.Tool {
 	return agentcore.NewToolFunc(agentcore.ToolSpec{
 		Name: "read", Description: "Read a file and return its contents.",
 		InputSchema: obj(map[string]any{
@@ -165,7 +208,12 @@ func NewRead() agentcore.Tool {
 		if path == "" {
 			return "", fmt.Errorf("read: path is required")
 		}
-		fi, err := os.Stat(path)
+		file, err := openReadOnly(path)
+		if err != nil {
+			return "", fmt.Errorf("read %s: %w", path, err)
+		}
+		defer file.Close()
+		fi, err := file.Stat()
 		if err != nil {
 			return "", fmt.Errorf("read %s: %w", path, err)
 		}
@@ -175,11 +223,17 @@ func NewRead() agentcore.Tool {
 		if fi.Size() > maxReadBytes {
 			return "", fmt.Errorf("read %s: file is %d bytes; limit is %d", path, fi.Size(), maxReadBytes)
 		}
-		data, err := os.ReadFile(path)
+		data, err := io.ReadAll(io.LimitReader(file, maxReadBytes+1))
 		if err != nil {
 			return "", fmt.Errorf("read %s: %w", path, err)
 		}
-		defaultGuard.recordRead(path, fi.ModTime())
+		if int64(len(data)) > maxReadBytes {
+			return "", fmt.Errorf("read %s: file exceeded %d bytes while reading", path, maxReadBytes)
+		}
+		if current, statErr := file.Stat(); statErr == nil {
+			fi = current
+		}
+		guard.recordRead(path, fi.ModTime())
 		return string(data), nil
 	})
 }
@@ -217,7 +271,31 @@ func NewGrep() agentcore.Tool {
 }
 
 func grepDir(ctx context.Context, root string, pattern *regexp.Regexp, limit int) ([]string, error) {
+	return grepDirLimited(ctx, root, pattern, grepLimits{
+		matches: limit,
+		files:   maxGrepFiles,
+		bytes:   maxGrepScanBytes,
+		output:  maxGrepOutputBytes,
+	})
+}
+
+type grepLimits struct {
+	matches int
+	files   int
+	bytes   int64
+	output  int
+}
+
+func grepDirLimited(ctx context.Context, root string, pattern *regexp.Regexp, limits grepLimits) ([]string, error) {
 	var out []string
+	var scannedBytes int64
+	outputBytes, scannedFiles, matchesFound := 0, 0, 0
+	appendScanLimit := func() {
+		if outputBytes+len(grepScanLimit)+1 <= limits.output {
+			out = append(out, grepScanLimit)
+			outputBytes += len(grepScanLimit) + 1
+		}
+	}
 	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -226,36 +304,137 @@ func grepDir(ctx context.Context, root string, pattern *regexp.Regexp, limit int
 			return nil
 		}
 		if d.IsDir() {
-			if strings.HasPrefix(d.Name(), ".") || d.Name() == "vendor" || d.Name() == "node_modules" {
+			// An explicitly selected root remains searchable even when its name
+			// is "." or starts with a dot. Only hidden descendants are skipped.
+			if path != root && (strings.HasPrefix(d.Name(), ".") || d.Name() == "vendor" || d.Name() == "node_modules") {
 				return filepath.SkipDir
 			}
 			return nil
 		}
-		if len(out) >= limit {
+		if matchesFound >= limits.matches {
 			return filepath.SkipAll
 		}
-		data, err := os.ReadFile(path)
-		if err != nil || len(data) > 1<<20 {
+		info, err := d.Info()
+		if err != nil || !info.Mode().IsRegular() || info.Size() > maxGrepFileBytes {
 			return nil
 		}
-		for i, line := range strings.Split(string(data), "\n") {
-			if len(out) >= limit {
+		if scannedFiles >= limits.files || info.Size() > limits.bytes-scannedBytes {
+			appendScanLimit()
+			return filepath.SkipAll
+		}
+		file, err := openReadOnly(path)
+		if err != nil {
+			return nil
+		}
+		openedInfo, statErr := file.Stat()
+		if statErr != nil || !openedInfo.Mode().IsRegular() || openedInfo.Size() > maxGrepFileBytes {
+			_ = file.Close()
+			return nil
+		}
+		remaining := limits.bytes - scannedBytes
+		if remaining <= 0 {
+			_ = file.Close()
+			appendScanLimit()
+			return filepath.SkipAll
+		}
+		readLimit := min(maxGrepFileBytes, remaining)
+		limited := &io.LimitedReader{R: file, N: readLimit + 1}
+		scanner := bufio.NewScanner(limited)
+		scanner.Buffer(make([]byte, 0, 64*1024), int(maxGrepFileBytes)+1)
+		scannedFiles++
+		lineNumber := 0
+		for scanner.Scan() {
+			lineNumber++
+			if err := ctx.Err(); err != nil {
+				_ = file.Close()
+				return err
+			}
+			if matchesFound >= limits.matches {
 				break
 			}
+			line := scanner.Text()
 			if pattern.MatchString(line) {
-				out = append(out, fmt.Sprintf("%s:%d: %s", path, i+1, strings.TrimSpace(line)))
+				line = boundedToolLine(strings.TrimSpace(line), maxGrepLineBytes)
+				match := fmt.Sprintf("%s:%d: %s", path, lineNumber, line)
+				// Reserve room for an explicit truncation marker so the final
+				// joined result never crosses the advertised byte budget.
+				if outputBytes+len(match)+1+len(grepOutputLimit)+1 > limits.output {
+					if outputBytes+len(grepOutputLimit)+1 <= limits.output {
+						out = append(out, grepOutputLimit)
+					}
+					_ = file.Close()
+					return filepath.SkipAll
+				}
+				out = append(out, match)
+				outputBytes += len(match) + 1
+				matchesFound++
 			}
+		}
+		consumed := readLimit + 1 - limited.N
+		scannedBytes += min(consumed, readLimit)
+		_ = file.Close()
+		if consumed > readLimit {
+			appendScanLimit()
+			return filepath.SkipAll
 		}
 		return nil
 	})
-	if len(out) >= limit {
-		out = append(out, fmt.Sprintf("… %d+ matches, truncated", limit))
+	if matchesFound >= limits.matches && (len(out) == 0 || out[len(out)-1] != grepOutputLimit) {
+		marker := fmt.Sprintf("… %d+ matches, truncated", limits.matches)
+		if outputBytes+len(marker)+1 <= limits.output {
+			out = append(out, marker)
+		}
 	}
 	return out, err
 }
 
+func boundedToolLine(value string, limit int) string {
+	if limit <= 0 || len(value) <= limit {
+		return value
+	}
+	end := max(limit-len(grepLineTruncated), 0)
+	// Avoid cutting through a UTF-8 continuation byte. Invalid source bytes
+	// are left for the provider/terminal projection boundary to sanitize.
+	for end > 0 && end < len(value) && value[end]&0xc0 == 0x80 {
+		end--
+	}
+	return value[:end] + grepLineTruncated
+}
+
+// cappedOutput is an always-draining writer that retains only the first
+// limit bytes. Using it as both stdout and stderr preserves CombinedOutput's
+// useful ordering without allowing a noisy child process to grow memory
+// without bound.
+type cappedOutput struct {
+	buf       bytes.Buffer
+	limit     int
+	truncated bool
+}
+
+func (w *cappedOutput) Write(p []byte) (int, error) {
+	n := len(p)
+	remaining := max(w.limit-w.buf.Len(), 0)
+	if len(p) > remaining {
+		p = p[:remaining]
+		w.truncated = true
+	}
+	_, _ = w.buf.Write(p)
+	return n, nil
+}
+
+func (w *cappedOutput) String() string {
+	if !w.truncated {
+		return w.buf.String()
+	}
+	return w.buf.String() + bashOutputLimit
+}
+
 // NewWrite returns the write tool: write a file. Requires approval.
 func NewWrite() agentcore.Tool {
+	return newWrite(defaultGuard)
+}
+
+func newWrite(guard *fileGuard) agentcore.Tool {
 	return agentcore.NewToolFunc(agentcore.ToolSpec{
 		Name: "write", Description: "Write content to a file, creating parent directories.",
 		InputSchema: obj(map[string]any{
@@ -272,14 +451,14 @@ func NewWrite() agentcore.Tool {
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			return "", fmt.Errorf("write %s: %w", path, err)
 		}
-		if err := defaultGuard.checkWrite(path); err != nil {
+		if err := guard.checkWrite(path); err != nil {
 			return "", err
 		}
 		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 			return "", fmt.Errorf("write %s: %w", path, err)
 		}
 		if fi, err := os.Stat(path); err == nil {
-			defaultGuard.recordWrite(path, fi.ModTime())
+			guard.recordWrite(path, fi.ModTime())
 		}
 		return fmt.Sprintf("wrote %s (%d bytes)", path, len(content)), nil
 	})
@@ -302,18 +481,20 @@ func NewBash() agentcore.Tool {
 		workdir, _ := args["workdir"].(string)
 		ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 		defer cancel()
-		cmd := exec.CommandContext(ctx, "bash", "-c", command)
+		cmd, err := newShellCommand(ctx, command)
+		if err != nil {
+			return "", fmt.Errorf("bash: %w", err)
+		}
 		if workdir != "" {
 			cmd.Dir = workdir
 		}
-		out, err := cmd.CombinedOutput()
-		if len(out) > 64*1024 {
-			out = append(out[:64*1024], []byte("\n… output truncated")...)
-		}
+		out := cappedOutput{limit: maxBashOutputBytes}
+		cmd.Stdout, cmd.Stderr = &out, &out
+		err = runProcessTreeCommand(cmd)
 		if err != nil {
-			return string(out), fmt.Errorf("bash: %w", err)
+			return out.String(), fmt.Errorf("bash: %w", err)
 		}
-		return string(out), nil
+		return out.String(), nil
 	})
 }
 

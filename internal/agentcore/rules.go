@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 )
 
 // Rule is one dormant stream rule compiled from the spec (F1, §11.1):
@@ -21,8 +22,9 @@ type Rule struct {
 
 // RuleSet holds the compiled rules for one spec revision.
 type RuleSet struct {
-	mu    sync.Mutex
-	rules []*Rule
+	mu     sync.Mutex
+	rules  []*Rule
+	active atomic.Int32
 }
 
 // CompileRules parses the spec's "Stream Rules" block (F1):
@@ -86,6 +88,7 @@ func CompileRules(specText string) (*RuleSet, error) {
 	if err := flush(); err != nil {
 		return nil, err
 	}
+	rs.active.Store(int32(len(rs.rules)))
 	return rs, nil
 }
 
@@ -114,10 +117,18 @@ func (rs *RuleSet) Check(text string) (string, bool) {
 		}
 		if r.Re.MatchString(text) {
 			r.Fired = true
+			rs.active.Add(-1)
 			return r.Reminder, true
 		}
 	}
 	return "", false
+}
+
+// HasActive reports whether Check can still fire. It is intentionally
+// lock-free: almost every provider delta passes this gate, while most specs
+// define no stream rules (or have already fired all of them).
+func (rs *RuleSet) HasActive() bool {
+	return rs != nil && rs.active.Load() > 0
 }
 
 // Fired reports whether any rule has fired (for tests and diagnostics).

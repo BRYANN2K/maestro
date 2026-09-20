@@ -224,47 +224,24 @@ func TestSlashHelpIsDerivedFromCanonicalCatalog(t *testing.T) {
 	}
 }
 
-func TestBuildOpensEnginePicker(t *testing.T) {
+func TestBuildUsesMaestroWithoutHarnessPicker(t *testing.T) {
 	m, _ := newTestModel(t)
 	feed(m, tea.WindowSizeMsg{Width: 100, Height: 30})
 	m.input.Set("/build")
 	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	m2 := updated.(*Model)
-	if cmd != nil {
-		t.Fatal("engine picker should return no cmd")
-	}
-	if m2.overlay != overlayEngine {
-		t.Fatalf("overlay = %v, want engine picker", m2.overlay)
-	}
-	eng, ok := m2.overlayM.(*engineOverlay)
-	if !ok {
-		t.Fatalf("overlayM = %T", m2.overlayM)
-	}
-	if len(eng.choices) < 2 || eng.choices[0].Engine != "native" {
-		t.Errorf("choices = %+v", eng.choices)
+	if updated.(*Model).overlay == overlayEngine || cmd == nil {
+		t.Fatal("build still asks for a harness")
 	}
 }
 
-func TestEnginePickerSelectionDispatches(t *testing.T) {
+func TestBuildDispatchesDirectlyToMaestro(t *testing.T) {
 	m, _ := newTestModel(t)
 	feed(m, tea.WindowSizeMsg{Width: 100, Height: 30})
 	m.input.Set("/build")
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	m2 := updated.(*Model)
-	if m2.overlay != overlayEngine {
-		t.Fatalf("overlay = %v", m2.overlay)
-	}
-	// Select the first choice (native) and confirm.
-	updated, cmd := m2.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	m3 := updated.(*Model)
-	if cmd == nil {
-		t.Fatal("dispatch should return a cmd")
-	}
-	if m3.overlay != overlayNone {
-		t.Fatalf("overlay = %v after selection", m3.overlay)
-	}
-	if !m3.busy {
-		t.Error("dispatch should mark the model busy")
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	current := updated.(*Model)
+	if cmd == nil || current.overlay != overlayNone || !current.busy {
+		t.Fatalf("direct build dispatch: command=%v overlay=%v busy=%v", cmd != nil, current.overlay, current.busy)
 	}
 }
 
@@ -288,10 +265,14 @@ func TestSlashUIAliases(t *testing.T) {
 
 	m.input.Set("/models")
 	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	if cmd != nil || updated.(*Model).overlay != overlayModelPicker {
+	if cmd == nil || updated.(*Model).overlay != overlayModelPicker {
 		t.Fatalf("/models = overlay %v, cmd=%v", updated.(*Model).overlay, cmd)
 	}
+	if workspace, ok := updated.(*Model).overlayM.(*taskModelOverlay); !ok || !workspace.loading {
+		t.Fatalf("/models did not open a loading model workspace: %T", updated.(*Model).overlayM)
+	}
 
+	m.invalidateModelPickerRequest()
 	m.overlay = overlayNone
 	m.input.Set("/settings")
 	feed(m, tea.KeyMsg{Type: tea.KeyEnter})
@@ -314,7 +295,7 @@ func TestUsageAliasHasOneCanonicalOutput(t *testing.T) {
 	for _, command := range []string{"/usage", "/usages"} {
 		t.Run(command, func(t *testing.T) {
 			m, _ := newTestModel(t)
-			if err := m.orch.SetTaskModel(m.ctx(), settings.RoleOrchestrator, "legacy", "codex", "gpt-5.6-luna"); err != nil {
+			if err := m.orch.SetTaskModel(m.ctx(), settings.RoleOrchestrator, "native", "", "gpt-5.6-luna"); err != nil {
 				t.Fatalf("SetTaskModel: %v", err)
 			}
 			m.orch.EmitCost(0.125, 2)
@@ -375,7 +356,7 @@ func TestEngineOverlayView(t *testing.T) {
 	m, _ := newTestModel(t)
 	eng := newEngineOverlay(m.orch, "dev")
 	view := eng.View(NewStyles(Charmtone()), 40)
-	if !containsAll(view, "native · Maestro agent", "subscription · codex", "↑/↓") || strings.Contains(view, "legacy:") {
+	if !containsAll(view, "Maestro · built-in harness", "↑/↓") || strings.Contains(view, "legacy:") {
 		t.Errorf("view = %q", view)
 	}
 }
@@ -442,19 +423,14 @@ func TestSettingsOverlayCyclesPermission(t *testing.T) {
 	}
 }
 
-func TestSettingsOverlayUsesSubscriptionProductName(t *testing.T) {
+func TestSettingsHasOnlyMaestroHarness(t *testing.T) {
 	m, _ := newTestModel(t)
-	state := m.orch.SettingsSnapshot()
-	route := state.RoleDefaults[settings.RoleDev]
-	route.Engine = "legacy"
-	route.Agent = "codex"
-	state.RoleDefaults[settings.RoleDev] = route
-	if err := m.orch.UpdateSettings(t.Context(), state); err != nil {
-		t.Fatal(err)
-	}
-	view := newSettingsOverlay(m).View(NewStyles(Charmtone()), 72)
-	if !strings.Contains(view, "subscription") || strings.Contains(view, "legacy") {
-		t.Fatalf("settings leaked compatibility engine name: %q", view)
+	o := newSettingsOverlay(m)
+	o.section = settingsAgents
+	for _, row := range o.rows() {
+		if row.Kind == settingEngine || row.Kind == settingAgent {
+			t.Fatal("external harness picker remains")
+		}
 	}
 }
 

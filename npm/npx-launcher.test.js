@@ -104,13 +104,20 @@ function makeZip(entries) {
 }
 
 function fixtureArchive(platform, binary = Buffer.from("fixture maestro binary")) {
+  const companions = [
+    {name: platform === "win32" ? "maestro-ui.exe" : "maestro-ui", data: "ui", mode: 0o100755},
+    {name: platform === "win32" ? "maestro-runtime.exe" : "maestro-runtime", data: "runtime", mode: 0o100755},
+    ...["x64", "arm64"].map(arch => ({name: `pi_natives.${platform}-${arch}${arch === "x64" ? "-baseline" : ""}.node`, data: "native addon", mode: 0o100755})),
+  ];
   if (platform === "win32") {
     return makeZip([
+      ...companions,
       { name: "LICENSE", data: "MIT", mode: 0o100644 },
       { name: "maestro.exe", data: binary, mode: 0o100755 },
     ]);
   }
   return makeTarGz([
+    ...companions,
     { name: "LICENSE", data: "MIT" },
     { name: "maestro", data: binary, mode: 0o755 },
   ]);
@@ -157,14 +164,13 @@ function fakeHTTPS(routes) {
   };
 }
 
-test("maps all six supported Node targets to GoReleaser v1 assets", () => {
+test("maps all supported Node targets to GoReleaser v1 assets", () => {
   const cases = [
     ["darwin", "x64", "maestro_1.0.0_darwin_amd64.tar.gz"],
     ["darwin", "arm64", "maestro_1.0.0_darwin_arm64.tar.gz"],
     ["linux", "x64", "maestro_1.0.0_linux_amd64.tar.gz"],
     ["linux", "arm64", "maestro_1.0.0_linux_arm64.tar.gz"],
     ["win32", "x64", "maestro_1.0.0_windows_amd64.zip"],
-    ["win32", "arm64", "maestro_1.0.0_windows_arm64.zip"],
   ];
   for (const [platform, arch, expected] of cases) {
     assert.equal(launcher.assetName(platform, arch), expected);
@@ -343,17 +349,17 @@ test("installs a verified tar binary with private integrity metadata", async (t)
 
 test("installs maestro.exe from the Windows zip", async (t) => {
   const home = tempHome(t);
-  const fixture = fixtureDownload("win32", "arm64");
+  const fixture = fixtureDownload("win32", "x64");
   const bin = await launcher.install({
     home,
     platform: "win32",
-    arch: "arm64",
+    arch: "x64",
     download: fixture.download,
     log() {},
   });
   assert.match(bin, /maestro\.exe$/);
   assert.equal(fs.readFileSync(bin, "utf8"), "fixture maestro binary");
-  assert.equal(launcher.cacheReady(home, "win32", "arm64"), true);
+  assert.equal(launcher.cacheReady(home, "win32", "x64"), true);
 });
 
 test("uses host filesystem rules independently from the release target", async (t) => {

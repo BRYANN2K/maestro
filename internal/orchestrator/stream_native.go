@@ -4,15 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
+	"sort"
 	"sync"
 
 	"github.com/bryann2k/maestro/internal/agent"
 	"github.com/bryann2k/maestro/internal/agentcore"
+	"github.com/bryann2k/maestro/internal/rlm"
+	"github.com/bryann2k/maestro/internal/runtimebridge"
 	"github.com/bryann2k/maestro/internal/settings"
 )
-
-const legacyRunOutputLimit = 8 << 20
 
 // EngineChoice is one option of the engine picker (§5.2).
 type EngineChoice struct {
@@ -24,7 +24,7 @@ type EngineChoice struct {
 // Label renders the picker row.
 func (e EngineChoice) Label() string {
 	if e.Engine == "native" {
-		return "native · Maestro agent (API or local model)"
+		return "Maestro · built-in harness"
 	}
 	return fmt.Sprintf("subscription · %s", e.Agent)
 }
@@ -32,11 +32,7 @@ func (e EngineChoice) Label() string {
 // EngineChoices returns the picker options for a role: native plus every
 // registered legacy agent.
 func (o *Orchestrator) EngineChoices(role string) []EngineChoice {
-	choices := []EngineChoice{{Engine: "native"}}
-	for _, name := range agent.Names() {
-		choices = append(choices, EngineChoice{Engine: "legacy", Agent: name})
-	}
-	return choices
+	return []EngineChoice{{Engine: "native"}}
 }
 
 // rememberEngine persists the engine+agent choice per role (§5.2).
@@ -91,6 +87,7 @@ func (o *Orchestrator) CancelRun() {
 
 // nativeRunner runs the built-in agentcore loop via Spawn (§4).
 type nativeRunner struct {
+	toolOverride    map[string]agentcore.Tool
 	o               *Orchestrator
 	model           string
 	reasoningEffort string
@@ -128,6 +125,8 @@ func (r *nativeRunner) Run(ctx context.Context, role agentcore.Role, taskPrompt 
 		}
 		return agentcore.AgentResult{}, errors.New(msg)
 	}
+	modelMetadata, _ := r.o.registry.Model(model)
+	selectedModel := model
 	providerName, _ := r.o.registry.ProviderOf(model)
 	if !containsReasoningEffort(r.o.ReasoningEfforts("native", "", model), sampling.ReasoningEffort) {
 		return agentcore.AgentResult{}, fmt.Errorf(
@@ -143,7 +142,12 @@ func (r *nativeRunner) Run(ctx context.Context, role agentcore.Role, taskPrompt 
 	model = r.o.canonicalModel(model)
 
 	var specFiles []string
-	if r.o.spec != nil && role != agentcore.RoleOrchestrator {
+	// Build and Docs prompts already embed the accepted trio because the same
+	// prompt must work for subscription runners. Seeding those files again as
+	// native system messages doubled their largest stable context. Review is
+	// the only native route whose task prompt intentionally relies on Spawn to
+	// supply the spec files (and diff) out of band.
+	if r.o.spec != nil && role == agentcore.RoleReviewer {
 		specFiles = []string{
 			r.o.store.PathFor(r.o.spec.ID, "spec.md"),
 			r.o.store.PathFor(r.o.spec.ID, "design.md"),
@@ -158,70 +162,127 @@ func (r *nativeRunner) Run(ctx context.Context, role agentcore.Role, taskPrompt 
 		}
 		diff = d
 	}
-	if !r.readOnly && !r.noTools && (role == agentcore.RoleOrchestrator || role == agentcore.RoleDev || role == agentcore.RoleDocs) {
+	exposeTools := !r.noTools && role != agentcore.RoleDocs
+	if !r.readOnly && exposeTools && (role == agentcore.RoleOrchestrator || role == agentcore.RoleDev) {
 		// MCP is a native-loop capability only. Discovery is best effort: an
 		// unavailable external server must not prevent the provider turn.
 		_ = r.o.connectMCP(ctx)
 	}
 	var tools map[string]agentcore.Tool
-	if !r.noTools {
+	if exposeTools {
 		tools = r.o.scopedTools(role)
 		if r.readOnly {
 			tools = readOnlyNativeTools(tools)
 		}
 	}
-	loop, err := agentcore.Spawn(ctx, agentcore.SpawnOptions{
-		Role:      role,
-		Provider:  provider,
-		Model:     model,
-		Sampling:  sampling,
-		Tools:     tools,
-		Gate:      r.o.gate,
-		SpecFiles: specFiles,
-		Diff:      diff,
-		Stopper:   agentcore.NewStopper(),
-		Rules:     r.o.guardrails.Rules,
-		Budget:    r.o.guardrails.Budget,
-		AntiLoop:  r.o.guardrails.AntiLoop,
-		OnEvent: func(ev agentcore.StreamEvent) {
-			if !r.silent {
-				ev.Role = role
-				r.o.emit(ev)
+	if !r.readOnly && !r.noTools && r.toolOverride == nil && (role == agentcore.RoleDev || role == agentcore.RoleOrchestrator) {
+		if role == agentcore.RoleOrchestrator {
+			tools["stipulate"] = r.o.workflowTool()
+		}
+		kernel := rlm.New(r.o.workDir(), func(ctx context.Context, req map[string]any) (any, error) {
+			if role != agentcore.RoleOrchestrator {
+				return nil, errors.New("only the coordinator may delegate")
 			}
+			if req["type"] != "stip.delegate" {
+				return nil, errors.New("use await rlm.host_request('stip.delegate', {'change_id': '...', 'task_id': '...'}) for approved tasks")
+			}
+			result, err := r.o.workflowRuntime(ctx, map[string]any{"action": "delegate", "task": map[string]any{"change_id": req["change_id"], "task_id": req["task_id"]}})
+			if err != nil {
+				return nil, err
+			}
+			return result, nil
+		})
+		defer kernel.Close()
+		tools["rlm"] = agentcore.NewToolFunc(agentcore.ToolSpec{Name: "rlm", Description: "Execute a Python cell in Prime's persistent RLM kernel. Globals persist for this run; top-level await is supported. Requires approval: Python has shell-level access. Slice large context and return source paths and hashes. Coordinator delegation uses rlm.host_request('stip.delegate', {change_id, task_id}); only approved Stipulate tasks are admitted. 60s and 1MiB output per cell.", NeedsApproval: true, InputSchema: map[string]any{"type": "object", "properties": map[string]any{"code": map[string]any{"type": "string"}}, "required": []string{"code"}}}, func(ctx context.Context, args map[string]any) (string, error) {
+			code, _ := args["code"].(string)
+			return kernel.Execute(ctx, code)
+		})
+	}
+	if r.toolOverride != nil {
+		tools = r.toolOverride
+	}
+	guardrails := r.o.guardrailSnapshot()
+	loop, err := agentcore.Spawn(ctx, agentcore.SpawnOptions{
+		Role:             role,
+		Provider:         provider,
+		Model:            model,
+		ContextWindow:    modelMetadata.ContextWindow,
+		DefaultMaxTokens: modelMetadata.DefaultMaxTokens,
+		Sampling:         sampling,
+		Tools:            tools,
+		Gate:             r.o.gate,
+		SpecFiles:        specFiles,
+		Diff:             diff,
+		Stopper:          agentcore.NewStopper(),
+		Rules:            guardrails.Rules,
+		Budget:           guardrails.Budget,
+		AntiLoop:         guardrails.AntiLoop,
+		OnEvent: func(ev agentcore.StreamEvent) {
+			r.o.forwardRunnerEvent(ev, role, r.silent)
 		},
 	})
 	if err != nil {
 		return agentcore.AgentResult{}, err
 	}
 	// F2 pre-run estimate: worst-case cost before execution.
-	if est := r.o.estimateRunCost(provider, model, loop); est > 0 && !r.silent {
-		r.o.emit(agentcore.NewEvent(nil, role, agentcore.EvHITL, agentcore.HITLItem{
-			ID: "budget-estimate", Item: fmt.Sprintf("estimated cost $%.4f", est), Status: "done",
-		}))
+	if loop.Budget != nil {
+		est := r.o.estimateRunCost(provider, selectedModel, loop, taskPrompt)
+		if err := loop.Budget.CheckEstimate(est); err != nil {
+			msg := "budget preflight: " + err.Error()
+			if !r.silent {
+				r.o.emit(agentcore.NewEvent(nil, role, agentcore.EvError, agentcore.StreamError{Message: msg}))
+			}
+			return agentcore.AgentResult{Role: string(role), OK: false}, errors.New(msg)
+		}
+		if est > 0 && !r.silent {
+			r.o.emit(agentcore.NewEvent(nil, role, agentcore.EvHITL, agentcore.HITLItem{
+				ID: "budget-estimate", Item: fmt.Sprintf("estimated cost $%.4f", est), Status: "done",
+			}))
+		}
+	}
+	loop.Harness = r.o.requireHarness || runtimebridge.Available()
+	if role == agentcore.RoleOrchestrator && !r.noTools && !r.readOnly {
+		loop.System = append(loop.System, agentcore.Message{Role: "system", Content: "Maestro owns the only agent harness. Use the built-in stipulate tool for spec-driven development: bootstrap, explore, contract and plan, validate, explicit user approval, start, delegate, check fresh evidence, docs, archive. Never fabricate approval or acceptance. Only the human can issue /workflow approve CHANGE --by NAME --ack-user-approval and archive. Worker completion is a contribution, not acceptance. Use RLM for bounded programmatic context work; Python requires approval. Preserve older specs and sessions; never silently translate an old approval to a new contract."})
 	}
 	return agentcore.RunResult(ctx, loop, taskPrompt)
 }
 
-// estimateRunCost computes a rough worst-case cost from the history size
-// and the model's output cap.
-func (o *Orchestrator) estimateRunCost(p agentcore.Provider, modelID string, loop *agentcore.Loop) float64 {
-	if o.guardrails.Budget == nil {
+func (o *Orchestrator) forwardRunnerEvent(ev agentcore.StreamEvent, role agentcore.Role, silent bool) {
+	ev.Role = role
+	if silent {
+		o.accountSession(ev)
+		return
+	}
+	o.emit(ev)
+}
+
+// estimateRunCost computes a conservative worst-case cost from the complete
+// normalized request and the model's output cap.
+func (o *Orchestrator) estimateRunCost(p agentcore.Provider, modelID string, loop *agentcore.Loop, taskPrompt string) float64 {
+	if loop == nil || loop.Budget == nil {
 		return 0
 	}
 	m, ok := o.registry.Model(modelID)
 	if !ok || m.PriceInput <= 0 && m.PriceOutput <= 0 {
 		return 0
 	}
-	var chars int
-	for _, msg := range append(loop.System, loop.History...) {
-		chars += len(msg.Content)
+	specs := make([]agentcore.ToolSpec, 0, len(loop.Tools))
+	for _, tool := range loop.Tools {
+		specs = append(specs, tool.Spec())
 	}
-	output := m.DefaultMaxTokens
-	if output <= 0 {
-		output = 2048
+	sort.Slice(specs, func(i, j int) bool { return specs[i].Name < specs[j].Name })
+	messages := append([]agentcore.Message(nil), loop.History...)
+	messages = append(messages, agentcore.Message{Role: "user", Content: taskPrompt})
+	req := agentcore.Request{
+		Model: loop.Model, System: loop.System, Messages: messages,
+		Sampling: loop.Sampling, Tools: specs,
 	}
-	usage := agentcore.Usage{InputTokens: chars / 4, OutputTokens: output}
-	cost, err := p.Cost(agentcore.Request{Model: modelID}, usage)
+	plan, err := agentcore.PlanContext(req, loop.ContextWindow, m.DefaultMaxTokens)
+	if err != nil {
+		return 0
+	}
+	usage := agentcore.Usage{InputTokens: plan.EstimatedInputTokens, OutputTokens: plan.ReservedOutputTokens}
+	cost, err := p.Cost(req, usage)
 	if err != nil {
 		return 0
 	}
@@ -287,78 +348,7 @@ type legacyRunner struct {
 
 // Run streams the external agent's events and yields a summary result.
 func (r *legacyRunner) Run(ctx context.Context, role agentcore.Role, taskPrompt string) (agentcore.AgentResult, error) {
-	if r.readOnly && !agent.SupportsReadOnly(r.agent) {
-		return agentcore.AgentResult{}, fmt.Errorf("subscription agent %q cannot enforce read-only execution", r.agent.Name())
-	}
-	if role == agentcore.RoleReviewer {
-		evidence, err := r.o.legacyReviewEvidence(ctx)
-		if err != nil {
-			return agentcore.AgentResult{}, err
-		}
-		taskPrompt += evidence
-	}
-	runCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	ch, err := r.agent.Execute(runCtx, taskPrompt, agent.Options{
-		Model: r.model, ReasoningEffort: r.reasoningEffort,
-		WorkDir: r.o.workDir(), ReadOnly: r.readOnly,
-	})
-	if err != nil {
-		return agentcore.AgentResult{}, err
-	}
-	var summary strings.Builder
-	var streamErr error
-	outputExceeded := false
-	sawDone := false
-	for ev := range ch {
-		ev.Role = role
-		if !r.silent {
-			r.o.emit(ev)
-		}
-		if ev.Type == agentcore.EvTextDelta {
-			if td, ok := ev.Content.(agentcore.TextDelta); ok {
-				if summary.Len()+len(td.Text) > legacyRunOutputLimit {
-					outputExceeded = true
-					cancel()
-				} else if !outputExceeded {
-					summary.WriteString(td.Text)
-				}
-			}
-		}
-		if ev.Type == agentcore.EvError && streamErr == nil {
-			streamErr = legacyStreamError(ev.Content)
-		}
-		if ev.Type == agentcore.EvDone {
-			if _, ok := ev.Content.(agentcore.Done); ok {
-				sawDone = true
-			} else if streamErr == nil {
-				streamErr = agentcore.StreamError{Message: fmt.Sprintf("legacy agent returned malformed completion payload %T", ev.Content)}
-			}
-		}
-	}
-	if outputExceeded {
-		return agentcore.AgentResult{Role: string(role), OK: false}, fmt.Errorf("legacy agent output exceeded %d bytes", legacyRunOutputLimit)
-	}
-	if ctxErr := ctx.Err(); ctxErr != nil {
-		// A caller cancellation is a lifecycle outcome, not a vendor failure.
-		// Drop the partial summary so Chat cannot persist an interrupted answer
-		// into the next turn's conversation context.
-		return agentcore.AgentResult{Role: string(role), OK: false}, ctxErr
-	}
-	if streamErr == nil && !sawDone {
-		streamErr = agentcore.StreamError{Message: "legacy agent stream closed without a completion event"}
-	}
-	result := agentcore.AgentResult{Role: string(role), OK: streamErr == nil, Summary: summary.String()}
-	if streamErr != nil {
-		if strings.TrimSpace(result.Summary) == "" {
-			result.Summary = streamErr.Error()
-		}
-		// The same typed error was already streamed to the UI. Returning it
-		// unchanged lets the completion path de-duplicate the terminal message;
-		// wrapping it with the agent name rendered a second, different error.
-		return result, streamErr
-	}
-	return result, nil
+	return agentcore.AgentResult{}, errors.New("external harness execution has been removed")
 }
 
 // readOnlyNativeTools returns the minimal non-mutating native capability set.
@@ -372,25 +362,4 @@ func readOnlyNativeTools(all map[string]agentcore.Tool) map[string]agentcore.Too
 		}
 	}
 	return tools
-}
-
-func legacyStreamError(content any) error {
-	var message string
-	switch value := content.(type) {
-	case agentcore.StreamError:
-		message = value.Message
-	case *agentcore.StreamError:
-		if value != nil {
-			message = value.Message
-		}
-	case error:
-		message = value.Error()
-	case string:
-		message = value
-	}
-	message = strings.TrimSpace(message)
-	if message == "" {
-		message = "legacy agent stream failed"
-	}
-	return agentcore.StreamError{Message: message}
 }

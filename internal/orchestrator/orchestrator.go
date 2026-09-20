@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/bryann2k/maestro/internal/agentcore"
 	"github.com/bryann2k/maestro/internal/agentcore/tools"
@@ -25,65 +26,79 @@ import (
 
 // Options wires an Orchestrator. All fields are required except where noted.
 type Options struct {
-	ProjectDir   string
-	SpecsDir     string // default: <ProjectDir>/specs
-	SessionsDir  string // default: <home>/.maestro/sessions
-	Config       *config.Config
-	Keys         agentcore.KeyStore
-	Settings     settings.Settings
-	Model        string // default model for native runs
-	In           io.Reader
-	Out          io.Writer
-	Gate         agentcore.Gate                       // nil → PromptGate
-	DevTools     []agentcore.Tool                     // nil → default tool set for dev
-	Runner       Runner                               // nil → native runner built from the registry
-	TitleRunner  Runner                               // optional metadata-only runner (tests/custom integrations)
-	SettingsPath string                               // settings file for engine persistence
-	Catalog      map[string]agentcore.CatalogProvider // nil → models.dev + core fallback
-	ModelsDev    *agentcore.ModelsDev                 // remote catalog client
-	Vault        *vault.Vault                         // API key store (auth commands)
+	// Open a fresh session on the launch checkout when the saved branch changed.
+	// Explicit resume and noninteractive execution retain strict identity checks.
+	RecoverChangedBranch bool
+	RequireHarness       bool // production requires the bundled OMP runtime
+	ProjectDir           string
+	SpecsDir             string // default: <ProjectDir>/specs
+	SessionsDir          string // default: <home>/.maestro/sessions
+	Config               *config.Config
+	Keys                 agentcore.KeyStore
+	Settings             settings.Settings
+	Model                string // default model for native runs
+	In                   io.Reader
+	Out                  io.Writer
+	Gate                 agentcore.Gate                       // nil → PromptGate
+	DevTools             []agentcore.Tool                     // nil → default tool set for dev
+	Runner               Runner                               // nil → native runner built from the registry
+	TitleRunner          Runner                               // optional metadata-only runner (tests/custom integrations)
+	SettingsPath         string                               // settings file for engine persistence
+	Catalog              map[string]agentcore.CatalogProvider // nil → models.dev + core fallback
+	ModelsDev            *agentcore.ModelsDev                 // remote catalog client
+	Vault                *vault.Vault                         // API key store (auth commands)
 }
 
 // Orchestrator conducts one session: conversation, spec lifecycle, build,
 // review, docs, archive.
 type Orchestrator struct {
-	baseDir     string // original project root
-	dir         string // project or worktree root (worktree wins)
-	specsDir    string // spec root in the original project
-	store       *spec.Store
-	sessions    *session.Store
-	git         *git.Client
-	cfg         *config.Config
-	keys        agentcore.KeyStore
-	settings    settings.Settings
-	model       string
-	registry    *agentcore.Registry
-	runner      Runner
-	titleRunner Runner
-	gate        agentcore.Gate
-	ask         agentcore.AskFunc
-	devTools    []agentcore.Tool
-	in          io.Reader
-	out         io.Writer
+	requireHarness bool
+	baseDir        string // original project root
+	dir            string // project or worktree root (worktree wins)
+	specsDir       string // spec root in the original project
+	store          *spec.Store
+	sessions       *session.Store
+	git            *git.Client
+	cfg            *config.Config
+	keys           agentcore.KeyStore
+	settings       settings.Settings
+	model          string
+	registry       *agentcore.Registry
+	runner         Runner
+	titleRunner    Runner
+	gate           agentcore.Gate
+	ask            agentcore.AskFunc
+	devTools       []agentcore.Tool
+	in             io.Reader
+	out            io.Writer
 
-	settingsPath string
-	settingsMu   sync.RWMutex
-	eventMu      sync.Mutex
-	eventSeq     uint64
-	runMu        sync.Mutex
-	runCancel    context.CancelFunc
-	runActive    bool
-	runID        uint64
-	sessionMu    sync.Mutex
-	workspaceMu  sync.RWMutex
-	workspaceRev uint64
-	branchMu     sync.Mutex
-	branch       string
-	guardrails   Guardrails
-	features     *featureState
-	eco          *Ecosystem
-	modelsDev    *agentcore.ModelsDev
-	vault        *vault.Vault
+	settingsPath       string
+	settingsMu         sync.RWMutex
+	registryMu         sync.Mutex
+	eventMu            sync.Mutex
+	eventSeq           uint64
+	runMu              sync.Mutex
+	runCancel          context.CancelFunc
+	runActive          bool
+	runID              uint64
+	sessionMu          sync.Mutex
+	workspaceMu        sync.RWMutex
+	workspaceRev       uint64
+	branchMu           sync.Mutex
+	branch             string
+	guardrailsMu       sync.RWMutex
+	guardrails         Guardrails
+	features           *featureState
+	eco                *Ecosystem
+	modelsDev          *agentcore.ModelsDev
+	modelRefreshCtx    context.Context
+	modelRefreshCancel context.CancelFunc
+	modelRefreshWG     sync.WaitGroup
+	modelRefreshGen    uint64 // guarded by registryMu; newest started refresh wins publication
+	closeOnce          sync.Once
+	closeErr           error
+	closed             bool // guarded by registryMu
+	vault              *vault.Vault
 
 	Stream chan agentcore.StreamEvent
 	sess   session.Session
@@ -117,24 +132,25 @@ func New(ctx context.Context, opts Options) (*Orchestrator, error) {
 		opts.Out = os.Stdout
 	}
 	o := &Orchestrator{
-		baseDir:      opts.ProjectDir,
-		dir:          opts.ProjectDir,
-		specsDir:     opts.SpecsDir,
-		store:        spec.NewStore(opts.SpecsDir),
-		sessions:     session.NewStore(opts.SessionsDir),
-		git:          git.NewProject(opts.ProjectDir),
-		cfg:          opts.Config,
-		keys:         opts.Keys,
-		settings:     opts.Settings,
-		model:        opts.Model,
-		in:           opts.In,
-		out:          opts.Out,
-		Stream:       make(chan agentcore.StreamEvent, 256),
-		runner:       opts.Runner,
-		titleRunner:  opts.TitleRunner,
-		devTools:     opts.DevTools,
-		settingsPath: opts.SettingsPath,
-		vault:        opts.Vault,
+		requireHarness: opts.RequireHarness,
+		baseDir:        opts.ProjectDir,
+		dir:            opts.ProjectDir,
+		specsDir:       opts.SpecsDir,
+		store:          spec.NewStore(opts.SpecsDir),
+		sessions:       session.NewStore(opts.SessionsDir),
+		git:            git.NewProject(opts.ProjectDir),
+		cfg:            opts.Config,
+		keys:           opts.Keys,
+		settings:       opts.Settings,
+		model:          opts.Model,
+		in:             opts.In,
+		out:            opts.Out,
+		Stream:         make(chan agentcore.StreamEvent, 256),
+		runner:         opts.Runner,
+		titleRunner:    opts.TitleRunner,
+		devTools:       opts.DevTools,
+		settingsPath:   opts.SettingsPath,
+		vault:          opts.Vault,
 	}
 	if o.settings.RoleDefaults == nil {
 		slots := o.settings.ModelSlots
@@ -146,7 +162,13 @@ func New(ctx context.Context, opts Options) (*Orchestrator, error) {
 	if o.registry == nil && o.cfg != nil {
 		catalog := opts.Catalog
 		if catalog == nil && opts.ModelsDev != nil {
-			loaded, _, err := opts.ModelsDev.Load(ctx)
+			var loaded map[string]agentcore.CatalogProvider
+			var err error
+			if opts.ModelsDev.AsyncStartup() {
+				loaded, _, err = opts.ModelsDev.LoadCached()
+			} else {
+				loaded, _, err = opts.ModelsDev.Load(ctx)
+			}
 			if err == nil {
 				catalog = loaded
 			}
@@ -202,7 +224,21 @@ func New(ctx context.Context, opts Options) (*Orchestrator, error) {
 		} else {
 			resolved, migrated, resolveErr := resolvePersistedSessionWorkspace(ctx, o.git, o.sess)
 			if resolveErr != nil {
-				return nil, fmt.Errorf("orchestrator: resolve saved workspace: %w", resolveErr)
+				var changed *workspaceRefMismatchError
+				if !opts.RecoverChangedBranch || !errors.As(resolveErr, &changed) {
+					return nil, fmt.Errorf("orchestrator: resolve saved workspace: %w", resolveErr)
+				}
+				// Never transplant the old history, approval, spec or pending
+				// operation onto the new branch. Preserve its durable record.
+				previousID := o.sess.ID
+				fresh := session.New(project)
+				fresh.Worktree = repository.Worktree
+				resolved, _, resolveErr = resolvePersistedSessionWorkspace(ctx, o.git, fresh)
+				if resolveErr != nil {
+					return nil, fmt.Errorf("orchestrator: identify current workspace: %w", resolveErr)
+				}
+				migrated = true
+				notice = fmt.Sprintf("Saved session %s still belongs to %s. Opened a new session on %s; the previous session is preserved in /resume.", previousID, changed.expected, resolved.WorkspaceRef)
 			}
 			o.sess = resolved
 			sessionNeedsCommit = sessionNeedsCommit || migrated
@@ -285,7 +321,41 @@ func New(ctx context.Context, opts Options) (*Orchestrator, error) {
 	} else {
 		o.gate = o.permissionGate(&PromptGate{In: o.in, Out: o.out})
 	}
+	o.startAsyncModelRefresh()
 	return o, nil
+}
+
+func (o *Orchestrator) startAsyncModelRefresh() {
+	o.registryMu.Lock()
+	ctx := o.ensureModelRefreshContextLocked()
+	if o.modelsDev == nil || !o.modelsDev.AsyncStartup() || o.registry == nil || o.cfg == nil || o.closed {
+		o.registryMu.Unlock()
+		return
+	}
+	o.modelRefreshWG.Add(1)
+	o.registryMu.Unlock()
+	go func() {
+		defer o.modelRefreshWG.Done()
+		for {
+			o.refreshModelRegistry(ctx)
+			timer := time.NewTimer(o.modelsDev.RefreshInterval())
+			select {
+			case <-ctx.Done():
+				if !timer.Stop() {
+					select {
+					case <-timer.C:
+					default:
+					}
+				}
+				return
+			case <-timer.C:
+			}
+		}
+	}()
+}
+
+func (o *Orchestrator) refreshModelRegistry(ctx context.Context) {
+	_ = o.refreshModels(ctx)
 }
 
 func canonicalProjectDir(path string) (string, error) {
@@ -426,16 +496,110 @@ func (o *Orchestrator) UpdateSettings(ctx context.Context, next settings.Setting
 // RefreshModels forces an online catalog refresh and updates the registry's
 // catalog view used by the model picker.
 func (o *Orchestrator) RefreshModels(ctx context.Context) error {
-	if o.modelsDev == nil || o.registry == nil {
-		return errors.New("model catalog refresh unavailable")
+	return o.refreshModels(ctx)
+}
+
+type modelRefreshWork struct {
+	generation uint64
+	modelsDev  *agentcore.ModelsDev
+	registry   *agentcore.Registry
+	cfg        *config.Config
+	keys       agentcore.KeyStore
+}
+
+func (o *Orchestrator) ensureModelRefreshContextLocked() context.Context {
+	if o.modelRefreshCtx == nil {
+		o.modelRefreshCtx, o.modelRefreshCancel = context.WithCancel(context.Background())
 	}
-	catalog, err := o.modelsDev.Refresh(ctx)
+	return o.modelRefreshCtx
+}
+
+func (o *Orchestrator) beginModelRefresh(ctx context.Context) (context.Context, context.CancelFunc, modelRefreshWork, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	o.registryMu.Lock()
+	if o.closed {
+		o.registryMu.Unlock()
+		return nil, nil, modelRefreshWork{}, errors.New("model catalog refresh unavailable: orchestrator is closed")
+	}
+	registry := o.registry
+	if o.modelsDev == nil || registry == nil {
+		o.registryMu.Unlock()
+		return nil, nil, modelRefreshWork{}, errors.New("model catalog refresh unavailable")
+	}
+	lifetime := o.ensureModelRefreshContextLocked()
+	o.modelRefreshGen++
+	work := modelRefreshWork{
+		generation: o.modelRefreshGen,
+		modelsDev:  o.modelsDev,
+		registry:   registry,
+		cfg:        o.cfg,
+		keys:       o.keys,
+	}
+	if work.keys == nil {
+		work.keys = vaultKeyStore{vault: o.vault}
+	}
+	o.modelRefreshWG.Add(1)
+	o.registryMu.Unlock()
+
+	linked, cancel := context.WithCancel(ctx)
+	stopLifetime := context.AfterFunc(lifetime, cancel)
+	return linked, func() {
+		stopLifetime()
+		cancel()
+	}, work, nil
+}
+
+func (o *Orchestrator) refreshModels(ctx context.Context) error {
+	ctx, cancel, work, err := o.beginModelRefresh(ctx)
 	if err != nil {
 		return err
 	}
-	for name, provider := range catalog {
-		o.registry.Catalog()[name] = provider
+	defer o.modelRefreshWG.Done()
+	defer cancel()
+
+	catalog, err := work.modelsDev.Refresh(ctx)
+	if err != nil {
+		return err
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	var next *agentcore.Registry
+	if work.cfg != nil {
+		var buildErr error
+		next, buildErr = agentcore.NewRegistry(ctx, work.cfg, work.keys, catalog)
+		if buildErr != nil && (next == nil || len(next.Providers()) == 0) {
+			return buildErr
+		}
+	}
+	// A superseded or closing refresh owns newly built providers until this
+	// function returns; never leak their transports into the abandoned result.
+	if next != nil {
+		defer func() {
+			if next != nil {
+				_ = next.Close()
+			}
+		}()
+	}
+
+	o.registryMu.Lock()
+	defer o.registryMu.Unlock()
+	if o.closed {
+		return errors.New("model catalog refresh unavailable: orchestrator is closed")
+	}
+	if work.generation != o.modelRefreshGen {
+		return nil
+	}
+	if next == nil {
+		return work.registry.ReplaceCatalog(catalog)
+	}
+	if err := work.registry.ReplaceAndClose(next); err != nil {
+		return fmt.Errorf("refresh model providers: %w", err)
+	}
+	next = nil // provider ownership moved into work.registry
 	return nil
 }
 

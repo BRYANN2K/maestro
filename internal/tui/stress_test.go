@@ -206,7 +206,7 @@ func TestTinyTerminalCancellationFailsClosedPermission(t *testing.T) {
 		t.Fatalf("wide permission dock buttons = %d, want 3", len(permission.buttons))
 	}
 	staleAlwaysHit := permission.buttons[1]
-	feed(m, tea.KeyMsg{Type: tea.KeyRight}) // prime the dangerous "Always" choice
+	feed(m, tea.KeyMsg{Type: tea.KeyLeft}) // move from safe-default Reject to "Always"
 	if permission.buttonSel != 1 {
 		t.Fatalf("permission selection = %d, want always", permission.buttonSel)
 	}

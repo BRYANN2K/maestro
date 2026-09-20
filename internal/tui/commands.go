@@ -18,6 +18,7 @@ type slashSuggestion struct {
 // completion and the command palette. Dispatch remains authoritative in the
 // orchestrator; this list only describes user-facing commands.
 var slashCatalog = []slashSuggestion{
+	{Command: "/workflow", Description: "Stipulate contracts, task DAG, evidence and orchestration"},
 	{Command: "/bootstrap", Description: "initialize Git, shape a new project, and propose MAESTRO.md", Aliases: []string{"/boostrap"}},
 	{Command: "/adopt", Description: "analyse an existing repository and propose MAESTRO.md", Aliases: []string{"/onboard"}},
 	{Command: "/propose", Description: "draft from this discussion or an explicit request"},
@@ -40,7 +41,7 @@ var slashCatalog = []slashSuggestion{
 	{Command: "/commit", Description: "plan spec-mapped commits"},
 	{Command: "/git", Description: "select or create a Git worktree"},
 	{Command: "/model", Description: "choose the active model", Aliases: []string{"/models"}},
-	{Command: "/providers", Description: "connect subscriptions and API providers", Aliases: []string{"/provider"}},
+	{Command: "/providers", Description: "connect accounts and API providers", Aliases: []string{"/provider"}},
 	{Command: "/settings", Description: "open Maestro settings"},
 	{Command: "/update", Description: "check for a newer stable Maestro release"},
 	{Command: "/mcp", Description: "inspect MCP integrations · native engine only"},
@@ -207,7 +208,7 @@ func splitSlashFields(line string) ([]string, error) {
 	return fields, nil
 }
 
-// parseSlash converts "/build --engine subscription --agent codex" into a
+// parseSlash converts "/build --model openai/gpt-5" into a
 // dispatchable Command. Flags accept both "--k=v" and "--k v" forms.
 // Positional arguments stay positional; their meaning belongs to the
 // orchestrator command rather than this syntax parser.
@@ -227,6 +228,10 @@ func parseSlash(line string) (orchestrator.Command, error) {
 		return orchestrator.Command{}, fmt.Errorf("empty command")
 	}
 	args := fields[1:]
+	if cmd.Cmd == "workflow" {
+		cmd.Args = args
+		return cmd, nil
+	}
 	var positional []string
 	flagsDone := false
 	for i := 0; i < len(args); i++ {
@@ -258,3 +263,6 @@ func parseSlash(line string) (orchestrator.Command, error) {
 	cmd.Args = positional
 	return cmd, nil
 }
+
+// ParseCommand shares the canonical slash syntax with the OpenTUI host.
+func ParseCommand(line string) (orchestrator.Command, error) { return parseSlash(line) }

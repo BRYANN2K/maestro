@@ -23,17 +23,18 @@ import (
 
 // Options configures a REPL session.
 type Options struct {
-	Dir          string // project root; specs live in Dir/specs
-	In           io.Reader
-	Out          io.Writer
-	Config       *config.Config
-	Keys         agentcore.KeyStore
-	Model        string // active model ID
-	Once         string // one-shot message: send it, print, exit
-	SessionsDir  string // override for the session store
-	Settings     settings.Settings
-	SettingsPath string               // settings file for engine persistence
-	ModelsDev    *agentcore.ModelsDev // models.dev catalog (like the TUI)
+	RequireHarness bool
+	Dir            string // project root; specs live in Dir/specs
+	In             io.Reader
+	Out            io.Writer
+	Config         *config.Config
+	Keys           agentcore.KeyStore
+	Model          string // active model ID
+	Once           string // one-shot message: send it, print, exit
+	SessionsDir    string // override for the session store
+	Settings       settings.Settings
+	SettingsPath   string               // settings file for engine persistence
+	ModelsDev      *agentcore.ModelsDev // models.dev catalog (like the TUI)
 }
 
 // Run starts the REPL loop and returns when the user quits or stdin closes.
@@ -61,7 +62,7 @@ func Run(ctx context.Context, opts Options) error {
 	if opts.Settings.RoleDefaults != nil {
 		st = opts.Settings
 	}
-	orch, err := orchestrator.New(ctx, orchestrator.Options{
+	orch, err := orchestrator.New(ctx, orchestrator.Options{RequireHarness: opts.RequireHarness,
 		ProjectDir:   opts.Dir,
 		SessionsDir:  opts.SessionsDir,
 		Config:       opts.Config,

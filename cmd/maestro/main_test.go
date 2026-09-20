@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"image/color"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -689,6 +690,16 @@ func TestDefaultCommandIsTUI(t *testing.T) {
 	}
 }
 
+func TestDefaultTUIFailsCleanlyWithoutTerminal(t *testing.T) {
+	out, code := runCLI(t, t.TempDir())
+	if code != 2 || !strings.Contains(out, "interactive TUI requires terminal input and output") {
+		t.Fatalf("non-terminal launch = %q, code %d", out, code)
+	}
+	if strings.ContainsAny(out, "\x1b\x07") {
+		t.Fatalf("non-terminal diagnostic contains terminal control bytes: %q", out)
+	}
+}
+
 func TestColorProfileSelection(t *testing.T) {
 	cases := []struct {
 		name string
@@ -721,6 +732,89 @@ func TestOutputColorProfileFiltersLipglossANSI(t *testing.T) {
 	}
 	if got := out.String(); !strings.Contains(got, "hello") || strings.Contains(got, "38;2") {
 		t.Fatalf("filtered output = %q, expected text without truecolor", got)
+	}
+}
+
+func TestCursorColorHonorsNOColorEvenWithTruecolorOverride(t *testing.T) {
+	t.Setenv("NO_COLOR", "")
+	t.Setenv("MAESTRO_COLOR", "truecolor")
+	var out bytes.Buffer
+	restore := writeTermCursorColor(&out, true, color.RGBA{R: 0xff, G: 0x63, B: 0x63, A: 0xff})
+	restore()
+	if out.Len() != 0 {
+		t.Fatalf("NO_COLOR emitted OSC cursor sequences: %q", out.String())
+	}
+}
+
+func TestCursorColorWritesAndRestoresWhenEnabled(t *testing.T) {
+	old, existed := os.LookupEnv("NO_COLOR")
+	if err := os.Unsetenv("NO_COLOR"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if existed {
+			_ = os.Setenv("NO_COLOR", old)
+		} else {
+			_ = os.Unsetenv("NO_COLOR")
+		}
+	})
+	t.Setenv("MAESTRO_COLOR", "truecolor")
+	var out bytes.Buffer
+	restore := writeTermCursorColor(&out, true, color.RGBA{R: 0xff, G: 0x63, B: 0x63, A: 0xff})
+	restore()
+	if got, want := out.String(), "\x1b]12;#FF6363\x07\x1b]112\x07"; got != want {
+		t.Fatalf("cursor color lifecycle = %q, want %q", got, want)
+	}
+}
+
+func TestASCIIGlyphProjectionPreservesOneCellFallbacks(t *testing.T) {
+	input := "╭─╮ ● ○ ↑↓ ←→ ✓✗ … ⌥ café界"
+	got := projectASCIIGlyphs(input)
+	if want := "+-+ * o ^v <> vx . # caf??"; got != want {
+		t.Fatalf("ASCII glyph projection = %q, want %q", got, want)
+	}
+	for _, r := range got {
+		if r > 0x7f {
+			t.Fatalf("ASCII glyph projection retained %U in %q", r, got)
+		}
+	}
+}
+
+func TestASCIIGlyphWriterTransformsCompleteFrame(t *testing.T) {
+	var out bytes.Buffer
+	w := &asciiGlyphWriter{Forward: &out}
+	input := []byte("\x1b[1m▸ café界\x1b[0m")
+	n, err := w.Write(input)
+	if err != nil || n != len(input) {
+		t.Fatalf("ASCII writer = %d, %v; want %d, nil", n, err, len(input))
+	}
+	if got, want := out.String(), "\x1b[1m> caf??\x1b[0m"; got != want {
+		t.Fatalf("ASCII writer output = %q, want %q", got, want)
+	}
+}
+
+func TestASCIIGlyphCapabilitySelection(t *testing.T) {
+	tests := []struct {
+		name, override, term, locale string
+		want                         bool
+	}{
+		{name: "explicit ascii", override: "ascii", term: "xterm-256color", locale: "en_US.UTF-8", want: true},
+		{name: "explicit unicode wins", override: "unicode", term: "dumb", locale: "C", want: false},
+		{name: "dumb terminal", term: "dumb", locale: "en_US.UTF-8", want: true},
+		{name: "strict locale", term: "xterm", locale: "POSIX", want: true},
+		{name: "utf8 terminal", term: "xterm", locale: "en_US.UTF-8", want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("MAESTRO_GLYPHS", tt.override)
+			t.Setenv("TERM", tt.term)
+			t.Setenv("LC_ALL", tt.locale)
+			t.Setenv("LC_CTYPE", "")
+			t.Setenv("LANG", "")
+			if got := useASCIIGlyphs(); got != tt.want {
+				t.Fatalf("useASCIIGlyphs() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
 

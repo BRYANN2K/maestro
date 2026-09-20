@@ -97,7 +97,7 @@ func TestTopTabsExposeMaestroAndIDEHoverTargets(t *testing.T) {
 	if !strings.Contains(view, "⌥1 AGENT") || !strings.Contains(view, "⌥2 IDE") {
 		t.Fatalf("top tabs missing: %q", view[:min(len(view), 180)])
 	}
-	if !strings.Contains(view, "DISCOVERY · READ ONLY") {
+	if !strings.Contains(view, "DISCOVERY · PLAN FIRST") {
 		t.Fatalf("command bar must expose the read-only discovery contract: %q", view[:min(len(view), 220)])
 	}
 	var ide Region
@@ -207,7 +207,8 @@ func TestClickingTranscriptFileOpensItInIDE(t *testing.T) {
 	if file.W == 0 {
 		t.Fatal("visible transcript file did not register an IDE link")
 	}
-	feed(m, tea.MouseMsg{X: file.X, Y: file.Y, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress})
+	_, cmd := m.Update(tea.MouseMsg{X: file.X, Y: file.Y, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress})
+	runIDEEffect(t, m, cmd)
 	if m.ActiveTab() != TabIDE || m.ide == nil || m.ide.Ed.Buffer() == nil {
 		t.Fatal("file click did not switch to IDE")
 	}
@@ -238,7 +239,8 @@ func TestClickingTranscriptLocationOpensExactCursor(t *testing.T) {
 	if link.W == 0 || link.Line != 3 || link.Column != 2 {
 		t.Fatalf("exact location link missing: %+v", link)
 	}
-	feed(m, tea.MouseMsg{X: link.X, Y: link.Y, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress})
+	_, cmd := m.Update(tea.MouseMsg{X: link.X, Y: link.Y, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress})
+	runIDEEffect(t, m, cmd)
 	if got := m.ide.Ed.Buffer().Cur; got.Line != 2 || got.Col != 1 {
 		t.Fatalf("cursor = %+v, want line=2 col=1", got)
 	}
@@ -252,16 +254,16 @@ func TestFollowMaestroTracksToolLocationsUntilManualNavigation(t *testing.T) {
 		t.Fatal(err)
 	}
 	m.ToggleIDE()
-	m.addToolCallCard(agentcore.NewEvent(nil, agentcore.RoleDev, agentcore.EvToolCall, agentcore.ToolCall{
+	runIDEEffect(t, m, m.addToolCallCard(agentcore.NewEvent(nil, agentcore.RoleDev, agentcore.EvToolCall, agentcore.ToolCall{
 		ID: "follow-read", Name: "read", Args: `{"path":"follow.go","line":3}`,
-	}))
+	})))
 	if got := m.ide.Ed.Buffer(); got == nil || got.Path != path || got.Cur.Line != 2 {
 		t.Fatalf("follow did not navigate to tool location: %+v", got)
 	}
 	if !m.followAgent {
 		t.Fatal("automatic navigation disabled Follow mode")
 	}
-	m.openWorkspaceLocation("target.txt", 1, 1, true)
+	runIDEEffect(t, m, m.openWorkspaceLocation("target.txt", 1, 1, true))
 	if m.followAgent {
 		t.Fatal("manual navigation must switch Follow to FREE")
 	}
@@ -585,7 +587,7 @@ func TestModelPickerRemainsReachableFromIDE(t *testing.T) {
 	if m.overlay != overlayModelPicker {
 		t.Fatalf("overlay = %v, want model picker from IDE", m.overlay)
 	}
-	if view := stripANSI(m.View()); !strings.Contains(view, "Models · provider / model") {
+	if view := stripANSI(m.View()); !strings.Contains(view, "MODEL ROUTING") {
 		t.Fatalf("model picker was not rendered over IDE: %q", view[:min(len(view), 600)])
 	}
 }
@@ -692,11 +694,11 @@ func TestIDESlashCommand(t *testing.T) {
 	m.input.Set("/ide")
 	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m2 := updated.(*Model)
-	if cmd != nil {
-		t.Fatal("ide toggle should not dispatch")
+	if cmd == nil {
+		t.Fatal("ide toggle should schedule its workspace snapshot")
 	}
-	if m2.ide == nil {
-		t.Fatal("/ide should enable the editor")
+	if m2.ide == nil || !m2.ide.filesLoading {
+		t.Fatal("/ide should enable the editor in its loading state")
 	}
 }
 

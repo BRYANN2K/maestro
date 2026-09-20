@@ -312,3 +312,27 @@ func OpenAES(ctx context.Context, path string, warn func(string)) (*Vault, error
 	}
 	return &Vault{path: path, data: m, aes: key}, nil
 }
+
+// Reload refreshes the same vault handle after an explicit account login in
+// Maestro's terminal subprocess. No pointer replacement can leave KeyStore
+// adapters reading stale credentials.
+func (v *Vault) Reload(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	var next *Vault
+	var err error
+	if len(v.aes) > 0 {
+		next, err = OpenAES(ctx, v.path, nil)
+	} else {
+		next, err = Open(ctx, v.path)
+	}
+	if err != nil {
+		return err
+	}
+	v.data = next.data
+	v.aes = next.aes
+	return nil
+}

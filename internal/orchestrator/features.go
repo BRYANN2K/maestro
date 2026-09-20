@@ -384,9 +384,23 @@ Your previous JSON failed strict source-anchor validation. Return the complete J
 // securityScan runs the 5-pattern OWASP scan over the changed files.
 func (o *Orchestrator) securityScan(ctx context.Context) []security.Finding {
 	changes, err := o.git.AllChanges(ctx)
+	changes, err = boundReviewChangeInventory(changes, err)
+	return o.securityScanChanges(ctx, changes, err)
+}
+
+func (o *Orchestrator) securityScanChanges(ctx context.Context, changes []git.FileChange, changesErr error) []security.Finding {
+	if changesErr != nil {
+		return nil
+	}
+	files, err := newReviewFileCache(ctx, o.workDir())
 	if err != nil {
 		return nil
 	}
+	defer files.Close()
+	return o.securityScanChangesRead(ctx, changes, files.Read)
+}
+
+func (o *Orchestrator) securityScanChangesRead(ctx context.Context, changes []git.FileChange, read security.ReadFile) []security.Finding {
 	var files []string
 	for _, c := range changes {
 		if c.Type == "D" {
@@ -394,29 +408,49 @@ func (o *Orchestrator) securityScan(ctx context.Context) []security.Finding {
 		}
 		files = append(files, c.Path)
 	}
-	findings, _ := security.Scan(ctx, files, func(path string) ([]byte, error) {
-		return os.ReadFile(filepath.Join(o.workDir(), path))
-	})
+	findings, _ := security.Scan(ctx, files, read)
 	return findings
 }
 
 // comprehensionChecks detects placeholders and out-of-scope changes (8.7).
 func (o *Orchestrator) comprehensionChecks(ctx context.Context) []ReviewItem {
-	var items []ReviewItem
 	changes, err := o.git.AllChanges(ctx)
-	if err != nil {
-		return items
+	changes, err = boundReviewChangeInventory(changes, err)
+	return o.comprehensionChecksForChanges(ctx, changes, err)
+}
+
+func (o *Orchestrator) comprehensionChecksForChanges(ctx context.Context, changes []git.FileChange, changesErr error) []ReviewItem {
+	if changesErr != nil {
+		return nil
 	}
+	files, err := newReviewFileCache(ctx, o.workDir())
+	if err != nil {
+		return []ReviewItem{{Level: "fail", Message: "capture bounded review inputs: " + err.Error()}}
+	}
+	items := o.comprehensionChecksForChangesRead(ctx, changes, files.Read)
+	if err := files.Err(); err != nil {
+		items = append(items, ReviewItem{Level: "fail", Message: "bounded review input refused: " + err.Error()})
+	}
+	if err := files.Close(); err != nil {
+		items = append(items, ReviewItem{Level: "fail", Message: "close review inputs: " + err.Error()})
+	}
+	return items
+}
+
+func (o *Orchestrator) comprehensionChecksForChangesRead(ctx context.Context, changes []git.FileChange, read security.ReadFile) []ReviewItem {
+	var items []ReviewItem
 	placeholderRe := regexpMustCompile(`(?i)\b(TODO|FIXME|XXX|HACK)\b|not implemented|panic\("TODO"\)|stub`)
 	for _, c := range changes {
+		if err := ctx.Err(); err != nil {
+			return append(items, ReviewItem{Level: "fail", Message: "comprehension scan cancelled: " + err.Error()})
+		}
 		if c.Type == "D" {
 			continue
 		}
 		if !strings.HasSuffix(c.Path, ".go") && !strings.HasSuffix(c.Path, ".py") && !strings.HasSuffix(c.Path, ".ts") && !strings.HasSuffix(c.Path, ".js") {
 			continue
 		}
-		abs := filepath.Join(o.workDir(), c.Path)
-		data, err := os.ReadFile(abs)
+		data, err := read(c.Path)
 		if err != nil {
 			continue
 		}
@@ -457,9 +491,14 @@ func (o *Orchestrator) comprehensionChecks(ctx context.Context) []ReviewItem {
 
 // tddGate warns when new Go code ships without tests (8.9).
 func (o *Orchestrator) tddGate(ctx context.Context) []ReviewItem {
-	var items []ReviewItem
 	changes, err := o.git.AllChanges(ctx)
-	if err != nil {
+	changes, err = boundReviewChangeInventory(changes, err)
+	return o.tddGateForChanges(changes, err)
+}
+
+func (o *Orchestrator) tddGateForChanges(changes []git.FileChange, changesErr error) []ReviewItem {
+	var items []ReviewItem
+	if changesErr != nil {
 		return items
 	}
 	hasCode, hasTests := false, false

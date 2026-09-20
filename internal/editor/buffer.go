@@ -33,6 +33,7 @@ type Buffer struct {
 	Marks     map[byte]Cursor
 	UndoStack []Snapshot
 	RedoStack []Snapshot
+	revision  uint64
 }
 
 // NewBuffer loads content into a fresh buffer.
@@ -73,6 +74,10 @@ func (b *Buffer) LineText(i int) string {
 // NumLines returns the line count.
 func (b *Buffer) NumLines() int { return len(b.Lines) }
 
+// Revision is a monotonic content generation. Renderers can use it to cache
+// derived state without rescanning the whole buffer on every frame.
+func (b *Buffer) Revision() uint64 { return b.revision }
+
 // clamp keeps the cursor inside the buffer.
 func (b *Buffer) clamp() {
 	if len(b.Lines) == 0 {
@@ -102,6 +107,7 @@ func (b *Buffer) pushUndo() {
 // markDirty marks the buffer and clamps the cursor.
 func (b *Buffer) markDirty() {
 	b.Dirty = true
+	b.revision++
 	b.clamp()
 }
 
@@ -269,6 +275,7 @@ func (b *Buffer) Undo() bool {
 	b.Cur = last.Cur
 	b.clamp()
 	b.Dirty = true
+	b.revision++
 	return true
 }
 
@@ -284,6 +291,7 @@ func (b *Buffer) Redo() bool {
 	b.Cur = last.Cur
 	b.clamp()
 	b.Dirty = true
+	b.revision++
 	return true
 }
 
@@ -323,6 +331,7 @@ func (b *Buffer) RestoreSnapshot(s Snapshot) {
 	b.Cur = s.Cur
 	b.clamp()
 	b.Dirty = true
+	b.revision++
 }
 
 // wordEnd finds the end of the word starting at col.

@@ -80,7 +80,10 @@ func TestLearnRejectsEveryPersistedSubscriptionRoute(t *testing.T) {
 				In: strings.NewReader(""), Out: &strings.Builder{}, Settings: state,
 			})
 			if err != nil {
-				t.Fatal(err)
+				if !strings.Contains(err.Error(), "invalid") {
+					t.Fatal(err)
+				}
+				return
 			}
 			if _, _, err := orch.LearnDraft(t.Context(), "main.go", false); err == nil ||
 				!strings.Contains(err.Error(), "cannot confine embedded source access") ||

@@ -1,0 +1,15 @@
+<?xml version='1.0' encoding='utf-8'?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img"><title>Maestro dark icon</title><rect width="1024" height="1024" rx="224" fill="#0B0C10" /><g transform="translate(-251 97)"><g fill="none" stroke="#EEECE5" stroke-width="25" stroke-linecap="butt" stroke-linejoin="miter" stroke-miterlimit="4">
+    <path d="M351 239.5H596L764 383L932 239.5H1175" />
+    <path d="M351 303.5H590L708 406" />
+    <path d="M828 406L946 303.5H1175" />
+    <path d="M351 367.5H582L687 457" />
+    <path d="M849 457L954 367.5H1175" />
+    <path d="M351 431.5H568L764 596L968 431.5H1175" />
+    <path d="M351 495.5H571V559.5H351" />
+    <path d="M1175 495.5H957V559.5H1175" />
+  </g>
+
+  <path d="M745 429L804 479L745 530L733 508L769 479L733 450Z" fill="#B7A5E6" />
+
+  </g></svg>

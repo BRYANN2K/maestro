@@ -25,28 +25,55 @@ type providersOverlay struct {
 	query            string
 	hits             []workspaceHit
 	originX, originY int
+	loading          bool
+	loadErr          string
+	selectID         string
 }
 
 func newProvidersOverlay(orch *orchestrator.Orchestrator, selectID string) *providersOverlay {
-	o := &providersOverlay{}
-	for _, sub := range orch.SubscriptionList(context.Background()) {
-		o.cards = append(o.cards, providerCard{
+	o := newLoadingProvidersOverlay(selectID)
+	cards, err := loadProviderCards(context.Background(), orch)
+	o.applyLoad(cards, err)
+	return o
+}
+
+func newLoadingProvidersOverlay(selectID string) *providersOverlay {
+	return &providersOverlay{loading: true, selectID: selectID}
+}
+
+// providerCardsLoader is a test seam around the only slow part of the
+// provider workspace: account and model catalog reads. Runtime callers execute it
+// from a tea.Cmd; the synchronous constructor above remains available to
+// headless render tests that do not own Bubble Tea's event loop.
+var providerCardsLoader = loadProviderCards
+
+func loadProviderCards(ctx context.Context, orch *orchestrator.Orchestrator) ([]providerCard, error) {
+	var cards []providerCard
+	for _, sub := range orch.SubscriptionList(ctx) {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		cards = append(cards, providerCard{
 			id: sub.ID, label: safeIDEPlainText(sub.Label), kind: "subscription", status: safeIDEPlainText(sub.Status),
 			cli: safeIDEPlainText(sub.CLI), installed: sub.Installed, connected: sub.Authenticated,
 			models: len(sub.Models),
 		})
 	}
 	seen := map[string]bool{}
-	for _, info := range orch.ProviderList(context.Background()) {
+	for _, info := range orch.ProviderList(ctx) {
+		if info.Name == "openai-codex" || info.Name == "google-gemini-cli" || info.Name == "github-copilot" {
+			seen[info.Name] = true
+			continue
+		}
 		seen[info.Name] = true
-		o.cards = append(o.cards, providerCard{
+		cards = append(cards, providerCard{
 			id: info.Name, label: safeIDEPlainText(info.Name), kind: "api", status: safeIDEPlainText(providerStatus(info)),
 			source: safeIDEPlainText(info.Source), installed: true, connected: info.KeySet || !info.RequiresKey,
 			requiresKey: info.RequiresKey, models: info.Models,
 		})
 	}
 	counts := map[string]int{}
-	for _, model := range orch.ModelList(context.Background()) {
+	for _, model := range orch.ModelList(ctx) {
 		counts[model.Provider]++
 	}
 	var catalogIDs []string
@@ -57,21 +84,35 @@ func newProvidersOverlay(orch *orchestrator.Orchestrator, selectID string) *prov
 	}
 	sort.Strings(catalogIDs)
 	for _, id := range catalogIDs {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		count := counts[id]
-		info, _ := orch.ProviderInfo(context.Background(), id)
-		o.cards = append(o.cards, providerCard{
+		info, _ := orch.ProviderInfo(ctx, id)
+		cards = append(cards, providerCard{
 			id: id, label: safeIDEPlainText(id), kind: "api", status: safeIDEPlainText(providerStatus(info)), source: "remote catalog",
 			installed: true, connected: info.KeySet || !info.RequiresKey,
 			requiresKey: info.RequiresKey, models: count,
 		})
 	}
+	return cards, ctx.Err()
+}
+
+func (o *providersOverlay) applyLoad(cards []providerCard, err error) {
+	o.loading = false
+	o.cards = cards
+	o.loadErr = ""
+	if err != nil {
+		o.loadErr = safeIDEPlainText(err.Error())
+		return
+	}
+	o.selected = 0
 	for i, card := range o.cards {
-		if card.id == selectID {
+		if card.id == o.selectID {
 			o.selected = i
 			break
 		}
 	}
-	return o
 }
 
 func providerStatus(info orchestrator.ProviderInfo) string {
@@ -112,6 +153,9 @@ func (o *providersOverlay) current() *providerCard {
 }
 
 func (o *providersOverlay) viewSized(styles Styles, width, height int) string {
+	if o.loading || o.loadErr != "" {
+		return o.viewLoadState(styles, width, height)
+	}
 	if width < 72 || height < 22 {
 		return o.viewCompact(styles, width, height)
 	}
@@ -171,10 +215,10 @@ func (o *providersOverlay) viewSized(styles Styles, width, height int) string {
 		}
 		right.WriteString(statusStyle.Render(card.status) + "\n\n")
 		if card.kind == "subscription" {
-			right.WriteString("Uses your official " + card.cli + " CLI session.\n")
-			right.WriteString(muted.Render("Credentials stay in the vendor keychain; Maestro never imports tokens.") + "\n\n")
+			right.WriteString("Connects your account directly to Maestro.\n")
+			right.WriteString(muted.Render("Tokens are stored in Maestro’s encrypted credential vault.") + "\n\n")
 			if !card.installed {
-				right.WriteString(muted.Render("Install the "+card.cli+" CLI, then reopen this page.") + "\n")
+				right.WriteString(muted.Render("Install the complete Maestro runtime, then reopen this page.") + "\n")
 			} else if card.connected {
 				right.WriteString(active.Render("[ m  Assign to task ]") + "  " + plain.Render("[ x  Sign out ]") + "\n")
 			} else {
@@ -182,7 +226,7 @@ func (o *providersOverlay) viewSized(styles Styles, width, height int) string {
 			}
 		} else {
 			right.WriteString(fmt.Sprintf("%d models · %s\n", card.models, defaultString(card.source, "remote catalog")))
-			right.WriteString(muted.Render("Models remain sourced from the remote models.dev catalog.") + "\n\n")
+			right.WriteString(muted.Render("Catalog metadata is supplemented by endpoint model discovery.") + "\n\n")
 			if card.requiresKey && !card.connected {
 				right.WriteString(active.Render("[ enter  Add API key ]") + "\n")
 			} else {
@@ -200,8 +244,32 @@ func (o *providersOverlay) viewSized(styles Styles, width, height int) string {
 		lipgloss.NewStyle().Width(rightW).Render(right.String()),
 	)
 	footer := muted.Render("↑/↓ browse · enter connect · m models · x logout · r refresh · esc close")
-	content := accent.Render("PROVIDER WORKSPACE") + muted.Render("   subscriptions + API catalog") + "\n\n" + columns + "\n" + footer
+	content := accent.Render("PROVIDER WORKSPACE") + muted.Render("   accounts + API catalog") + "\n\n" + columns + "\n" + footer
 	return lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(styles.T.Color(TokenIron)).Padding(0, 1).Width(width).Height(height).Render(content)
+}
+
+func (o *providersOverlay) viewLoadState(styles Styles, width, height int) string {
+	width = max(width, 1)
+	height = max(height, 1)
+	innerW := max(width-4, 1)
+	accent := lipgloss.NewStyle().Foreground(styles.T.Color(TokenCharple)).Bold(true)
+	muted := styles.Hint
+	state := "Loading accounts and model catalog…"
+	footer := "esc close"
+	if o.loadErr != "" {
+		state = "Provider status unavailable: " + o.loadErr
+		footer = "r retry · esc close"
+	}
+	content := accent.Render("PROVIDER WORKSPACE") + "\n\n" +
+		muted.Render(truncateRunes(state, innerW)) + "\n\n" + muted.Render(footer)
+	content = clampANSIHeight(clampANSIWidth(content, innerW), max(height-2, 1))
+	return lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(styles.T.Color(TokenIron)).
+		Padding(0, 1).
+		Width(width).MaxWidth(width).
+		Height(height).MaxHeight(height).
+		Render(content)
 }
 
 // viewCompact is the narrow-terminal provider workspace. It keeps the
@@ -221,7 +289,7 @@ func (o *providersOverlay) viewCompact(styles Styles, width, height int) string 
 		label, status = card.label, card.status
 		switch {
 		case card.kind == "subscription" && !card.installed:
-			action = "install " + card.cli + " CLI"
+			action = "install Maestro runtime"
 		case card.kind == "subscription" && !card.connected:
 			action = "enter sign in"
 		case card.kind == "api" && card.requiresKey && !card.connected:
@@ -254,13 +322,11 @@ func (o *providersOverlay) primary(m *Model) tea.Cmd {
 	}
 	if card.kind == "subscription" {
 		if !card.installed {
-			m.status.pushToast("error", card.cli+" CLI is not installed", 4*time.Second)
+			m.status.pushToast("error", "Maestro runtime is not installed", 4*time.Second)
 			return nil
 		}
 		if card.connected {
-			m.overlay = overlayModelPicker
-			m.overlayM = newTaskModelOverlay(m.orch)
-			return nil
+			return m.openModelPicker()
 		}
 		return m.runSubscriptionAction(card.id, "login")
 	}
@@ -269,9 +335,7 @@ func (o *providersOverlay) primary(m *Model) tea.Cmd {
 		m.overlayM = newAuthOverlay(card.id, "")
 		return nil
 	}
-	m.overlay = overlayModelPicker
-	m.overlayM = newTaskModelOverlay(m.orch)
-	return nil
+	return m.openModelPicker()
 }
 
 func (o *providersOverlay) logout(m *Model) tea.Cmd {
@@ -283,9 +347,18 @@ func (o *providersOverlay) logout(m *Model) tea.Cmd {
 }
 
 func (o *providersOverlay) update(m *Model, msg tea.KeyMsg) tea.Cmd {
+	if o.loading || o.loadErr != "" {
+		switch {
+		case msg.Type == tea.KeyEsc:
+			m.closeProvidersOverlay()
+		case o.loadErr != "" && msg.Type == tea.KeyRunes && msg.String() == "r":
+			return m.openProviders(o.selectID)
+		}
+		return nil
+	}
 	switch msg.Type {
 	case tea.KeyEsc:
-		m.overlay = overlayNone
+		m.closeProvidersOverlay()
 	case tea.KeyUp:
 		o.selected = max(o.selected-1, 0)
 	case tea.KeyDown:
@@ -301,12 +374,11 @@ func (o *providersOverlay) update(m *Model, msg tea.KeyMsg) tea.Cmd {
 	case tea.KeyRunes:
 		switch msg.String() {
 		case "m":
-			m.overlay = overlayModelPicker
-			m.overlayM = newTaskModelOverlay(m.orch)
+			return m.openModelPicker()
 		case "x":
 			return o.logout(m)
 		case "r":
-			return func() tea.Msg { return modelsRefreshedMsg{err: m.orch.RefreshModels(context.Background())} }
+			return m.refreshModelsForOverlay()
 		default:
 			o.query += sanitizeSingleLineInput(string(msg.Runes))
 			o.selected = 0
@@ -355,6 +427,9 @@ func (m *Model) runSubscriptionAction(provider, action string) tea.Cmd {
 		return nil
 	}
 	return tea.ExecProcess(cmd, func(err error) tea.Msg {
+		if err == nil {
+			err = m.orch.ReloadCredentials(m.ctx())
+		}
 		return subscriptionActionDoneMsg{provider: provider, action: action, err: err}
 	})
 }

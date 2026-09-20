@@ -805,7 +805,7 @@ func TestProposeRecoversCompletedArchivePhase(t *testing.T) {
 func TestStructuredRunnersAreSilentCopies(t *testing.T) {
 	native := &nativeRunner{}
 	gotNative, ok := silentStructuredRunner(native).(*nativeRunner)
-	if !ok || !gotNative.silent || native.silent {
+	if !ok || !gotNative.silent || !gotNative.noTools || native.silent || native.noTools {
 		t.Fatalf("native planning runner was not isolated: original=%+v copy=%+v", native, gotNative)
 	}
 	legacy := &legacyRunner{}

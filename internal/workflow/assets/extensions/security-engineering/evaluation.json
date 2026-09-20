@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "extension": "security-engineering",
+  "purpose": "Editorial cases for human or agent evaluation; structural tests do not establish these decisions.",
+  "cases": [
+    {
+      "id": "relevant",
+      "prompt": "add private-data access with a new authorization boundary.",
+      "expected": "select",
+      "reason": "Reduce abuse risks affecting assets and trust boundaries touched by the change."
+    },
+    {
+      "id": "irrelevant",
+      "prompt": "adjust typographic spacing without affecting assets, permissions, or trust flows.",
+      "expected": "do-not-select",
+      "reason": "No responsibility of this domain is affected."
+    },
+    {
+      "id": "existing",
+      "prompt": "add private-data access with a new authorization boundary. The project already has an implementation and evidence of this capability, but no dedicated document.",
+      "expected": "inspect-and-reuse",
+      "reason": "Inspect evidence, classify coverage, and address only gaps; missing documentation does not mean the domain practice is absent."
+    },
+    {
+      "id": "insufficient",
+      "prompt": "The authorized path passes, but another user can access the same resource by changing its identifier.",
+      "expected": "failed-or-unverified",
+      "reason": "Compare against the approved criterion outcome; producing a file does not establish that the outcome was achieved."
+    }
+  ]
+}

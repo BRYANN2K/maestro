@@ -1,6 +1,8 @@
 package editor
 
 import (
+	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -60,15 +62,15 @@ func TestListFilesUsesGitTrackedAndUntrackedNULSafe(t *testing.T) {
 		want = append(want, newlineName)
 	}
 	sort.Strings(want)
-	if got := ListFiles(root, 100); !slices.Equal(got, want) {
+	if got, err := ListFiles(t.Context(), root, 100); err != nil || !slices.Equal(got, want) {
 		t.Fatalf("root files = %#v, want %#v", got, want)
 	}
 
 	wantSub := []string{"tracked.go", "untracked.md"}
-	if got := ListFiles(filepath.Join(root, "sub"), 100); !slices.Equal(got, wantSub) {
+	if got, err := ListFiles(t.Context(), filepath.Join(root, "sub"), 100); err != nil || !slices.Equal(got, wantSub) {
 		t.Fatalf("subdirectory files = %#v, want %#v", got, wantSub)
 	}
-	if got := ListFiles(root, 3); !slices.Equal(got, want[:3]) {
+	if got, err := ListFiles(t.Context(), root, 3); err != nil || !slices.Equal(got, want[:3]) {
 		t.Fatalf("limited files = %#v, want %#v", got, want[:3])
 	}
 }
@@ -90,7 +92,7 @@ func TestReadGitFileListStreamsWithDeterministicCeiling(t *testing.T) {
 	writePickerFile(t, root, "a.txt", []byte("a\n"))
 	writePickerFile(t, root, "z.txt", []byte("z\n"))
 
-	got, stopped, err := readGitFileList(strings.NewReader("z.txt\x00a.txt\x00z.txt\x00"), root, 1)
+	got, stopped, err := readGitFileList(context.Background(), strings.NewReader("z.txt\x00a.txt\x00z.txt\x00"), root, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,7 +101,7 @@ func TestReadGitFileListStreamsWithDeterministicCeiling(t *testing.T) {
 	}
 
 	boundedInput := strings.NewReader(strings.Repeat("a.txt\x00", listFilesGitMaxRecords+1))
-	got, stopped, err = readGitFileList(boundedInput, root, 2)
+	got, stopped, err = readGitFileList(context.Background(), boundedInput, root, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,18 +129,79 @@ func TestListFilesFallsBackOutsideGit(t *testing.T) {
 	}
 
 	want := []string{"alpha.txt", "space name.test", filepath.Join("src", "unicodé.go")}
-	if got := ListFiles(root, 100); !slices.Equal(got, want) {
+	if got, err := ListFiles(t.Context(), root, 100); err != nil || !slices.Equal(got, want) {
 		t.Fatalf("fallback files = %#v, want %#v", got, want)
 	}
-	if got := ListFiles(root, 2); !slices.Equal(got, want[:2]) {
+	if got, err := ListFiles(t.Context(), root, 2); err != nil || !slices.Equal(got, want[:2]) {
 		t.Fatalf("limited fallback files = %#v, want %#v", got, want[:2])
 	}
-	if got := ListFiles(filepath.Join(root, "missing"), 10); got != nil {
+	if got, err := ListFiles(t.Context(), filepath.Join(root, "missing"), 10); err != nil || got != nil {
 		t.Fatalf("missing-root files = %#v, want nil", got)
 	}
 	fileRoot := filepath.Join(root, "alpha.txt")
-	if got := ListFiles(fileRoot, 10); got != nil {
+	if got, err := ListFiles(t.Context(), fileRoot, 10); err != nil || got != nil {
 		t.Fatalf("regular-file root = %#v, want nil", got)
+	}
+}
+
+func TestListFilesReportsGitFailureInsideRepository(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("test uses a POSIX git shim")
+	}
+	root := t.TempDir()
+	writePickerFile(t, root, "kept.go", []byte("package kept\n"))
+	if err := os.Mkdir(filepath.Join(root, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	shimDir := t.TempDir()
+	shim := filepath.Join(shimDir, "git")
+	script := `#!/bin/sh
+case "$*" in
+  *ls-files*) echo "forced file listing failure" >&2; exit 23 ;;
+  *rev-parse*) echo "git unavailable" >&2; exit 24 ;;
+  *) exit 2 ;;
+esac
+`
+	if err := os.WriteFile(shim, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", shimDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	files, err := ListFiles(t.Context(), root, 100)
+	if err == nil || !strings.Contains(err.Error(), "git file listing") {
+		t.Fatalf("Git listing failure = %#v, %v; want a visible git file listing error", files, err)
+	}
+	if files != nil {
+		t.Fatalf("Git listing failure returned a misleading repository snapshot: %#v", files)
+	}
+}
+
+func TestListFilesWalkHonorsCancellationAndTraversalBounds(t *testing.T) {
+	root := t.TempDir()
+	writePickerFile(t, root, "a.txt", []byte("a\n"))
+	writePickerFile(t, root, filepath.Join("b", "nested.txt"), []byte("nested\n"))
+	writePickerFile(t, root, "z.txt", []byte("z\n"))
+
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if files, err := listWalkedFiles(cancelled, root, 100); !errors.Is(err, context.Canceled) || files != nil {
+		t.Fatalf("cancelled walk = %#v, %v; want nil, context.Canceled", files, err)
+	}
+
+	files, err := listWalkedFilesBounded(t.Context(), root, 100, 2, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) > 2 || containsPath(files, filepath.Join("b", "nested.txt")) {
+		t.Fatalf("entry-bounded walk retained %d files: %#v", len(files), files)
+	}
+
+	files, err = listWalkedFilesBounded(t.Context(), root, 100, 100, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(files, []string{"a.txt", "z.txt"}) {
+		t.Fatalf("directory-bounded walk crossed the first child directory: %#v", files)
 	}
 }
 

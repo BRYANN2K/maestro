@@ -12,7 +12,6 @@ import (
 	"testing"
 	"time"
 
-	legacyagent "github.com/bryann2k/maestro/internal/agent"
 	"github.com/bryann2k/maestro/internal/agentcore"
 	"github.com/bryann2k/maestro/internal/proposals"
 	"github.com/bryann2k/maestro/internal/settings"
@@ -24,33 +23,6 @@ func (runnerFunc) maestroReadOnlySkillRunner() {}
 
 func (f runnerFunc) Run(ctx context.Context, role agentcore.Role, prompt string) (agentcore.AgentResult, error) {
 	return f(ctx, role, prompt)
-}
-
-func TestEngineChoices(t *testing.T) {
-	orch := newTestOrch(t, newTestRepo(t), &fakeRunner{})
-	choices := orch.EngineChoices("dev")
-	if len(choices) < 2 {
-		t.Fatalf("choices = %+v", choices)
-	}
-	if choices[0].Engine != "native" {
-		t.Errorf("first choice = %+v, want native", choices[0])
-	}
-	if got := choices[0].Label(); !strings.Contains(got, "Maestro agent") || !strings.Contains(got, "local model") {
-		t.Errorf("native product label = %q", got)
-	}
-	legacy := map[string]bool{}
-	for _, c := range choices[1:] {
-		if c.Engine != "legacy" || c.Agent == "" {
-			t.Errorf("choice = %+v", c)
-		}
-		if got := c.Label(); !strings.HasPrefix(got, "subscription · ") || strings.Contains(got, "legacy") {
-			t.Errorf("subscription product label = %q", got)
-		}
-		legacy[c.Agent] = true
-	}
-	if !legacy["codex"] || !legacy["claude"] || !legacy["opencode"] {
-		t.Errorf("legacy agents = %v", legacy)
-	}
 }
 
 func TestRememberEnginePersists(t *testing.T) {
@@ -68,50 +40,14 @@ func TestRememberEnginePersists(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	orch.rememberEngine("dev", "legacy", "codex")
+	orch.rememberEngine("dev", "native", "")
 	loaded, err := settings.Load(context.Background(), settingsPath)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
 	rd := loaded.RoleDefaults["dev"]
-	if rd.Engine != "legacy" || rd.Agent != "codex" {
+	if rd.Engine != "native" || rd.Agent != "" {
 		t.Errorf("persisted = %+v", rd)
-	}
-}
-
-func TestBuildRememberedEnginePreSelected(t *testing.T) {
-	// A legacy default in settings must be picked by buildRunner.
-	o := &Orchestrator{settings: settings.Defaults()}
-	o.settings.RoleDefaults["dev"] = settings.RoleDefaults{Engine: "legacy", Agent: "claude"}
-	runner, err := o.buildRunner(BuildOptions{})
-	if err != nil {
-		t.Fatalf("buildRunner: %v", err)
-	}
-	lr, ok := runner.(*legacyRunner)
-	if !ok {
-		t.Fatalf("runner = %T, want legacyRunner", runner)
-	}
-	if lr.agent.Name() != "Claude Code" {
-		t.Errorf("agent = %s", lr.agent.Name())
-	}
-}
-
-func TestNewDoesNotMaskExplicitEngineChoice(t *testing.T) {
-	dir := newTestRepo(t)
-	orch, err := New(context.Background(), Options{
-		ProjectDir:  dir,
-		SessionsDir: filepath.Join(t.TempDir(), "sessions"),
-		Settings:    settings.Defaults(),
-	})
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	runner, err := orch.buildRunner(BuildOptions{Engine: "legacy", Agent: "claude"})
-	if err != nil {
-		t.Fatalf("buildRunner: %v", err)
-	}
-	if _, ok := runner.(*legacyRunner); !ok {
-		t.Fatalf("runner = %T, want *legacyRunner", runner)
 	}
 }
 
@@ -211,6 +147,78 @@ func TestGofmtCheckFailsClosedWhenToolExecutionFails(t *testing.T) {
 	items := orch.gofmtCheck(context.Background())
 	if len(items) != 1 || items[0].Level != "fail" || !strings.Contains(items[0].Message, "gofmt broken.go failed") {
 		t.Fatalf("gofmt findings = %+v, want execution fail", items)
+	}
+}
+
+func TestGofmtCheckBatchesOrdinaryPaths(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("test uses a POSIX executable shim")
+	}
+	dir := newTestRepo(t)
+	orch := newTestOrch(t, dir, &fakeRunner{})
+	for i := 0; i < gofmtBatchSize*2+1; i++ {
+		name := fmt.Sprintf("batch-%03d.go", i)
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("package main\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	toolDir := t.TempDir()
+	countPath := filepath.Join(t.TempDir(), "calls")
+	gofmtPath := filepath.Join(toolDir, "gofmt")
+	if err := os.WriteFile(gofmtPath, []byte("#!/bin/sh\nprintf 'call\\n' >> \"$MAESTRO_GOFMT_COUNT\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gitPath, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(gitPath, filepath.Join(toolDir, "git")); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("MAESTRO_GOFMT_COUNT", countPath)
+	t.Setenv("PATH", toolDir)
+
+	if items := orch.gofmtCheck(context.Background()); len(items) != 0 {
+		t.Fatalf("gofmt findings = %+v", items)
+	}
+	data, err := os.ReadFile(countPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls := strings.Count(string(data), "call\n"); calls != 3 {
+		t.Fatalf("gofmt processes = %d, want 3 batched invocations", calls)
+	}
+}
+
+func TestGofmtCheckFormatsStableCopiesAfterWorkspaceReplacement(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("test uses a POSIX executable shim and FIFO")
+	}
+	dir := newTestRepo(t)
+	orch := newTestOrch(t, dir, &fakeRunner{})
+	original := filepath.Join(dir, "stable.go")
+	if err := os.WriteFile(original, []byte("package main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	toolDir := t.TempDir()
+	gofmtPath := filepath.Join(toolDir, "gofmt")
+	script := "#!/bin/sh\n" +
+		"rm -f \"$MAESTRO_ORIGINAL\"\n" +
+		"mkfifo \"$MAESTRO_ORIGINAL\"\n" +
+		"for candidate in \"$@\"; do\n" +
+		"  case \"$candidate\" in -l|--) continue ;; esac\n" +
+		"  while IFS= read -r line; do :; done < \"$candidate\"\n" +
+		"done\n"
+	if err := os.WriteFile(gofmtPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("MAESTRO_ORIGINAL", original)
+	t.Setenv("PATH", toolDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	if items := orch.gofmtCheck(ctx); len(items) != 0 {
+		t.Fatalf("stable-copy gofmt findings = %+v", items)
 	}
 }
 
@@ -403,90 +411,5 @@ func TestIsolatedRunCleansTemporaryWorktreeAfterCancellation(t *testing.T) {
 	worktrees := gitRun(t, dir, "worktree", "list", "--porcelain")
 	if got := strings.Count(worktrees, "worktree "); got != 1 {
 		t.Fatalf("cancelled run leaked a worktree; list has %d entries:\n%s", got, worktrees)
-	}
-}
-
-func TestIsolatedLegacyRunUsesWorktreeAndLeavesCheckoutUntouchedOnFailure(t *testing.T) {
-	dir := newTestRepo(t)
-	orch := newTestOrch(t, dir, &fakeRunner{})
-	cwdLog := filepath.Join(t.TempDir(), "cwd.log")
-	t.Setenv("MAESTRO_CWD_LOG", cwdLog)
-	gitCommon, err := filepath.EvalSymlinks(filepath.Join(dir, ".git"))
-	if err != nil {
-		t.Fatalf("resolve test repository git dir: %v", err)
-	}
-	t.Setenv("MAESTRO_EXPECTED_GIT_COMMON", gitCommon)
-
-	binDir := t.TempDir()
-	shim := filepath.Join(binDir, "opencode")
-	script := `#!/bin/sh
-set -eu
-pwd -P > "$MAESTRO_CWD_LOG"
-git rev-parse --show-toplevel >> "$MAESTRO_CWD_LOG"
-common_dir=$(git rev-parse --git-common-dir 2>/dev/null || true)
-if [ -n "$common_dir" ]; then
-  case "$common_dir" in
-    /*) ;;
-    *) common_dir="$PWD/$common_dir" ;;
-  esac
-  common_dir=$(cd "$common_dir" && pwd -P)
-  if [ "$common_dir" = "$MAESTRO_EXPECTED_GIT_COMMON" ]; then
-    touch legacy-agent-marker.txt
-  fi
-fi
-exit 9
-`
-	if err := os.WriteFile(shim, []byte(script), 0o755); err != nil {
-		t.Fatalf("write opencode shim: %v", err)
-	}
-	t.Setenv("PATH", binDir+":"+os.Getenv("PATH"))
-
-	legacy := &legacyRunner{agent: legacyagent.NewOpenCodeAgent(), o: orch, silent: true}
-	runner, err := orch.isolatedRunner(legacy)
-	if err != nil {
-		t.Fatalf("isolatedRunner: %v", err)
-	}
-	result, err := runner.Run(t.Context(), agentcore.RoleDev, "mutate the workspace")
-	if err == nil || !strings.Contains(err.Error(), "opencode exited") {
-		t.Fatalf("Run error = %v, want legacy subprocess failure", err)
-	}
-	var streamErr agentcore.StreamError
-	if !errors.As(err, &streamErr) {
-		t.Fatalf("Run error type = %T, want agentcore.StreamError in chain", err)
-	}
-	if result.OK {
-		t.Fatal("Run result OK = true, want failed legacy subprocess")
-	}
-
-	data, err := os.ReadFile(cwdLog)
-	if err != nil {
-		t.Fatalf("read cwd log: %v", err)
-	}
-	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
-	if len(lines) != 2 {
-		t.Fatalf("cwd log = %q, want cwd and git root", data)
-	}
-	worktreeDir, gitRoot := filepath.Clean(lines[0]), filepath.Clean(lines[1])
-	if _, err := os.Stat(worktreeDir); !os.IsNotExist(err) {
-		t.Fatalf("isolated worktree cleanup state for %q: %v", worktreeDir, err)
-	}
-	canonicalDir, err := filepath.EvalSymlinks(dir)
-	if err != nil {
-		t.Fatalf("canonicalize original checkout: %v", err)
-	}
-	if worktreeDir == canonicalDir {
-		t.Fatalf("legacy subprocess ran in original checkout %q", dir)
-	}
-	if gitRoot != worktreeDir {
-		t.Fatalf("active git worktree root = %q, subprocess cwd = %q", gitRoot, worktreeDir)
-	}
-	if filepath.Base(worktreeDir) != "worktree" || !strings.HasPrefix(filepath.Base(filepath.Dir(worktreeDir)), "maestro-isolated-dev-") {
-		t.Fatalf("legacy subprocess cwd = %q, want a Maestro isolated worktree", worktreeDir)
-	}
-	if _, err := os.Stat(filepath.Join(dir, "legacy-agent-marker.txt")); !os.IsNotExist(err) {
-		t.Fatalf("original checkout was mutated: %v", err)
-	}
-	if status := strings.TrimSpace(gitRun(t, dir, "status", "--porcelain", "--untracked-files=all")); status != "" {
-		t.Fatalf("original checkout is dirty after failed isolated run:\n%s", status)
 	}
 }

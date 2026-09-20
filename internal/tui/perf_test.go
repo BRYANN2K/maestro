@@ -93,3 +93,15 @@ func BenchmarkIDEStreamingFrame(b *testing.B) {
 		_ = m.View()
 	}
 }
+
+func BenchmarkMessageAppendStreamingDelta(b *testing.B) {
+	const delta = "one streamed token "
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		message := &Message{}
+		for part := 0; part < 4096; part++ {
+			message.appendText(delta)
+		}
+	}
+}

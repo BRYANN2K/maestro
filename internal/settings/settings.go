@@ -39,6 +39,7 @@ type RoleDefaults struct {
 
 // Settings is the persisted user configuration.
 type Settings struct {
+	RetiredRoutes  map[string]RoleDefaults `json:"retired_routes,omitempty"`
 	RoleDefaults   map[string]RoleDefaults `json:"role_defaults,omitempty"`
 	ModelSlots     map[string]string       `json:"model_slots,omitempty"` // "large"|"small" → model ID
 	PermissionMode string                  `json:"permission_mode,omitempty"`
@@ -109,6 +110,16 @@ func Load(ctx context.Context, path string) (Settings, error) {
 	// files readable while preserving the stable on-disk contract: omitted
 	// reasoning_effort means provider/vendor automatic selection.
 	for role, defaults := range s.RoleDefaults {
+		if defaults.Engine == "legacy" || defaults.Engine == "subscription" || defaults.Agent != "" {
+			// Vendor aliases and credentials are not API model selectors. Preserve the
+			// old route as a migration notice, then require provider selection.
+			if s.RetiredRoutes == nil {
+				s.RetiredRoutes = map[string]RoleDefaults{}
+			}
+			s.RetiredRoutes[role] = defaults
+			defaults = RoleDefaults{Engine: "native"}
+		}
+
 		if defaults.ReasoningEffort == "auto" {
 			defaults.ReasoningEffort = ""
 			defaults.ReasoningSet = true
@@ -182,7 +193,7 @@ func (s Settings) Valid() error {
 		return fmt.Errorf("permission mode %q invalid", s.PermissionMode)
 	}
 	for role, rd := range s.RoleDefaults {
-		if rd.Engine != "" && rd.Engine != "native" && rd.Engine != "legacy" {
+		if rd.Engine != "" && rd.Engine != "native" || rd.Agent != "" {
 			return fmt.Errorf("role %s: engine %q invalid", role, rd.Engine)
 		}
 		switch rd.ReasoningEffort {

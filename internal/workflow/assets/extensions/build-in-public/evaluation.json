@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "extension": "build-in-public",
+  "purpose": "Editorial cases for human or agent evaluation; structural tests do not establish these decisions.",
+  "cases": [
+    {
+      "id": "relevant",
+      "prompt": "prepare a post showing an actually built feature and development lessons.",
+      "expected": "select",
+      "reason": "Prepare useful public updates about project progress, evidence, lessons, and limitations."
+    },
+    {
+      "id": "irrelevant",
+      "prompt": "build a private feature without a request for public communication.",
+      "expected": "do-not-select",
+      "reason": "No responsibility of this domain is affected."
+    },
+    {
+      "id": "existing",
+      "prompt": "prepare a post showing an actually built feature and development lessons. The project already has an implementation and evidence of this capability, but no dedicated document.",
+      "expected": "inspect-and-reuse",
+      "reason": "Inspect evidence, classify coverage, and address only gaps; missing documentation does not mean the domain practice is absent."
+    },
+    {
+      "id": "insufficient",
+      "prompt": "The draft was reviewed but contains a secret or presents a prototype as available; it cannot be declared ready.",
+      "expected": "failed-or-unverified",
+      "reason": "Compare against the approved criterion outcome; producing a file does not establish that the outcome was achieved."
+    }
+  ]
+}

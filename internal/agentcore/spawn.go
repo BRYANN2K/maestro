@@ -12,21 +12,23 @@ import (
 
 // SpawnOptions configures one native sub-agent spawn (§4, §11.3.1).
 type SpawnOptions struct {
-	Role      Role
-	Provider  Provider
-	Model     string
-	Sampling  Sampling
-	System    []Message
-	Tools     map[string]Tool
-	Gate      Gate
-	SpecFiles []string // spec.md + design.md + tasks.md, seeded into context
-	Diff      string   // git diff, seeded for reviewers
-	OnEvent   func(StreamEvent)
-	Stopper   *Stopper
-	Rules     *RuleSet      // F1
-	Budget    *BudgetState  // F2
-	AntiLoop  *AntiLoop     // F3
-	MaxTurn   time.Duration // per-turn watchdog override (0 = default)
+	Role             Role
+	Provider         Provider
+	Model            string
+	ContextWindow    int // selected model input + output window
+	DefaultMaxTokens int // selected model output limit when Sampling omits it
+	Sampling         Sampling
+	System           []Message
+	Tools            map[string]Tool
+	Gate             Gate
+	SpecFiles        []string // spec.md + design.md + tasks.md, seeded into context
+	Diff             string   // git diff, seeded for reviewers
+	OnEvent          func(StreamEvent)
+	Stopper          *Stopper
+	Rules            *RuleSet      // F1
+	Budget           *BudgetState  // F2
+	AntiLoop         *AntiLoop     // F3
+	MaxTurn          time.Duration // per-turn watchdog override (0 = default)
 }
 
 // AgentResult is the typed yield of a sub-agent run (§11.3.1): a validated,
@@ -65,19 +67,21 @@ func Spawn(ctx context.Context, opts SpawnOptions) (*Loop, error) {
 		opts.Gate = GateFunc(AllowAll)
 	}
 	return &Loop{
-		Provider: opts.Provider,
-		Model:    opts.Model,
-		Sampling: opts.Sampling,
-		Role:     opts.Role,
-		System:   system,
-		Tools:    opts.Tools,
-		Gate:     opts.Gate,
-		Stopper:  opts.Stopper,
-		OnEvent:  opts.OnEvent,
-		Rules:    opts.Rules,
-		Budget:   opts.Budget,
-		AntiLoop: opts.AntiLoop,
-		MaxTurn:  opts.MaxTurn,
+		Provider:         opts.Provider,
+		Model:            opts.Model,
+		ContextWindow:    opts.ContextWindow,
+		DefaultMaxTokens: opts.DefaultMaxTokens,
+		Sampling:         opts.Sampling,
+		Role:             opts.Role,
+		System:           system,
+		Tools:            opts.Tools,
+		Gate:             opts.Gate,
+		Stopper:          opts.Stopper,
+		OnEvent:          opts.OnEvent,
+		Rules:            opts.Rules,
+		Budget:           opts.Budget,
+		AntiLoop:         opts.AntiLoop,
+		MaxTurn:          opts.MaxTurn,
 	}, nil
 }
 
@@ -160,14 +164,21 @@ func RunResult(ctx context.Context, loop *Loop, taskPrompt string) (AgentResult,
 	loop.OnEvent = func(ev StreamEvent) {
 		if ev.Type == EvDone {
 			if d, ok := ev.Content.(Done); ok && d.Cost != nil {
-				cost = d.Cost.Total()
+				// A tool-using loop can make several provider turns. Report the
+				// run cost, not merely the final completion's cost.
+				cost += d.Cost.Total()
 			}
 		}
 		if onEvent != nil {
 			onEvent(ev)
 		}
 	}
-	err := loop.Run(ctx, taskPrompt)
+	var err error
+	if loop.Harness {
+		err = loop.RunHarness(ctx, taskPrompt)
+	} else {
+		err = loop.Run(ctx, taskPrompt)
+	}
 	res := AgentResult{
 		Role:     string(loop.systemRole()),
 		OK:       err == nil,

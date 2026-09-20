@@ -88,6 +88,20 @@ drained:
 	}
 }
 
+func TestChatDeadlineDoesNotPersistPartialAnswer(t *testing.T) {
+	runner := runnerFunc(func(context.Context, agentcore.Role, string) (agentcore.AgentResult, error) {
+		return agentcore.AgentResult{Role: string(agentcore.RoleOrchestrator), OK: false, Summary: "partial answer"}, context.DeadlineExceeded
+	})
+	orch := newTestOrch(t, newTestRepo(t), runner)
+	if err := orch.Chat(context.Background(), "time out"); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Chat error = %v, want context.DeadlineExceeded", err)
+	}
+	turns := orch.Session().Conversation
+	if len(turns) != 1 || turns[0].Role != "user" {
+		t.Fatalf("deadline partial answer persisted: %+v", turns)
+	}
+}
+
 func TestProposeWithoutArgumentsUsesConversation(t *testing.T) {
 	runner := &fakeRunner{}
 	orch := newTestOrch(t, newTestRepo(t), runner)

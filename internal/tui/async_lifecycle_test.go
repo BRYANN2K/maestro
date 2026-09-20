@@ -222,6 +222,14 @@ func TestDiffOverlayResolvesItsExactProposal(t *testing.T) {
 				key = 'd'
 			}
 			m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{key}})
+			if action == "accept" {
+				confirm, ok := m.overlayM.(*proposalConfirmationOverlay)
+				if m.overlay != overlayProposalConfirm || !ok || confirm.prop != &first {
+					t.Fatalf("accept confirmation lost the displayed proposal: overlay=%v target=%T", m.overlay, m.overlayM)
+				}
+				m.Update(tea.KeyMsg{Type: tea.KeyTab})
+				m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+			}
 
 			if len(m.pending) != 1 || m.pending[0] != secondCard || secondCard.Status != "proposed" {
 				t.Fatalf("%s resolved the newest proposal instead of the displayed one: %+v", action, m.pending)

@@ -5,8 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
+	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 )
 
 // Gate authorizes tool execution. The loop asks before every tool call.
@@ -92,17 +95,23 @@ func (s *Stopper) Quit() <-chan struct{} { return s.quitCh }
 // Loop is the conversation loop. The same loop drives the orchestrator's
 // chat and, spawned with scoped tools, the native sub-agents.
 type Loop struct {
+	// Harness selects the bundled OMP scheduler for production runs.
+	Harness  bool
 	Provider Provider
 	Model    string
-	Role     Role // orchestrator by default; set by Spawn
-	Sampling Sampling
-	System   []Message
-	Tools    map[string]Tool
-	Gate     Gate
-	History  []Message
-	Stopper  *Stopper
-	OnEvent  func(StreamEvent)
-	MaxTurns int // max provider turns per Run, 0 = unlimited (default 20)
+	// ContextWindow and DefaultMaxTokens are selected-model metadata used by
+	// the request preflight before every provider turn.
+	ContextWindow    int
+	DefaultMaxTokens int
+	Role             Role // orchestrator by default; set by Spawn
+	Sampling         Sampling
+	System           []Message
+	Tools            map[string]Tool
+	Gate             Gate
+	History          []Message
+	Stopper          *Stopper
+	OnEvent          func(StreamEvent)
+	MaxTurns         int // max provider turns per Run, 0 = unlimited (default 20)
 	// MaxOutputBytes bounds cumulative provider deltas and tool results retained
 	// during one Run. Zero selects the safe default; it cannot be disabled.
 	MaxOutputBytes int
@@ -170,7 +179,11 @@ func (l *Loop) Run(ctx context.Context, userPrompt string) error {
 		turnCtx, tourCancel := context.WithTimeout(base, maxTurn)
 		l.Stopper.Reset(tourCancel)
 		assistant, calls, _, injected, err := l.oneTurn(turnCtx)
-		watchdogFired := turnCtx.Err() == context.DeadlineExceeded
+		// A child timeout inherits an earlier parent deadline. Only attribute the
+		// failure to Maestro's per-turn watchdog while the parent run is still
+		// live; callers otherwise need the original cancellation/deadline so they
+		// can avoid persisting it as a provider protocol failure.
+		watchdogFired := errors.Is(turnCtx.Err(), context.DeadlineExceeded) && base.Err() == nil
 		if err != nil {
 			tourCancel()
 			l.Stopper.Reset(nil)
@@ -239,33 +252,106 @@ func (l *Loop) Run(ctx context.Context, userPrompt string) error {
 // the partial output is dropped, a reminder was appended to History, and
 // the caller must re-run the turn.
 func (l *Loop) oneTurn(ctx context.Context) (assistant Message, calls []ToolCall, done *Done, injected bool, err error) {
+	// Provider streams commonly split a response into hundreds or thousands
+	// of small SSE deltas. Repeated `string += delta` copies the complete
+	// response on every event (quadratic bytes and allocations). Builders keep
+	// accumulation linear while still exposing the complete text to the
+	// optional stream-rule matcher without another copy.
+	var content strings.Builder
+	var reasoning strings.Builder
+	type thinkingAccumulator struct {
+		block     ThinkingBlock
+		thinking  strings.Builder
+		signature strings.Builder
+		data      strings.Builder
+	}
 	thinkingByIndex := map[int]int{}
+	var thinking []*thinkingAccumulator
 	specs := make([]ToolSpec, 0, len(l.Tools))
 	for _, t := range l.Tools {
 		specs = append(specs, t.Spec())
+	}
+	// Go map iteration is intentionally random. Stable tool ordering keeps
+	// otherwise identical provider prefixes byte-for-byte cacheable and makes
+	// request traces reproducible.
+	sort.Slice(specs, func(i, j int) bool { return specs[i].Name < specs[j].Name })
+	sampling := l.Sampling
+	if sampling.MaxTokens <= 0 && l.DefaultMaxTokens > 0 {
+		sampling.MaxTokens = l.DefaultMaxTokens
+	} else if sampling.MaxTokens <= 0 && l.ContextWindow > 0 {
+		sampling.MaxTokens = defaultReservedOutput
 	}
 	req := Request{
 		Model:    l.Model,
 		System:   l.System,
 		Messages: l.History,
-		Sampling: l.Sampling,
+		Sampling: sampling,
 		Tools:    specs,
 	}
+	plan, err := PlanContext(req, l.ContextWindow, l.DefaultMaxTokens)
+	if err != nil {
+		msg := "context preflight: " + err.Error()
+		l.emit(NewEvent(&l.seq, l.systemRole(), EvError, StreamError{Message: msg}))
+		return Message{}, nil, nil, false, errors.New(msg)
+	}
+	if err := plan.Check(); err != nil {
+		msg := "context preflight: " + err.Error()
+		l.emit(NewEvent(&l.seq, l.systemRole(), EvError, StreamError{Message: msg}))
+		return Message{}, nil, nil, false, errors.New(msg)
+	}
+	var reservation *BudgetReservation
 	if l.Budget != nil {
-		if est := l.Budget.Estimate(req); est > 0 {
-			l.emit(NewEvent(&l.seq, l.systemRole(), EvHITL, HITLItem{ID: "budget-estimate", Item: fmt.Sprintf("estimated cost $%.4f", est), Status: "done"}))
+		// Re-run cost preflight for every provider turn. Tool results grow the
+		// prompt between turns. This is the sole side-effecting admission point:
+		// the outer orchestrator preview is deliberately read-only.
+		cost, costErr := l.Provider.Cost(req, Usage{
+			InputTokens: plan.EstimatedInputTokens, OutputTokens: plan.ReservedOutputTokens,
+		})
+		if costErr != nil {
+			msg := "budget preflight: " + costErr.Error()
+			l.emit(NewEvent(&l.seq, l.systemRole(), EvError, StreamError{Message: msg}))
+			return Message{}, nil, nil, false, errors.New(msg)
 		}
+		estimate := cost.Total()
+		reservation, err = l.Budget.ReserveEstimate(ctx, estimate)
+		if err != nil {
+			msg := "budget preflight: " + err.Error()
+			l.emit(NewEvent(&l.seq, l.systemRole(), EvError, StreamError{Message: msg}))
+			return Message{}, nil, nil, false, errors.New(msg)
+		}
+		// Once Stream succeeds the provider request may have incurred cost. Any
+		// path without a valid Done retains the lease until its bounded expiry.
+		defer func() { l.Budget.AbandonReservation(reservation) }()
 	}
 	ch, err := l.Provider.Stream(ctx, req)
 	if err != nil {
+		if l.Budget != nil {
+			if releaseErr := l.Budget.ReleaseReservation(ctx, reservation); releaseErr != nil {
+				reservation = nil
+				return Message{}, nil, nil, false, releaseErr
+			}
+			reservation = nil
+		}
 		return Message{}, nil, nil, false, fmt.Errorf("stream: %w", err)
 	}
 	for ev := range ch {
 		if l.Budget != nil {
-			if kill, alert := l.Budget.Track(ev); kill {
-				l.emit(NewEvent(&l.seq, l.systemRole(), EvError, StreamError{Message: "budget cap reached — run aborted"}))
-				return Message{}, nil, nil, false, fmt.Errorf("budget cap reached")
-			} else if alert {
+			decision := l.Budget.TrackReservation(ctx, ev, reservation)
+			if decision.Kill {
+				budgetErr := l.Budget.Err()
+				// A valid provider completion incurred real cost even when that
+				// completion reaches the cap. Forward its accounting event before
+				// the terminal budget error so RunResult/session totals stay exact.
+				if ev.Type == EvDone && decision.AccountDone {
+					l.emit(ev)
+				}
+				msg := "budget cap reached — run aborted"
+				if budgetErr != nil {
+					msg = "budget accounting failed — run aborted: " + budgetErr.Error()
+				}
+				l.emit(NewEvent(&l.seq, l.systemRole(), EvError, StreamError{Message: msg}))
+				return Message{}, nil, nil, false, errors.New(msg)
+			} else if decision.Alert {
 				l.emit(NewEvent(&l.seq, l.systemRole(), EvHITL, HITLItem{ID: "budget-alert", Item: "budget at 80%", Status: "pending"}))
 			}
 		}
@@ -280,9 +366,9 @@ func (l *Loop) oneTurn(ctx context.Context) (assistant Message, calls []ToolCall
 					assistant.TextBlockIndex = td.Index
 					assistant.TextBlockIndexed = true
 				}
-				assistant.Content += td.Text
-				if l.Rules != nil {
-					if reminder, fired := l.Rules.Check(assistant.Content); fired {
+				content.WriteString(td.Text)
+				if l.Rules != nil && l.Rules.HasActive() {
+					if reminder, fired := l.Rules.Check(content.String()); fired {
 						// Mid-token interruption: drop the partial output,
 						// inject the rule as a system reminder, resume.
 						l.emit(NewEvent(&l.seq, l.systemRole(), EvAdvisorNote, AdvisorNote{Level: "concern", Note: "stream rule fired: " + reminder}))
@@ -295,21 +381,21 @@ func (l *Loop) oneTurn(ctx context.Context) (assistant Message, calls []ToolCall
 			if rd, ok := ev.Content.(ReasoningDelta); ok {
 				// Thinking-mode reasoning must be kept verbatim: reasoning
 				// providers reject the next request without it.
-				assistant.Reasoning += rd.Text
+				reasoning.WriteString(rd.Text)
 				if rd.Indexed || rd.BlockType != "" || rd.Signature != "" || rd.Data != "" {
 					position, exists := thinkingByIndex[rd.Index]
 					if !exists {
-						position = len(assistant.ThinkingBlocks)
+						position = len(thinking)
 						thinkingByIndex[rd.Index] = position
-						assistant.ThinkingBlocks = append(assistant.ThinkingBlocks, ThinkingBlock{Type: rd.BlockType, Index: rd.Index})
+						thinking = append(thinking, &thinkingAccumulator{block: ThinkingBlock{Type: rd.BlockType, Index: rd.Index}})
 					}
-					block := &assistant.ThinkingBlocks[position]
+					block := thinking[position]
 					if rd.BlockType != "" {
-						block.Type = rd.BlockType
+						block.block.Type = rd.BlockType
 					}
-					block.Thinking += rd.Text
-					block.Signature += rd.Signature
-					block.Data += rd.Data
+					block.thinking.WriteString(rd.Text)
+					block.signature.WriteString(rd.Signature)
+					block.data.WriteString(rd.Data)
 				}
 			}
 		case EvToolCall:
@@ -329,7 +415,26 @@ func (l *Loop) oneTurn(ctx context.Context) (assistant Message, calls []ToolCall
 		}
 	}
 	if done == nil {
+		// Providers intentionally stop publishing when their request context is
+		// canceled. Preserve that cause instead of converting a normal user cancel
+		// or inherited deadline into a misleading truncated-stream error.
+		if err := ctx.Err(); err != nil {
+			return Message{}, nil, nil, false, err
+		}
 		return Message{}, nil, nil, false, errors.New("provider stream closed without a completion event")
+	}
+	assistant.ProviderState = done.ProviderState
+	assistant.Content = content.String()
+	assistant.Reasoning = reasoning.String()
+	if len(thinking) > 0 {
+		assistant.ThinkingBlocks = make([]ThinkingBlock, len(thinking))
+		for i, accumulated := range thinking {
+			block := accumulated.block
+			block.Thinking = accumulated.thinking.String()
+			block.Signature = accumulated.signature.String()
+			block.Data = accumulated.data.String()
+			assistant.ThinkingBlocks[i] = block
+		}
 	}
 	assistant.Role = "assistant"
 	return assistant, calls, done, false, nil
@@ -341,6 +446,8 @@ func streamEventOutputBytes(ev StreamEvent) int {
 		return len(value.Text)
 	case ReasoningDelta:
 		return len(value.Text) + len(value.Signature) + len(value.Data)
+	case Done:
+		return len(value.ProviderState)
 	case ToolCall:
 		return len(value.ID) + len(value.Name) + len(value.Args)
 	case StreamError:
@@ -376,9 +483,22 @@ func (l *Loop) injectAntiLoop(call ToolCall) {
 		"Reflection: you have called %s(%s) repeatedly with the same arguments. "+
 			"Step back: is this still making progress? If not, change approach or explain why "+
 			"the repetition is necessary. Do not repeat the same call unchanged.",
-		call.Name, call.Args)
+		call.Name, toolArgsPreview(call.Args))
 	l.History = append(l.History, Message{Role: "system", Content: prompt})
 	l.emit(NewEvent(&l.seq, l.systemRole(), EvAdvisorNote, AdvisorNote{Level: "concern", Note: "anti-loop: " + call.Name + " repeated — reflection injected"}))
+}
+
+const antiLoopArgsPreviewBytes = 512
+
+func toolArgsPreview(args string) string {
+	if len(args) <= antiLoopArgsPreviewBytes {
+		return args
+	}
+	preview := args[:antiLoopArgsPreviewBytes]
+	for preview != "" && !utf8.ValidString(preview) {
+		preview = preview[:len(preview)-1]
+	}
+	return fmt.Sprintf("%s… [sha256:%s]", preview, sha256Sum(args)[:12])
 }
 
 // runTool gates and executes one tool call, returning the tool-result

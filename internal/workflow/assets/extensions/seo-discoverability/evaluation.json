@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "extension": "seo-discoverability",
+  "purpose": "Editorial cases for human or agent evaluation; structural tests do not establish these decisions.",
+  "cases": [
+    {
+      "id": "relevant",
+      "prompt": "publish a public documentation page intended for organic search discovery.",
+      "expected": "select",
+      "reason": "Make public content discoverable and indexable according to its purpose and constraints."
+    },
+    {
+      "id": "irrelevant",
+      "prompt": "modify a private dashboard not intended for indexing.",
+      "expected": "do-not-select",
+      "reason": "No responsibility of this domain is affected."
+    },
+    {
+      "id": "existing",
+      "prompt": "publish a public documentation page intended for organic search discovery. The project already has an implementation and evidence of this capability, but no dedicated document.",
+      "expected": "inspect-and-reuse",
+      "reason": "Inspect evidence, classify coverage, and address only gaps; missing documentation does not mean the domain practice is absent."
+    },
+    {
+      "id": "insufficient",
+      "prompt": "Metadata exists, but the public page remains blocked by robots or noindex.",
+      "expected": "failed-or-unverified",
+      "reason": "Compare against the approved criterion outcome; producing a file does not establish that the outcome was achieved."
+    }
+  ]
+}

@@ -1,0 +1,84 @@
+{
+  "palette": "ink / ivory / lavender",
+  "cover": {
+    "tool": "built-in ImageGen",
+    "prompt": "docs/brand/cover-prompt.txt",
+    "references": [
+      "docs/assets/tui-contract.png",
+      "docs/brand/exports/maestro-logo-primary.png"
+    ]
+  },
+  "screenshots": {
+    "capture": "production Go host + compiled OpenTUI via PTY",
+    "project": "isolated session-memory example",
+    "date": "2026-09-20",
+    "unaltered": true
+  },
+  "assets": [
+    {
+      "path": "docs/assets/maestro-cover.png",
+      "sha256": "5104bff7419ba0cd5d0f5d2b77ca440230713e04c56500e0cd6e9c2bbef60bd8",
+      "bytes": 1256159
+    },
+    {
+      "path": "docs/assets/tui-compact.png",
+      "sha256": "552322359d082060555d625e88f35ea9ed31ebe302862108b5e41a82ca279308",
+      "bytes": 40171
+    },
+    {
+      "path": "docs/assets/tui-connections.png",
+      "sha256": "63d17e0c3a9960a0c5a59009f9c2669f808a82b38197290de0b908033e6514db",
+      "bytes": 119597
+    },
+    {
+      "path": "docs/assets/tui-contract.png",
+      "sha256": "e94edcd90b0368f4d451f2fcb89e52a582e62846e15c8d24b737ac19647478c1",
+      "bytes": 108106
+    },
+    {
+      "path": "docs/brand/exports/maestro-app-icon-dark.png",
+      "sha256": "25ba8d04dd1ec918e88be0c03a3a814b266d8f31ddadaebbd61eeeb9b3b0c2d3",
+      "bytes": 66641
+    },
+    {
+      "path": "docs/brand/exports/maestro-app-icon-dark.svg",
+      "sha256": "aafca3ea547ed64e7db70e86b21a794c8cc0c4a488b20b3ce46f763ba14370fd",
+      "bytes": 844
+    },
+    {
+      "path": "docs/brand/exports/maestro-app-icon-light.png",
+      "sha256": "e62c4cd3209c04f0822a3b0646b53c1c6b5df5caa0bc764e6d8273b8b3acfa10",
+      "bytes": 65136
+    },
+    {
+      "path": "docs/brand/exports/maestro-app-icon-light.svg",
+      "sha256": "ac712de2939e1ca5c8a74f7bf84beb7bf114cfc624ea65ba8c2343958f0d77f1",
+      "bytes": 845
+    },
+    {
+      "path": "docs/brand/exports/maestro-logo-horizontal.svg",
+      "sha256": "1d1a942b9628869b660c2fced3fefb3b7963f862317ba76bbce8240b2b473da8",
+      "bytes": 4155
+    },
+    {
+      "path": "docs/brand/exports/maestro-logo-primary.png",
+      "sha256": "8daf9c2fcfe851474fa5980ccf789656e2a1b8aa4fe8f61641984831e87a604b",
+      "bytes": 854777
+    },
+    {
+      "path": "docs/brand/exports/maestro-logo-primary.svg",
+      "sha256": "1615315779c6b4129d24e160aa63e50dcae2526e25542454e13e83cfee33acea",
+      "bytes": 3601
+    },
+    {
+      "path": "docs/brand/exports/maestro-logo-transparent.png",
+      "sha256": "f6c7563476454ed6dbf81b96fc3dd44b414e2c5afb64cc98a19bf49e0e170f9c",
+      "bytes": 184785
+    },
+    {
+      "path": "docs/brand/exports/maestro-logo-transparent.svg",
+      "sha256": "3c99ee06e5294bcf905cd7af4f752935a04ef558a0fa748063609ff006466bef",
+      "bytes": 3539
+    }
+  ]
+}

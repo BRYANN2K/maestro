@@ -48,13 +48,25 @@ func readGitWorkspaceIdentity(ctx context.Context, dir string) (gitWorkspaceIden
 }
 
 func (o *Orchestrator) validateSessionWorkspaceIdentity(ctx context.Context, operation string) error {
+	_, err := o.validatedSessionWorkspaceIdentity(ctx, operation)
+	return err
+}
+
+func (o *Orchestrator) validatedSessionWorkspaceIdentity(ctx context.Context, operation string) (gitWorkspaceIdentity, error) {
 	if strings.TrimSpace(o.sess.WorkspaceRef) == "" {
-		return fmt.Errorf("%s: session has no accepted workspace identity; restart the spec lifecycle", operation)
+		return gitWorkspaceIdentity{}, fmt.Errorf("%s: session has no accepted workspace identity; restart the spec lifecycle", operation)
 	}
 	identity, err := readGitWorkspaceIdentity(ctx, o.workDir())
 	if err != nil {
-		return fmt.Errorf("%s: verify workspace identity: %w", operation, err)
+		return gitWorkspaceIdentity{}, fmt.Errorf("%s: verify workspace identity: %w", operation, err)
 	}
+	if err := o.validateSessionWorkspaceIdentitySnapshot(identity, operation); err != nil {
+		return gitWorkspaceIdentity{}, err
+	}
+	return identity, nil
+}
+
+func (o *Orchestrator) validateSessionWorkspaceIdentitySnapshot(identity gitWorkspaceIdentity, operation string) error {
 	if identity.ref != o.sess.WorkspaceRef {
 		return fmt.Errorf("%s: active branch is %q, but this spec was accepted on %q; switch back before continuing", operation, identity.ref, o.sess.WorkspaceRef)
 	}
@@ -81,6 +93,13 @@ func (o *Orchestrator) requireReviewedGitIdentity(ctx context.Context, operation
 	identity, err := readGitWorkspaceIdentity(ctx, o.workDir())
 	if err != nil {
 		return fmt.Errorf("%s: verify reviewed Git identity: %w", operation, err)
+	}
+	return o.requireReviewedGitIdentitySnapshot(identity, operation)
+}
+
+func (o *Orchestrator) requireReviewedGitIdentitySnapshot(identity gitWorkspaceIdentity, operation string) error {
+	if o.sess.Review == nil || strings.TrimSpace(o.sess.Review.GitRef) == "" || strings.TrimSpace(o.sess.Review.GitHead) == "" {
+		return fmt.Errorf("%s: the passing review has no Git ref/HEAD identity; rerun /review", operation)
 	}
 	if identity.ref != o.sess.Review.GitRef || identity.head != o.sess.Review.GitHead {
 		return fmt.Errorf("%s: Git ref or HEAD changed after review; rerun /review", operation)

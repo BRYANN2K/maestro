@@ -44,3 +44,10 @@ __pycache__/
 *.db
 *.db-shm
 *.db-wal
+
+# Private harness build dependencies
+/runtime/node_modules/
+/runtime/dist/
+
+/ui/node_modules/
+/ui/dist/

@@ -1,8 +1,12 @@
 package orchestrator
 
 import (
+	"context"
+	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/bryann2k/maestro/internal/agentcore"
 	"github.com/bryann2k/maestro/internal/config"
@@ -129,7 +133,7 @@ func TestBudgetKillBindsToRun(t *testing.T) {
 
 func TestBudgetCountersResetForEachRun(t *testing.T) {
 	dir := newTestRepo(t)
-	cfg := &config.Config{Options: map[string]string{"budget-max-usd": "1"}}
+	cfg := &config.Config{Options: map[string]string{"budget-max-usd": "1", "budget-max-daily-usd": "0.5"}}
 	orch, err := New(t.Context(), Options{
 		ProjectDir:  dir,
 		SessionsDir: t.TempDir() + "/s",
@@ -149,5 +153,99 @@ func TestBudgetCountersResetForEachRun(t *testing.T) {
 	defer cancel2()
 	if got := orch.guardrails.Budget.Spent(); got != 0 {
 		t.Fatalf("second run inherited spend %.2f", got)
+	}
+	if got := orch.guardrails.Budget.Daily(); got != 0.25 {
+		t.Fatalf("second run lost daily spend %.2f", got)
+	}
+	kill, _ := orch.guardrails.Budget.Track(agentcore.NewEvent(nil, agentcore.RoleDev, agentcore.EvDone, agentcore.Done{Cost: &agentcore.Cost{InputUSD: 0.25}}))
+	if !kill {
+		t.Fatal("daily budget did not stop cumulative spend at the configured limit")
+	}
+}
+
+func TestDailyBudgetSurvivesOrchestratorReopen(t *testing.T) {
+	dir := newTestRepo(t)
+	sessionsDir := filepath.Join(t.TempDir(), "sessions")
+	cfg := &config.Config{Options: map[string]string{"budget-max-daily-usd": "1"}}
+	first, err := New(t.Context(), Options{
+		ProjectDir: dir, SessionsDir: sessionsDir, Config: cfg, Runner: &fakeRunner{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first.BudgetState().Track(agentcore.NewEvent(nil, agentcore.RoleDev, agentcore.EvDone, agentcore.Done{
+		Cost: &agentcore.Cost{InputUSD: 0.25},
+	}))
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	second, err := New(t.Context(), Options{
+		ProjectDir: dir, SessionsDir: sessionsDir, Config: cfg, Runner: &fakeRunner{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = second.Close() })
+	if got := second.BudgetState().Daily(); got != 0.25 {
+		t.Fatalf("reopened daily spend = %.2f, want .25", got)
+	}
+}
+
+func TestDailyBudgetFinalizationUsesDetachedBoundedContext(t *testing.T) {
+	dir := newTestRepo(t)
+	cfg := &config.Config{Options: map[string]string{"budget-max-daily-usd": "1"}}
+	orch, err := New(t.Context(), Options{
+		ProjectDir: dir, SessionsDir: filepath.Join(t.TempDir(), "sessions"), Config: cfg, Runner: &fakeRunner{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = orch.Close() })
+	budget := orch.BudgetState()
+	token, err := budget.ReserveEstimate(t.Context(), 0.20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	decision := budget.TrackReservation(canceled, agentcore.NewEvent(nil, agentcore.RoleDev, agentcore.EvDone, agentcore.Done{
+		Cost: &agentcore.Cost{InputUSD: 0.10},
+	}), token)
+	if decision.Kill || !decision.AccountDone || budget.Err() != nil || budget.Daily() != 0.10 {
+		t.Fatalf("settle after cancellation: decision=%+v daily=%.2f err=%v", decision, budget.Daily(), budget.Err())
+	}
+
+	releasedToken, err := budget.ReserveEstimate(t.Context(), 0.20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := budget.ReleaseReservation(canceled, releasedToken); err != nil {
+		t.Fatalf("release after cancellation: %v", err)
+	}
+	if err := budget.CheckEstimate(0.70); err != nil {
+		t.Fatalf("detached release left a durable liability: %v", err)
+	}
+}
+
+func TestBudgetWallClockIsARealRunDeadline(t *testing.T) {
+	dir := newTestRepo(t)
+	cfg := &config.Config{Options: map[string]string{"budget-max-wall-clock": "20ms"}}
+	orch, err := New(t.Context(), Options{
+		ProjectDir: dir, SessionsDir: filepath.Join(t.TempDir(), "sessions"), Config: cfg, Runner: &fakeRunner{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = orch.Close() })
+	ctx, cancel := orch.bindBudgetKill(t.Context())
+	defer cancel()
+	select {
+	case <-ctx.Done():
+		if !errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			t.Fatalf("deadline error = %v", ctx.Err())
+		}
+	case <-time.After(time.Second):
+		t.Fatal("silent run ignored budget wall-clock deadline")
 	}
 }

@@ -47,6 +47,9 @@ func TestPermissionDockUsesOpenCodeHierarchy(t *testing.T) {
 			t.Errorf("permission dock missing %q:\n%s", want, view)
 		}
 	}
+	if !strings.Contains(view, ">d  Reject") {
+		t.Fatalf("permission dock does not visibly focus the safe default:\n%s", view)
+	}
 	if strings.Contains(view, "Tool:") || strings.Contains(view, "Args:") {
 		t.Fatalf("legacy key/value form leaked into dock:\n%s", view)
 	}
@@ -62,6 +65,20 @@ func TestPermissionDockStaysWithinNarrowTerminal(t *testing.T) {
 		if width := ansi.StringWidth(line); width > 42 {
 			t.Errorf("line %d width = %d, want <= 42: %q", i, width, stripANSI(line))
 		}
+	}
+}
+
+func TestPermissionDialogDefaultsToReject(t *testing.T) {
+	dialog := newPermissionDialog(&permissionRequest{
+		Call: agentcore.ToolCall{Name: "bash"},
+		Spec: agentcore.ToolSpec{Name: "bash", NeedsApproval: true},
+	}, NewPermissionQueue(1))
+
+	if dialog.buttonSel != 2 {
+		t.Fatalf("default permission selection = %d, want Reject (2)", dialog.buttonSel)
+	}
+	if err := dialog.resolve(); err == nil {
+		t.Fatal("confirming the default permission selection approved the request")
 	}
 }
 

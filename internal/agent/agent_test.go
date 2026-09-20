@@ -14,6 +14,25 @@ import (
 	"github.com/bryann2k/maestro/internal/agentcore"
 )
 
+func TestSendAgentEventUnblocksOnCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	ch := make(chan agentcore.StreamEvent, 1)
+	ch <- agentcore.NewEvent(nil, agentcore.RoleDev, agentcore.EvTextDelta, agentcore.TextDelta{Text: "full"})
+	done := make(chan bool, 1)
+	go func() {
+		done <- sendAgentEvent(ctx, ch, agentcore.NewEvent(nil, agentcore.RoleDev, agentcore.EvTextDelta, agentcore.TextDelta{Text: "blocked"}))
+	}()
+	cancel()
+	select {
+	case sent := <-done:
+		if sent {
+			t.Fatal("event sent after cancellation")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("blocked legacy event send ignored cancellation")
+	}
+}
+
 func TestParseCodexLine(t *testing.T) {
 	tests := []struct {
 		name string

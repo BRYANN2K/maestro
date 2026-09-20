@@ -1,6 +1,7 @@
 package editor
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -164,6 +165,9 @@ type Editor struct {
 	standardAnchor    Cursor
 	standardSelecting bool
 	lastOpenError     error
+	deferExternalIO   bool
+	pendingOpenPath   string
+	pendingStagePath  string
 
 	Status string // transient status flash
 
@@ -227,6 +231,25 @@ func (e *Editor) Buffer() *Buffer {
 	return e.Buffers[e.CurBuf]
 }
 
+// DeferExternalIO makes command-mode file opens and hunk staging emit an
+// EditAction instead of performing filesystem or Git work in Editor.Update.
+// The TUI owns those effects and applies their result back on its event loop.
+func (e *Editor) DeferExternalIO() { e.deferExternalIO = true }
+
+// TakeOpenRequest consumes the path requested by the latest deferred :e.
+func (e *Editor) TakeOpenRequest() (string, bool) {
+	path := e.pendingOpenPath
+	e.pendingOpenPath = ""
+	return path, path != ""
+}
+
+// TakeHunkStageRequest consumes the path requested by :hunk stage.
+func (e *Editor) TakeHunkStageRequest() (string, bool) {
+	path := e.pendingStagePath
+	e.pendingStagePath = ""
+	return path, path != ""
+}
+
 // Open loads a file into a new buffer (or focuses an existing one).
 func (e *Editor) Open(path string) error {
 	for i, b := range e.Buffers {
@@ -246,6 +269,39 @@ func (e *Editor) Open(path string) error {
 	e.Mode = ModeNormal
 	e.lastOpenError = nil
 	return nil
+}
+
+// LoadContext reads one bounded editor buffer without mutating an Editor.
+// It is intended for effect workers; InstallLoadedBuffer publishes the result
+// later from the UI event loop.
+func LoadContext(ctx context.Context, path string) (*Buffer, error) {
+	data, err := readTextFileContext(ctx, path)
+	if err != nil {
+		return nil, err
+	}
+	return NewBuffer(path, data), nil
+}
+
+// InstallLoadedBuffer publishes an already validated buffer. Existing paths
+// are focused rather than duplicated. The caller must own the editor state.
+func (e *Editor) InstallLoadedBuffer(path string, loaded *Buffer, err error) bool {
+	if err != nil || loaded == nil {
+		e.lastOpenError = err
+		return false
+	}
+	for i, b := range e.Buffers {
+		if b != nil && b.Path == path {
+			e.CurBuf = i
+			e.lastOpenError = nil
+			return true
+		}
+	}
+	loaded.Path = path
+	e.Buffers = append(e.Buffers, loaded)
+	e.CurBuf = len(e.Buffers) - 1
+	e.Mode = ModeNormal
+	e.lastOpenError = nil
+	return true
 }
 
 // LastOpenError reports the most recent Open failure. It lets the TUI route a
@@ -1052,6 +1108,11 @@ func (e *Editor) runCommand(line string) EditAction {
 		if !strings.HasPrefix(path, "/") {
 			path = e.Project + "/" + path
 		}
+		if e.deferExternalIO {
+			e.pendingOpenPath = path
+			e.Status = "opening " + path
+			return ActOpenFile
+		}
 		if err := e.Open(path); err != nil {
 			e.Status = SafeOpenError(err)
 		} else {
@@ -1064,6 +1125,15 @@ func (e *Editor) runCommand(line string) EditAction {
 		return ActAgentReview
 	case "hunk":
 		if len(fields) == 2 && fields[1] == "stage" {
+			if e.deferExternalIO {
+				if b := e.Buffer(); b != nil {
+					e.pendingStagePath = b.Path
+					e.Status = "staging hunks…"
+					return ActHunkStage
+				}
+				e.Status = "error: no active buffer"
+				return ActNone
+			}
 			if e.StageHunks != nil {
 				if err := e.StageHunks(e.Buffer()); err != nil {
 					e.Status = "error: " + err.Error()

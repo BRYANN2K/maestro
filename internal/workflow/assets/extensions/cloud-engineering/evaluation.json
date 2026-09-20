@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "extension": "cloud-engineering",
+  "purpose": "Editorial cases for human or agent evaluation; structural tests do not establish these decisions.",
+  "cases": [
+    {
+      "id": "relevant",
+      "prompt": "migrate a managed service and define its restoration, access, and budget.",
+      "expected": "select",
+      "reason": "Design reproducible cloud resources with access controls, recovery, health, and cost considerations."
+    },
+    {
+      "id": "irrelevant",
+      "prompt": "modify a local application without affecting cloud services or topology.",
+      "expected": "do-not-select",
+      "reason": "No responsibility of this domain is affected."
+    },
+    {
+      "id": "existing",
+      "prompt": "migrate a managed service and define its restoration, access, and budget. The project already has an implementation and evidence of this capability, but no dedicated document.",
+      "expected": "inspect-and-reuse",
+      "reason": "Inspect evidence, classify coverage, and address only gaps; missing documentation does not mean the domain practice is absent."
+    },
+    {
+      "id": "insufficient",
+      "prompt": "The IaC plan passes, but no restore is tested although the contract requires an RTO/RPO.",
+      "expected": "failed-or-unverified",
+      "reason": "Compare against the approved criterion outcome; producing a file does not establish that the outcome was achieved."
+    }
+  ]
+}

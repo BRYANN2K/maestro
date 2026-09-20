@@ -6,7 +6,19 @@ import (
 	"strings"
 
 	"charm.land/lipgloss/v2"
+
+	"github.com/bryann2k/maestro/internal/editor"
 )
+
+const editorSymbolLookback = 512
+
+type ideSymbolCache struct {
+	buffer     *editor.Buffer
+	revision   uint64
+	cursorLine int
+	value      string
+	valid      bool
+}
 
 // renderIDE draws the approved code-first layout: a narrow explorer, a
 // dominant editor and a compact Agent/HITL companion rail.
@@ -17,14 +29,6 @@ func (m *Model) renderIDE() string {
 	}
 	editorW, treeW, railW := m.idePaneWidths()
 	bodyH := m.bodyHeight()
-
-	if b := ide.Ed.Buffer(); b != nil && ide.UI.Gutter != nil && ide.UI.Gutter.Path != b.Path {
-		if ide.gutterDeferred {
-			ide.clearGutter(b.Path)
-		} else {
-			ide.UI.Gutter.Refresh(m.ctx(), b.Path)
-		}
-	}
 
 	// The mockup is a workspace grid, not three cards. Two quiet vertical
 	// dividers preserve most of the terminal for code and avoid the heavy
@@ -167,19 +171,33 @@ func (m *Model) renderEditorHeader(ide *IDEState, width int) string {
 	} else if symbol := editorSymbol(ide); symbol != "" {
 		label += "  ›  " + symbol
 	}
+	if ide != nil && ide.hydrating {
+		label += "  ·  restoring editor…"
+	} else if ide != nil && ide.gutterDeferred {
+		label += "  ·  loading changes…"
+	} else if ide != nil && ide.gutterError != "" {
+		label += "  ·  changes unavailable"
+	}
 	label = safeIDEPlainText(label)
 	text := "  ▧  " + label + dirty
 	return lipgloss.NewStyle().Foreground(m.styles.T.Color(TokenSmoke)).Render(truncateRunes(text, max(width, 1)))
 }
 
 // editorSymbol derives a lightweight breadcrumb without introducing an LSP
-// dependency. It intentionally recognizes only stable, useful landmarks.
+// dependency. The result is revision-aware and the cold scan is bounded, so a
+// frame never walks an entire large file merely to repaint its header.
 func editorSymbol(ide *IDEState) string {
 	if ide == nil || ide.Ed == nil || ide.Ed.Buffer() == nil {
 		return ""
 	}
 	b := ide.Ed.Buffer()
-	for i := min(b.Cur.Line, len(b.Lines)-1); i >= 0; i-- {
+	cursorLine := min(b.Cur.Line, len(b.Lines)-1)
+	cache := &ide.symbolCache
+	if cache.valid && cache.buffer == b && cache.revision == b.Revision() && cache.cursorLine == cursorLine {
+		return cache.value
+	}
+	value := ""
+	for i, floor := cursorLine, max(cursorLine-editorSymbolLookback+1, 0); i >= floor; i-- {
 		line := strings.TrimSpace(b.LineText(i))
 		switch {
 		case strings.HasPrefix(line, "func "):
@@ -190,18 +208,25 @@ func editorSymbol(ide *IDEState) string {
 				}
 			}
 			if end := strings.Index(name, "("); end > 0 {
-				return name[:end]
+				value = name[:end]
 			}
 		case strings.HasPrefix(line, "#"):
-			return strings.TrimSpace(strings.TrimLeft(line, "#"))
+			value = strings.TrimSpace(strings.TrimLeft(line, "#"))
 		case strings.HasPrefix(line, "type "):
 			fields := strings.Fields(line)
 			if len(fields) > 1 {
-				return fields[1]
+				value = fields[1]
 			}
 		}
+		if value != "" {
+			break
+		}
 	}
-	return ""
+	*cache = ideSymbolCache{
+		buffer: b, revision: b.Revision(), cursorLine: cursorLine,
+		value: value, valid: true,
+	}
+	return value
 }
 
 // renderIDECompanion keeps task approvals, the latest agent handoff and the

@@ -1,0 +1,17 @@
+[
+  {
+    "name": "oh-my-pi",
+    "url": "https://github.com/can1357/oh-my-pi",
+    "commit": "10b867cb2eeb7809b883a88dfebe1919ff0c2764"
+  },
+  {
+    "name": "prime-agent",
+    "url": "https://github.com/PrimeIntellect-ai/prime-agent",
+    "commit": "e311d6495124cf0bdc629c813fc97a39a9a3054d"
+  },
+  {
+    "name": "stipulate",
+    "url": "https://github.com/BRYANN2K/stipulate-skills",
+    "commit": "318902a0c92197b5d95efeb10e61f6bb49d44993"
+  }
+]

@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "extension": "content-design",
+  "purpose": "Editorial cases for human or agent evaluation; structural tests do not establish these decisions.",
+  "cases": [
+    {
+      "id": "relevant",
+      "prompt": "rewrite form errors and instructions so recovery is understandable.",
+      "expected": "select",
+      "reason": "Help people understand and complete their task through clear content in the right context."
+    },
+    {
+      "id": "irrelevant",
+      "prompt": "change internal configuration without affecting reader-facing text.",
+      "expected": "do-not-select",
+      "reason": "No responsibility of this domain is affected."
+    },
+    {
+      "id": "existing",
+      "prompt": "rewrite form errors and instructions so recovery is understandable. The project already has an implementation and evidence of this capability, but no dedicated document.",
+      "expected": "inspect-and-reuse",
+      "reason": "Inspect evidence, classify coverage, and address only gaps; missing documentation does not mean the domain practice is absent."
+    },
+    {
+      "id": "insufficient",
+      "prompt": "The text follows the style guide, but readers still do not understand how to correct their error.",
+      "expected": "failed-or-unverified",
+      "reason": "Compare against the approved criterion outcome; producing a file does not establish that the outcome was achieved."
+    }
+  ]
+}

@@ -7,11 +7,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	legacyagent "github.com/bryann2k/maestro/internal/agent"
 	"github.com/bryann2k/maestro/internal/agentcore"
-	"github.com/bryann2k/maestro/internal/settings"
 )
 
 func installProjectSkill(t *testing.T, root, name, description, body string) {
@@ -26,35 +24,10 @@ func installProjectSkill(t *testing.T, root, name, description, body string) {
 	}
 }
 
-type oversizedLegacyAgent struct {
-	canceled chan struct{}
-}
-
 type untrustedCustomRunner struct{}
 
 func (untrustedCustomRunner) Run(context.Context, agentcore.Role, string) (agentcore.AgentResult, error) {
 	return agentcore.AgentResult{OK: true}, nil
-}
-
-func (a *oversizedLegacyAgent) Name() string     { return "oversized" }
-func (a *oversizedLegacyAgent) Models() []string { return nil }
-func (a *oversizedLegacyAgent) Execute(ctx context.Context, _ string, _ legacyagent.Options) (<-chan agentcore.StreamEvent, error) {
-	ch := make(chan agentcore.StreamEvent)
-	go func() {
-		defer close(ch)
-		delta := strings.Repeat("x", 1<<20)
-		for range 9 {
-			select {
-			case ch <- agentcore.NewEvent(nil, agentcore.RoleDev, agentcore.EvTextDelta, agentcore.TextDelta{Text: delta}):
-			case <-ctx.Done():
-				close(a.canceled)
-				return
-			}
-		}
-		<-ctx.Done()
-		close(a.canceled)
-	}()
-	return ch, nil
 }
 
 func TestSkillAPIsEnableInspectAndRunExplicitly(t *testing.T) {
@@ -129,39 +102,6 @@ func TestSkillBodyIsNeverInjectedIntoOrdinaryChat(t *testing.T) {
 	joined := strings.Join(prompts, "\n")
 	if strings.Contains(joined, marker) || strings.Contains(joined, "MAESTRO_EXPLICIT_SKILL_JSON") {
 		t.Fatalf("ordinary chat received skill instructions:\n%s", joined)
-	}
-}
-
-func TestSkillRunUsesSubscriptionRoleRoute(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	t.Setenv("MAESTRO_SKILLS_DIR", filepath.Join(t.TempDir(), "skill-state"))
-	dir := newTestRepo(t)
-	installProjectSkill(t, dir, "luna-review", "Review with subscription", "Read and explain.\n")
-	state := settings.Defaults()
-	state.RoleDefaults[settings.RoleOrchestrator] = settings.RoleDefaults{
-		Engine: "legacy", Agent: "codex", Model: "gpt-5.6-luna",
-	}
-	orch, err := New(t.Context(), Options{
-		ProjectDir: dir, SessionsDir: filepath.Join(t.TempDir(), "sessions"),
-		Settings: state, In: strings.NewReader(""), Out: &strings.Builder{},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	runner, err := orch.runnerForRole(settings.RoleOrchestrator)
-	if err != nil {
-		t.Fatal(err)
-	}
-	legacy, ok := runner.(*legacyRunner)
-	if !ok || legacy.model != "gpt-5.6-luna" || legacy.agent.Name() != "Codex" {
-		t.Fatalf("subscription route = %#v", runner)
-	}
-	// SkillRun calls this same resolver. A missing Codex executable proves it
-	// reached the subscription wrapper instead of falling back to native.
-	t.Setenv("PATH", t.TempDir())
-	_, err = orch.SkillRun(t.Context(), "luna-review")
-	if err == nil || strings.Contains(err.Error(), "native engine") {
-		t.Fatalf("SkillRun subscription error = %v", err)
 	}
 }
 
@@ -289,24 +229,6 @@ func TestReadOnlyNativeToolsExcludeMutationAskAndMCP(t *testing.T) {
 		if got[forbidden] != nil {
 			t.Fatalf("read-only native tools exposed %q", forbidden)
 		}
-	}
-}
-
-func TestLegacyRunnerCumulativeOutputLimitCancelsStream(t *testing.T) {
-	orch := newTestOrch(t, newTestRepo(t), &fakeRunner{})
-	provider := &oversizedLegacyAgent{canceled: make(chan struct{})}
-	runner := &legacyRunner{agent: provider, o: orch, silent: true}
-	result, err := runner.Run(t.Context(), agentcore.RoleOrchestrator, "bounded")
-	if err == nil || !strings.Contains(err.Error(), "exceeded") {
-		t.Fatalf("Run result=%+v error=%v, want cumulative limit", result, err)
-	}
-	if result.Summary != "" {
-		t.Fatalf("partial oversized result escaped: %d bytes", len(result.Summary))
-	}
-	select {
-	case <-provider.canceled:
-	case <-time.After(time.Second):
-		t.Fatal("legacy agent context was not canceled")
 	}
 }
 

@@ -366,6 +366,59 @@ func TestCommandMode(t *testing.T) {
 	}
 }
 
+func TestDeferredCommandIOEmitsRequestsWithoutRunningHooks(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "target.txt")
+	if err := os.WriteFile(path, []byte("hello\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	e := NewEditor(dir)
+	e.Buffers = []*Buffer{NewBuffer(path, []byte("hello\n"))}
+	e.CurBuf = 0
+	openCalls, stageCalls := 0, 0
+	e.OpenFile = func(string) error { openCalls++; return nil }
+	e.StageHunks = func(*Buffer) error { stageCalls++; return nil }
+	e.DeferExternalIO()
+
+	if action := e.runCommand("e next.txt"); action != ActOpenFile {
+		t.Fatalf(":e action = %v, want ActOpenFile", action)
+	}
+	wantOpen := filepath.Join(dir, "next.txt")
+	if got, ok := e.TakeOpenRequest(); !ok || got != wantOpen {
+		t.Fatalf("open request = %q, %v; want %q", got, ok, wantOpen)
+	}
+	if openCalls != 0 {
+		t.Fatalf("deferred :e ran hook %d time(s)", openCalls)
+	}
+
+	if action := e.runCommand("hunk stage"); action != ActHunkStage {
+		t.Fatalf(":hunk stage action = %v, want ActHunkStage", action)
+	}
+	if got, ok := e.TakeHunkStageRequest(); !ok || got != path {
+		t.Fatalf("stage request = %q, %v; want %q", got, ok, path)
+	}
+	if stageCalls != 0 {
+		t.Fatalf("deferred :hunk stage ran hook %d time(s)", stageCalls)
+	}
+}
+
+func TestBufferRevisionChangesOnlyWithContent(t *testing.T) {
+	b := NewBuffer("revision.go", []byte("package revision\n"))
+	initial := b.Revision()
+	b.Move(MotRight, 1)
+	if got := b.Revision(); got != initial {
+		t.Fatalf("cursor move changed revision: %d -> %d", initial, got)
+	}
+	b.InsertRune('x')
+	afterEdit := b.Revision()
+	if afterEdit <= initial {
+		t.Fatalf("edit revision = %d, want > %d", afterEdit, initial)
+	}
+	if !b.Undo() || b.Revision() <= afterEdit {
+		t.Fatalf("undo did not advance revision: %d -> %d", afterEdit, b.Revision())
+	}
+}
+
 func TestAgentReviewHunks(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "target.go")

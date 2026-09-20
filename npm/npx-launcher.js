@@ -15,10 +15,10 @@ const TAG = `v${VERSION}`;
 const RELEASE_BASE_URL = `https://github.com/${REPOSITORY}/releases/download/${TAG}`;
 const CHECKSUM_ASSET = "checksums.txt";
 const METADATA_FILE = "install.json";
-const MAX_ARCHIVE_BYTES = 128 * 1024 * 1024;
+const MAX_ARCHIVE_BYTES = 256 * 1024 * 1024;
 const MAX_CHECKSUM_BYTES = 1024 * 1024;
-const MAX_EXTRACTED_BYTES = 256 * 1024 * 1024;
-const MAX_BINARY_BYTES = 128 * 1024 * 1024;
+const MAX_EXTRACTED_BYTES = 512 * 1024 * 1024;
+const MAX_BINARY_BYTES = 256 * 1024 * 1024;
 const DOWNLOAD_TIMEOUT_MS = 30_000;
 const MAX_REDIRECTS = 5;
 const LOCK_TIMEOUT_MS = 120_000;
@@ -32,13 +32,12 @@ const TARGETS = Object.freeze({
   "linux:x64": Object.freeze({ os: "linux", arch: "amd64", format: "tar.gz" }),
   "linux:arm64": Object.freeze({ os: "linux", arch: "arm64", format: "tar.gz" }),
   "win32:x64": Object.freeze({ os: "windows", arch: "amd64", format: "zip" }),
-  "win32:arm64": Object.freeze({ os: "windows", arch: "arm64", format: "zip" }),
 });
 
 function targetFor(platform = process.platform, arch = process.arch) {
   const target = TARGETS[`${platform}:${arch}`];
   if (!target) {
-    const supported = "macOS, Linux, and Windows on x64 or arm64";
+    const supported = "macOS/Linux on x64 or arm64; Windows on x64";
     throw new Error(`unsupported platform ${platform}/${arch}; supported: ${supported}`);
   }
   return target;
@@ -46,6 +45,11 @@ function targetFor(platform = process.platform, arch = process.arch) {
 
 function executableName(platform = process.platform) {
   return platform === "win32" ? "maestro.exe" : "maestro";
+}
+
+function companionNames(platform, arch) {
+  targetFor(platform, arch);
+  return [platform === "win32" ? "maestro-ui.exe" : "maestro-ui", platform === "win32" ? "maestro-runtime.exe" : "maestro-runtime", `pi_natives.${platform}-${arch}${arch === "x64" ? "-baseline" : ""}.node`];
 }
 
 function assetName(platform = process.platform, arch = process.arch) {
@@ -172,7 +176,7 @@ function readSmallRegularFile(file, maxBytes, mode, platform, fsImpl = fs) {
 
 function expectedMetadata(platform, arch) {
   return {
-    schema: 1,
+    schema: 3,
     version: VERSION,
     platform,
     arch,
@@ -231,7 +235,15 @@ function cacheReady(
     ) {
       return false;
     }
-    return constantTimeHexEqual(sha256(fsImpl.readFileSync(bin)), metadata.binarySha256);
+    if (!constantTimeHexEqual(sha256(fsImpl.readFileSync(bin)), metadata.binarySha256)) return false;
+    for (const name of companionNames(platform, arch)) {
+      const file = path.join(path.dirname(bin), name);
+      const hash = metadata.companions && metadata.companions[name];
+      if (!validSHA256(hash)) return false;
+      const contents = readSmallRegularFile(file, MAX_BINARY_BYTES, 0o700, hostPlatform, fsImpl);
+      if (!contents.length || !constantTimeHexEqual(sha256(contents), hash)) return false;
+    }
+    return true;
   } catch {
     return false;
   }
@@ -857,7 +869,14 @@ async function install(options = {}) {
       0o700,
       fsImpl
     );
+    const companions = {};
+    for (const name of companionNames(platform, arch)) {
+      const contents = extractBinary(archive, target.format, name);
+      writeDurableFile(path.join(temporaryDir, name), contents, 0o700, fsImpl);
+      companions[name] = sha256(contents);
+    }
     const metadata = {
+      companions,
       ...expectedMetadata(platform, arch),
       archiveSha256: archiveHash,
       binarySha256: binaryHash,

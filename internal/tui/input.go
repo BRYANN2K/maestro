@@ -12,7 +12,7 @@ import (
 )
 
 // inputBox wraps bubbles/textarea with the Maestro sauce: Enter sends
-// (handled by the app), Shift+Enter newline, ↑/↓ history when the cursor is
+// (handled by the app), Ctrl+J/Alt+Enter newline, ↑/↓ history when the cursor is
 // at the boundaries, /command detection, placeholder, dynamic height up to
 // half the screen (Phase 6), and draft persistence (B11 §11.3).
 type inputBox struct {
@@ -34,9 +34,9 @@ func newInputBox(styles Styles) *inputBox {
 	ta.CharLimit = 0
 	ta.SetWidth(60)
 	ta.SetHeight(1)
-	// Maestro keymap: Shift+Enter inserts a newline; Enter is intercepted by
-	// the app for sending.
-	ta.KeyMap.InsertNewline.SetKeys("shift+enter", "ctrl+j")
+	// Maestro keymap: Ctrl+J is the portable newline; Alt+Enter remains an
+	// alias. Enter is intercepted by the app for sending.
+	ta.KeyMap.InsertNewline.SetKeys("ctrl+j", "alt+enter")
 	ta.Focus()
 	return &inputBox{ta: ta, styles: styles}
 }
@@ -104,7 +104,7 @@ func (ib *inputBox) update(msg tea.KeyMsg) bool {
 	return true
 }
 
-// insertNewline inserts a newline at the cursor (Shift+Enter).
+// insertNewline inserts a newline at the cursor.
 func (ib *inputBox) insertNewline() {
 	ib.ta.InsertString("\n")
 }

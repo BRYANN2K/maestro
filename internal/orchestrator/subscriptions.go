@@ -4,18 +4,17 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
-	"time"
 
-	"github.com/bryann2k/maestro/internal/agent"
+	"github.com/bryann2k/maestro/internal/runtimebridge"
+
 	"github.com/bryann2k/maestro/internal/agentcore"
 	"github.com/bryann2k/maestro/internal/settings"
 )
 
-// SubscriptionInfo describes an official coding-agent subscription that
-// Maestro can reuse through its CLI. Credentials remain owned by the vendor
-// CLI/keychain; Maestro only invokes login/status/logout and never reads them.
+// SubscriptionInfo describes a provider account used by the built-in harness.
 type SubscriptionInfo struct {
 	ID            string   `json:"id"`
 	Label         string   `json:"label"`
@@ -27,82 +26,52 @@ type SubscriptionInfo struct {
 	Models        []string `json:"models"`
 }
 
-type subscriptionSpec struct {
-	id, label, cli, agent string
-	login, status, logout []string
-	models                []string
-}
-
-var subscriptionSpecs = []subscriptionSpec{
-	{
-		id: "codex", label: "Codex · ChatGPT plan", cli: "codex", agent: "codex",
-		login: []string{"login"}, status: []string{"login", "status"}, logout: []string{"logout"},
-		models: []string{"auto", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"},
-	},
-	{
-		id: "claude", label: "Claude Code · Claude plan", cli: "claude", agent: "claude",
-		login: []string{"auth", "login"}, status: []string{"auth", "status", "--json"}, logout: []string{"auth", "logout"},
-		models: []string{"auto", "sonnet", "opus", "haiku"},
-	},
-}
-
-// SubscriptionList returns bounded, secret-free CLI status. A slow or broken
-// CLI is reported as unknown instead of blocking the TUI indefinitely.
 func (o *Orchestrator) SubscriptionList(ctx context.Context) []SubscriptionInfo {
-	out := make([]SubscriptionInfo, 0, len(subscriptionSpecs))
-	for _, spec := range subscriptionSpecs {
-		info := SubscriptionInfo{
-			ID: spec.id, Label: spec.label, CLI: spec.cli, Agent: spec.agent,
-			Status: "not installed", Models: append([]string(nil), spec.models...),
+	labels := map[string]string{"openai-codex": "OpenAI · ChatGPT", "anthropic": "Anthropic · Claude", "google-gemini-cli": "Google · Gemini", "github-copilot": "GitHub · Copilot"}
+	var result []SubscriptionInfo
+	for _, id := range agentcore.AccountProviders() {
+		key := ""
+		if o.vault != nil {
+			key, _ = o.vault.Get("key:" + id)
 		}
-		path, err := exec.LookPath(spec.cli)
-		if err != nil {
-			out = append(out, info)
-			continue
+		connected := agentcore.IsRuntimeCredential(key)
+		status := "connect account"
+		if connected {
+			status = "connected · Maestro"
 		}
-		info.Installed = true
-		info.Status = "signed out"
-		statusCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-		cmd := exec.CommandContext(statusCtx, path, spec.status...)
-		err = cmd.Run()
-		if statusCtx.Err() != nil {
-			info.Status = "status unavailable"
-		} else if err == nil {
-			info.Authenticated = true
-			info.Status = "connected"
+		var models []string
+		if connected && o.registry != nil {
+			if provider, ok := o.registry.Provider(id); ok {
+				for _, model := range provider.Models() {
+					models = append(models, id+"/"+model.ID)
+				}
+			}
 		}
-		cancel()
-		out = append(out, info)
+		result = append(result, SubscriptionInfo{ID: id, Label: labels[id], CLI: "Maestro", Installed: runtimebridge.Available(), Authenticated: connected, Status: status, Models: models})
 	}
-	return out
+	return result
 }
 
-// SubscriptionCommand returns the official interactive CLI command. It is
-// executed by Bubble Tea with terminal suspension, so browser/device prompts
-// work exactly as they do in a normal shell.
 func (o *Orchestrator) SubscriptionCommand(provider, action string) (*exec.Cmd, error) {
-	for _, spec := range subscriptionSpecs {
-		if spec.id != provider {
-			continue
-		}
-		path, err := exec.LookPath(spec.cli)
-		if err != nil {
-			return nil, errors.New(spec.cli + " CLI is not installed")
-		}
-		var args []string
-		switch action {
-		case "login":
-			args = spec.login
-		case "logout":
-			args = spec.logout
-		default:
-			return nil, errors.New("unknown subscription action " + action)
-		}
-		cmd := exec.Command(path, args...)
-		cmd.Dir = o.baseDir
-		return cmd, nil
+	if !agentcore.OAuthRuntimeSupported(provider) {
+		return nil, fmt.Errorf("unknown account provider %q", provider)
 	}
-	return nil, errors.New("unknown subscription provider " + provider)
+	operation := "oauth"
+	switch action {
+	case "login":
+	case "logout":
+		operation = "logout"
+	default:
+		return nil, fmt.Errorf("unsupported account action %q", action)
+	}
+	if _, err := runtimebridge.Path(); err != nil {
+		return nil, err
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		return nil, err
+	}
+	return exec.Command(executable, "--dir", o.baseDir, "auth", operation, provider), nil
 }
 
 // SetTaskModel persists the execution route for a Maestro task/role.
@@ -142,8 +111,8 @@ func (o *Orchestrator) setTaskModelWithReasoning(ctx context.Context, role, engi
 		return errors.New("task role is required")
 	}
 	engine = normalizeEngineName(engine)
-	if engine != "native" && engine != "legacy" {
-		return errors.New("task engine must be native or subscription")
+	if engine != "native" || agentName != "" {
+		return errors.New("maestro is the only harness; select a provider/model")
 	}
 	next := o.SettingsSnapshot()
 	if next.RoleDefaults == nil {
@@ -275,10 +244,7 @@ func (o *Orchestrator) initializeReasoningSettings(ctx context.Context) error {
 	return nil
 }
 
-// normalizeEngineName keeps the historical on-disk value "legacy" readable
-// while exposing the accurate product name "subscription" to users. External
-// coding CLIs reuse vendor subscriptions; local models remain providers for
-// the native Maestro loop rather than a third execution engine.
+// normalizeEngineName recognizes retired settings so callers can reject them explicitly.
 func normalizeEngineName(engine string) string {
 	switch strings.ToLower(strings.TrimSpace(engine)) {
 	case "subscription":
@@ -291,8 +257,7 @@ func normalizeEngineName(engine string) string {
 // effectiveRoleRoute is the single source of truth for execution and UI
 // reporting. A model explicitly assigned to a task route always wins. Native
 // routes may then inherit the process-level model override and maestrorc
-// default; legacy routes with no model deliberately remain empty so the
-// vendor CLI can select its own "auto" model.
+// default. Retired routes remain identifiable and are rejected before execution.
 func (o *Orchestrator) effectiveRoleRoute(role string) settings.RoleDefaults {
 	snapshot := o.SettingsSnapshot()
 	route := snapshot.RoleDefaults[role]
@@ -323,23 +288,14 @@ func (o *Orchestrator) effectiveRoleRoute(role string) settings.RoleDefaults {
 	return route
 }
 
-// runnerForRole resolves the persisted task route. Native providers and
-// subscription-backed vendor CLIs implement the same Runner contract.
+// runnerForRole resolves a persisted route to the sole Maestro harness.
 func (o *Orchestrator) runnerForRole(role string) (Runner, error) {
 	if o.runner != nil {
 		return o.runner, nil
 	}
 	route := o.effectiveRoleRoute(role)
-	if route.Engine == "legacy" {
-		name := route.Agent
-		if name == "" {
-			name = "codex"
-		}
-		a, err := agent.Create(name)
-		if err != nil {
-			return nil, err
-		}
-		return &legacyRunner{agent: a, model: route.Model, reasoningEffort: route.ReasoningEffort, o: o}, nil
+	if route.Engine != "" && route.Engine != "native" || route.Agent != "" {
+		return nil, errors.New("external harness route requires migration; select a provider/model in Maestro")
 	}
 	if o.registry == nil {
 		return nil, errors.New("native engine: no provider configured")

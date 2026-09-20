@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "id": "database-engineering",
+  "description": "Preserve invariants, compatibility, performance, and recovery when changing persisted data.",
+  "explore": "explore.md",
+  "apply": "apply.md",
+  "check": "check.md",
+  "docs": "docs.md"
+}

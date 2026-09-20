@@ -14,8 +14,38 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 )
+
+const (
+	// WorktreeDiff is review evidence, not a generic artifact transport. A patch
+	// beyond this size would both exceed useful model context and make a single
+	// Git subprocess grow Maestro's heap without bound. Refuse it explicitly;
+	// callers must split or otherwise reduce the change instead of reviewing a
+	// silently truncated semantic diff.
+	maxWorktreeDiffBytes          = 2 << 20
+	maxWorktreeDiffFileBytes      = int64(16 << 20)
+	maxWorktreeDiffAggregateBytes = int64(32 << 20)
+	maxWorktreeDiffDuration       = 30 * time.Second
+	maxGitListOutputBytes         = 16 << 20
+	maxGitIndexOutputBytes        = 32 << 20
+	maxGitDiagnosticBytes         = 64 << 10
+	maxGitInventoryFields         = 1 << 17
+	maxGitIndexRecords            = 1 << 19
+)
+
+var errGitCommandOutputLimit = errors.New("git command output limit exceeded")
+
+// worktreeEvidenceArgs disables repository-configured filesystem monitors for
+// every Git command in the review snapshot path. A filesystem monitor is an
+// executable hook; review evidence and submodule safety checks must never run
+// repository-controlled programs merely to inspect the checkout.
+func worktreeEvidenceArgs(args ...string) []string {
+	out := make([]string, 0, len(args)+2)
+	out = append(out, "-c", "core.fsmonitor=false")
+	return append(out, args...)
+}
 
 // ErrDetachedHEAD is returned when an operation requires a named current
 // branch but the repository is checked out at a commit directly.
@@ -50,8 +80,17 @@ func (c *Client) Dir() string { return c.dir }
 // silently limiting a review to the caller's current subdirectory.
 func RepositoryRoot(ctx context.Context, dir string) (string, error) {
 	out, err := New(dir).run(ctx, "rev-parse", "--show-toplevel")
-	if err != nil {
-		return "", fmt.Errorf("resolve repository root from %q: %w", dir, err)
+	return repositoryRootFromOutput(dir, out, err)
+}
+
+func worktreeEvidenceRoot(ctx context.Context, dir string) (string, error) {
+	out, err := New(dir).run(ctx, worktreeEvidenceArgs("rev-parse", "--show-toplevel")...)
+	return repositoryRootFromOutput(dir, out, err)
+}
+
+func repositoryRootFromOutput(dir string, out []byte, runErr error) (string, error) {
+	if runErr != nil {
+		return "", fmt.Errorf("resolve repository root from %q: %w", dir, runErr)
 	}
 	// rev-parse terminates the path with one LF. Remove only that delimiter:
 	// TrimSpace would corrupt legal repository names ending in spaces or
@@ -303,15 +342,12 @@ func (c *Client) AllChanges(ctx context.Context) ([]FileChange, error) {
 	if err != nil {
 		return nil, err
 	}
-	st, err := c.Status(ctx)
+	untracked, err := c.UntrackedFiles(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("all changes status: %w", err)
+		return nil, fmt.Errorf("all changes untracked files: %w", err)
 	}
-	for _, f := range st.Files {
-		if f.Worktree != '?' && f.IndexState != '?' {
-			continue
-		}
-		changes = append(changes, FileChange{Path: f.Path, Type: "A"})
+	for _, path := range untracked {
+		changes = append(changes, FileChange{Path: path, Type: "A"})
 	}
 	return changes, nil
 }
@@ -324,9 +360,15 @@ func (c *Client) DiffNameStatus(ctx context.Context, base string) ([]FileChange,
 		args = append(args, base)
 	}
 	args = append(args, "--")
-	out, err := c.run(ctx, args...)
+	out, exceeded, err := c.runWithEnvOutputLimit(ctx, nil, maxGitListOutputBytes, args...)
 	if err != nil {
 		return nil, fmt.Errorf("diff name-status: %w", err)
+	}
+	if exceeded {
+		return nil, fmt.Errorf("diff name-status: output exceeds %d-byte change inventory limit", maxGitListOutputBytes)
+	}
+	if fields := bytes.Count(out, []byte{0}); fields > maxGitInventoryFields {
+		return nil, fmt.Errorf("diff name-status: output contains %d fields; change inventory limit is %d", fields, maxGitInventoryFields)
 	}
 	changes, err := parseNameStatusZ(out)
 	if err != nil {
@@ -337,9 +379,15 @@ func (c *Client) DiffNameStatus(ctx context.Context, base string) ([]FileChange,
 
 // UntrackedFiles lists untracked, non-ignored files in the working tree.
 func (c *Client) UntrackedFiles(ctx context.Context) ([]string, error) {
-	out, err := c.run(ctx, "ls-files", "--others", "--exclude-standard", "-z")
+	out, exceeded, err := c.runWithEnvOutputLimit(ctx, nil, maxGitListOutputBytes, "ls-files", "--others", "--exclude-standard", "-z")
 	if err != nil {
 		return nil, fmt.Errorf("ls-files others: %w", err)
+	}
+	if exceeded {
+		return nil, fmt.Errorf("ls-files others: output exceeds %d-byte change inventory limit", maxGitListOutputBytes)
+	}
+	if fields := bytes.Count(out, []byte{0}); fields > maxGitInventoryFields {
+		return nil, fmt.Errorf("ls-files others: output contains %d paths; change inventory limit is %d", fields, maxGitInventoryFields)
 	}
 	paths, err := nulFields(out)
 	if err != nil {
@@ -377,19 +425,27 @@ func (c *Client) DiffUnified(ctx context.Context, base string) (string, error) {
 
 // WorktreeDiff returns a binary-safe patch for the complete Git-visible
 // filesystem versus base, including non-ignored untracked files. A private
-// index overlays the worktree on base, so the user's real index and working
-// files remain untouched and partially staged state cannot hide evidence.
+// index and object store overlay the worktree on base, so the user's real Git
+// state and working files remain untouched and partially staged state cannot
+// hide evidence.
 func (c *Client) WorktreeDiff(ctx context.Context, base string) (string, error) {
 	if strings.TrimSpace(base) == "" {
 		return "", errors.New("worktree diff: base revision is required")
 	}
-	root, err := c.RepositoryRoot(ctx)
+	workCtx, cancel := context.WithTimeout(ctx, maxWorktreeDiffDuration)
+	defer cancel()
+
+	root, err := worktreeEvidenceRoot(workCtx, c.dir)
 	if err != nil {
 		return "", fmt.Errorf("worktree diff: %w", err)
 	}
 	rooted := New(root)
-	if err := rooted.CheckSubmodulesClean(ctx); err != nil {
+	if err := checkSubmodulesCleanAtRoot(workCtx, root); err != nil {
 		return "", fmt.Errorf("worktree diff: %w", err)
+	}
+	realObjectDir, err := rooted.objectDirectory(workCtx)
+	if err != nil {
+		return "", fmt.Errorf("worktree diff: resolve object store: %w", err)
 	}
 	tempRoot, err := os.MkdirTemp("", "maestro-worktree-diff-")
 	if err != nil {
@@ -397,18 +453,317 @@ func (c *Client) WorktreeDiff(ctx context.Context, base string) (string, error) 
 	}
 	defer os.RemoveAll(tempRoot)
 
-	env := map[string]string{"GIT_INDEX_FILE": filepath.Join(tempRoot, "index")}
-	if _, err := rooted.runWithEnv(ctx, env, "read-tree", base); err != nil {
+	privateObjectDir := filepath.Join(tempRoot, "objects")
+	if err := os.Mkdir(privateObjectDir, 0o700); err != nil {
+		return "", fmt.Errorf("worktree diff: create private object store: %w", err)
+	}
+	alternates, err := isolatedObjectAlternates(realObjectDir)
+	if err != nil {
+		return "", fmt.Errorf("worktree diff: configure private object store: %w", err)
+	}
+	env := map[string]string{
+		"GIT_INDEX_FILE":                   filepath.Join(tempRoot, "index"),
+		"GIT_OBJECT_DIRECTORY":             privateObjectDir,
+		"GIT_ALTERNATE_OBJECT_DIRECTORIES": alternates,
+	}
+	if err := rooted.runWithEnvNoOutput(workCtx, env, worktreeEvidenceArgs("read-tree", base)...); err != nil {
 		return "", fmt.Errorf("worktree diff: seed private index: %w", err)
 	}
-	if _, err := rooted.runWithEnv(ctx, env, "add", "-A", "--", "."); err != nil {
-		return "", fmt.Errorf("worktree diff: snapshot filesystem: %w", err)
+
+	paths, err := rooted.worktreeDiffPathInventory(workCtx, env)
+	if err != nil {
+		return "", fmt.Errorf("worktree diff: inventory filesystem: %w", err)
 	}
-	out, err := rooted.runWithEnv(ctx, env, "diff", "--cached", "--binary", "--full-index", "--no-ext-diff", "--no-textconv", "--no-renames", base, "--")
+	worktreeRoot, err := os.OpenRoot(root)
+	if err != nil {
+		return "", fmt.Errorf("worktree diff: open repository root: %w", err)
+	}
+	defer worktreeRoot.Close()
+	if err := preflightWorktreeDiffPaths(workCtx, worktreeRoot, paths, false); err != nil {
+		return "", fmt.Errorf("worktree diff: preflight filesystem: %w", err)
+	}
+	// Git status and add both apply clean/process attributes while comparing
+	// worktree bytes with the index. Check every path before either command so
+	// review evidence never executes a repository-configured content filter.
+	if err := rooted.rejectWorktreeDiffFilters(workCtx, env, paths); err != nil {
+		return "", fmt.Errorf("worktree diff: %w", err)
+	}
+	changedPaths, err := rooted.worktreeDiffChangedPaths(workCtx, env, paths)
+	if err != nil {
+		return "", fmt.Errorf("worktree diff: inventory changes: %w", err)
+	}
+	if err := preflightWorktreeDiffPaths(workCtx, worktreeRoot, changedPaths, true); err != nil {
+		return "", fmt.Errorf("worktree diff: preflight changed files: %w", err)
+	}
+	// Re-evaluate immediately before the mutating Git command. The first pass
+	// protects status; this pass also detects attribute edits made while status
+	// was running.
+	if err := rooted.rejectWorktreeDiffFilters(workCtx, env, changedPaths); err != nil {
+		return "", fmt.Errorf("worktree diff: %w", err)
+	}
+	if len(changedPaths) > 0 {
+		if err := rooted.runWithEnvInputNoOutput(workCtx, env, nulPathList(changedPaths),
+			worktreeEvidenceArgs("add", "-A", "--pathspec-from-file=-", "--pathspec-file-nul")...); err != nil {
+			return "", fmt.Errorf("worktree diff: snapshot filesystem: %w", err)
+		}
+	}
+	out, exceeded, err := rooted.runWithEnvOutputLimit(workCtx, env, maxWorktreeDiffBytes,
+		worktreeEvidenceArgs("diff", "--cached", "--binary", "--full-index", "--no-ext-diff", "--no-textconv", "--no-renames", base, "--")...)
 	if err != nil {
 		return "", fmt.Errorf("worktree diff: render patch: %w", err)
 	}
+	if exceeded {
+		return "", fmt.Errorf("worktree diff: patch exceeds review evidence limit of %d bytes; split or reduce the change before review", maxWorktreeDiffBytes)
+	}
 	return string(out), nil
+}
+
+func (c *Client) objectDirectory(ctx context.Context) (string, error) {
+	out, exceeded, err := c.runWithEnvOutputLimit(ctx, nil, maxGitDiagnosticBytes,
+		worktreeEvidenceArgs("rev-parse", "--path-format=absolute", "--git-path", "objects")...)
+	if err != nil {
+		return "", err
+	}
+	if exceeded {
+		return "", fmt.Errorf("git object directory exceeds %d-byte path limit", maxGitDiagnosticBytes)
+	}
+	raw, err := gitOutputPath(out)
+	if err != nil {
+		return "", err
+	}
+	if !filepath.IsAbs(raw) {
+		return "", fmt.Errorf("git returned non-absolute object path %q", boundedGitDiagnostic(raw))
+	}
+	resolved := filepath.Clean(raw)
+	info, err := os.Stat(resolved)
+	if err != nil {
+		return "", err
+	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("git object path %q is not a directory", boundedGitDiagnostic(resolved))
+	}
+	return resolved, nil
+}
+
+func isolatedObjectAlternates(realObjectDir string) (string, error) {
+	quoted, err := quoteGitPathListEntry(realObjectDir)
+	if err != nil {
+		return "", err
+	}
+	if inherited, ok := os.LookupEnv("GIT_ALTERNATE_OBJECT_DIRECTORIES"); ok && inherited != "" {
+		if len(inherited) > maxGitListOutputBytes {
+			return "", fmt.Errorf("inherited alternate object path list exceeds %d bytes", maxGitListOutputBytes)
+		}
+		quoted += string(os.PathListSeparator) + inherited
+	}
+	return quoted, nil
+}
+
+// quoteGitPathListEntry uses Git's documented C-style quoting so repositories
+// whose absolute object paths contain ':' on Unix, ';' on Windows, quotes, or
+// control bytes remain one alternate entry.
+func quoteGitPathListEntry(path string) (string, error) {
+	if path == "" || strings.IndexByte(path, 0) >= 0 {
+		return "", errors.New("invalid empty or NUL-containing Git object path")
+	}
+	var quoted strings.Builder
+	quoted.Grow(len(path) + 2)
+	quoted.WriteByte('"')
+	for i := 0; i < len(path); i++ {
+		value := path[i]
+		switch value {
+		case '\\', '"':
+			quoted.WriteByte('\\')
+			quoted.WriteByte(value)
+		case '\a':
+			quoted.WriteString(`\a`)
+		case '\b':
+			quoted.WriteString(`\b`)
+		case '\t':
+			quoted.WriteString(`\t`)
+		case '\n':
+			quoted.WriteString(`\n`)
+		case '\v':
+			quoted.WriteString(`\v`)
+		case '\f':
+			quoted.WriteString(`\f`)
+		case '\r':
+			quoted.WriteString(`\r`)
+		default:
+			if value < 0x20 || value == 0x7f {
+				quoted.WriteByte('\\')
+				quoted.WriteByte('0' + (value >> 6))
+				quoted.WriteByte('0' + ((value >> 3) & 7))
+				quoted.WriteByte('0' + (value & 7))
+			} else {
+				quoted.WriteByte(value)
+			}
+		}
+	}
+	quoted.WriteByte('"')
+	return quoted.String(), nil
+}
+
+func (c *Client) worktreeDiffPathInventory(ctx context.Context, env map[string]string) ([]string, error) {
+	out, exceeded, err := c.runWithEnvOutputLimit(ctx, env, maxGitListOutputBytes,
+		worktreeEvidenceArgs("ls-files", "--cached", "--others", "--exclude-standard", "-z", "--")...)
+	if err != nil {
+		return nil, err
+	}
+	if exceeded {
+		return nil, fmt.Errorf("path inventory exceeds %d bytes", maxGitListOutputBytes)
+	}
+	if fields := bytes.Count(out, []byte{0}); fields > maxGitInventoryFields {
+		return nil, fmt.Errorf("path inventory contains %d paths; limit is %d", fields, maxGitInventoryFields)
+	}
+	paths, err := nulFields(out)
+	if err != nil {
+		return nil, err
+	}
+	return deduplicateGitPaths(paths), nil
+}
+
+func preflightWorktreeDiffPaths(ctx context.Context, root *os.Root, paths []string, enforceSizeLimits bool) error {
+	var aggregate int64
+	for _, path := range paths {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		info, err := root.Lstat(filepath.FromSlash(path))
+		if errors.Is(err, os.ErrNotExist) {
+			continue // a tracked deletion is a legitimate changed path
+		}
+		if err != nil {
+			return fmt.Errorf("inspect %q: %w", boundedGitDiagnostic(path), err)
+		}
+		mode := info.Mode()
+		if mode.IsDir() {
+			// Checked-out submodules and embedded repositories are represented by
+			// a directory path but add only their Git commit ID to the index.
+			continue
+		}
+		if !mode.IsRegular() && mode&os.ModeSymlink == 0 {
+			return fmt.Errorf("path %q has unsupported special file mode %s", boundedGitDiagnostic(path), mode)
+		}
+		if !enforceSizeLimits {
+			continue
+		}
+		size := info.Size()
+		if size < 0 {
+			return fmt.Errorf("path %q has an invalid negative size", boundedGitDiagnostic(path))
+		}
+		if size > maxWorktreeDiffFileBytes {
+			return fmt.Errorf("path %q is %d bytes; per-file review snapshot limit is %d bytes", boundedGitDiagnostic(path), size, maxWorktreeDiffFileBytes)
+		}
+		if size > maxWorktreeDiffAggregateBytes-aggregate {
+			return fmt.Errorf("changed file set exceeds aggregate review snapshot limit of %d bytes", maxWorktreeDiffAggregateBytes)
+		}
+		aggregate += size
+	}
+	return nil
+}
+
+func (c *Client) rejectWorktreeDiffFilters(ctx context.Context, env map[string]string, paths []string) error {
+	if len(paths) == 0 {
+		return nil
+	}
+	out, exceeded, err := c.runWithEnvInputOutputLimit(ctx, env, nulPathList(paths), maxGitListOutputBytes,
+		worktreeEvidenceArgs("check-attr", "-z", "--stdin", "filter")...)
+	if err != nil {
+		return fmt.Errorf("inspect content filters: %w", err)
+	}
+	if exceeded {
+		return fmt.Errorf("content-filter inventory exceeds %d bytes", maxGitListOutputBytes)
+	}
+	fields, err := nulFields(out)
+	if err != nil {
+		return fmt.Errorf("inspect content filters: %w", err)
+	}
+	if len(fields) != len(paths)*3 {
+		return fmt.Errorf("inspect content filters: Git returned %d fields for %d paths", len(fields), len(paths))
+	}
+	for i, path := range paths {
+		gotPath, attribute, value := fields[i*3], fields[i*3+1], fields[i*3+2]
+		if gotPath != path || attribute != "filter" {
+			return fmt.Errorf("inspect content filters: malformed result for path %q", boundedGitDiagnostic(path))
+		}
+		if value != "unspecified" && value != "unset" {
+			return fmt.Errorf("content filter %q applies to path %q; review snapshots refuse clean/process filters", boundedGitDiagnostic(value), boundedGitDiagnostic(path))
+		}
+	}
+	return nil
+}
+
+func (c *Client) worktreeDiffChangedPaths(ctx context.Context, env map[string]string, allowedPaths []string) ([]string, error) {
+	out, exceeded, err := c.runWithEnvOutputLimit(ctx, env, maxGitListOutputBytes,
+		worktreeEvidenceArgs("status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignore-submodules=none", "--no-renames")...)
+	if err != nil {
+		return nil, err
+	}
+	if exceeded {
+		return nil, fmt.Errorf("changed-path inventory exceeds %d bytes", maxGitListOutputBytes)
+	}
+	if fields := bytes.Count(out, []byte{0}); fields > maxGitInventoryFields {
+		return nil, fmt.Errorf("changed-path inventory contains %d fields; limit is %d", fields, maxGitInventoryFields)
+	}
+	entries, err := parseStatusZ(out)
+	if err != nil {
+		return nil, err
+	}
+	allowed := make(map[string]struct{}, len(allowedPaths))
+	for _, path := range allowedPaths {
+		allowed[path] = struct{}{}
+	}
+	paths := make([]string, 0, len(entries)*2)
+	for _, entry := range entries {
+		for _, path := range []string{entry.Path, entry.OldPath} {
+			if path == "" {
+				continue
+			}
+			if _, ok := allowed[path]; !ok {
+				return nil, fmt.Errorf("path %q appeared after the filter-safe inventory; retry the snapshot", boundedGitDiagnostic(path))
+			}
+			paths = append(paths, path)
+		}
+	}
+	return deduplicateGitPaths(paths), nil
+}
+
+func deduplicateGitPaths(paths []string) []string {
+	seen := make(map[string]struct{}, len(paths))
+	unique := make([]string, 0, len(paths))
+	for _, path := range paths {
+		if path == "" {
+			continue
+		}
+		if _, ok := seen[path]; ok {
+			continue
+		}
+		seen[path] = struct{}{}
+		unique = append(unique, path)
+	}
+	return unique
+}
+
+func nulPathList(paths []string) []byte {
+	size := len(paths)
+	for _, path := range paths {
+		size += len(path)
+	}
+	input := make([]byte, 0, size)
+	for _, path := range paths {
+		input = append(input, path...)
+		input = append(input, 0)
+	}
+	return input
+}
+
+func boundedGitDiagnostic(value string) string {
+	const limit = 256
+	if len(value) <= limit {
+		return value
+	}
+	return value[:limit] + "…"
 }
 
 // CheckSubmodulesClean refuses a review snapshot when a checked-out
@@ -416,14 +771,25 @@ func (c *Client) WorktreeDiff(ctx context.Context, base string) (string, error) 
 // submodule's commit ID; accepting a dirty submodule would therefore produce
 // a fingerprint that silently omits files the reviewer can see on disk.
 func (c *Client) CheckSubmodulesClean(ctx context.Context) error {
-	root, err := c.RepositoryRoot(ctx)
+	root, err := worktreeEvidenceRoot(ctx, c.dir)
 	if err != nil {
 		return err
 	}
+	return checkSubmodulesCleanAtRoot(ctx, root)
+}
+
+func checkSubmodulesCleanAtRoot(ctx context.Context, root string) error {
 	rooted := New(root)
-	out, err := rooted.run(ctx, "ls-files", "--stage", "-z", "--")
+	out, exceeded, err := rooted.runWithEnvOutputLimit(ctx, nil, maxGitIndexOutputBytes,
+		worktreeEvidenceArgs("ls-files", "--stage", "-z", "--")...)
 	if err != nil {
 		return fmt.Errorf("inspect submodules: %w", err)
+	}
+	if exceeded {
+		return fmt.Errorf("inspect submodules: Git index listing exceeds %d-byte review limit", maxGitIndexOutputBytes)
+	}
+	if records := bytes.Count(out, []byte{0}); records > maxGitIndexRecords {
+		return fmt.Errorf("inspect submodules: Git index contains %d records; review limit is %d", records, maxGitIndexRecords)
 	}
 	records, err := nulFields(out)
 	if err != nil {
@@ -477,7 +843,7 @@ func checkSubmoduleClean(ctx context.Context, root, gitPath string) error {
 		return fmt.Errorf("inspect submodules: submodule %q has an invalid .git marker", gitPath)
 	}
 
-	subRoot, err := RepositoryRoot(ctx, target)
+	subRoot, err := worktreeEvidenceRoot(ctx, target)
 	if err != nil {
 		return fmt.Errorf("inspect submodules: submodule %q: %w", gitPath, err)
 	}
@@ -485,9 +851,32 @@ func checkSubmoduleClean(ctx context.Context, root, gitPath string) error {
 	if err != nil || subRoot != canonicalTarget {
 		return fmt.Errorf("inspect submodules: submodule %q resolves to unexpected root %q", gitPath, subRoot)
 	}
-	status, err := New(subRoot).run(ctx, "status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignore-submodules=none")
+	if err := checkSubmodulesCleanAtRoot(ctx, subRoot); err != nil {
+		return fmt.Errorf("inspect submodules: nested submodule in %q: %w", gitPath, err)
+	}
+	submodule := New(subRoot)
+	paths, err := submodule.worktreeDiffPathInventory(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("inspect submodules: inventory %q: %w", gitPath, err)
+	}
+	submoduleRoot, err := os.OpenRoot(subRoot)
+	if err != nil {
+		return fmt.Errorf("inspect submodules: open %q: %w", gitPath, err)
+	}
+	defer submoduleRoot.Close()
+	if err := preflightWorktreeDiffPaths(ctx, submoduleRoot, paths, false); err != nil {
+		return fmt.Errorf("inspect submodules: preflight %q: %w", gitPath, err)
+	}
+	if err := submodule.rejectWorktreeDiffFilters(ctx, nil, paths); err != nil {
+		return fmt.Errorf("inspect submodules: %q: %w", gitPath, err)
+	}
+	status, exceeded, err := submodule.runWithEnvOutputLimit(ctx, nil, maxGitListOutputBytes,
+		worktreeEvidenceArgs("status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignore-submodules=none", "--no-renames")...)
 	if err != nil {
 		return fmt.Errorf("inspect submodules: status %q: %w", gitPath, err)
+	}
+	if exceeded {
+		return fmt.Errorf("inspect submodules: status %q exceeds %d-byte review limit", gitPath, maxGitListOutputBytes)
 	}
 	if len(status) != 0 {
 		return fmt.Errorf("dirty submodule %q contains unreviewed changes", gitPath)
@@ -621,17 +1010,7 @@ func (c *Client) run(ctx context.Context, args ...string) ([]byte, error) {
 func (c *Client) runWithEnv(ctx context.Context, overrides map[string]string, args ...string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = c.dir
-	effectiveOverrides := overrides
-	if c.ceiling != "" {
-		effectiveOverrides = make(map[string]string, len(overrides)+1)
-		for name, value := range overrides {
-			effectiveOverrides[name] = value
-		}
-		effectiveOverrides["GIT_CEILING_DIRECTORIES"] = c.ceiling
-	}
-	if len(effectiveOverrides) > 0 {
-		cmd.Env = mergeEnvironment(effectiveOverrides)
-	}
+	c.configureEnvironment(cmd, overrides)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
@@ -643,6 +1022,145 @@ func (c *Client) runWithEnv(ctx context.Context, overrides map[string]string, ar
 		return nil, fmt.Errorf("git %s: %s", strings.Join(args, " "), msg)
 	}
 	return out, nil
+}
+
+// runWithEnvOutputLimit drains stdout while retaining at most limit bytes.
+// The exceeded result is separate from command failure so semantic callers
+// can refuse the entire result with a domain-specific error instead of ever
+// mistaking a prefix for complete output.
+func (c *Client) runWithEnvOutputLimit(ctx context.Context, overrides map[string]string, limit int, args ...string) ([]byte, bool, error) {
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Dir = c.dir
+	c.configureEnvironment(cmd, overrides)
+	stdout := &boundedCommandBuffer{limit: limit}
+	stderr := &boundedCommandBuffer{limit: maxGitDiagnosticBytes}
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
+	err := cmd.Run()
+	if stdout.exceeded {
+		// The bounded writer deliberately stops the copy as soon as the first
+		// byte beyond the ceiling arrives. The pipe closes, Git exits, and the
+		// semantic caller turns this flag into its precise refusal message.
+		return stdout.Bytes(), true, nil
+	}
+	if err != nil {
+		msg := strings.TrimSpace(string(stderr.Bytes()))
+		if stderr.exceeded {
+			msg += " … diagnostic output limit exceeded"
+		}
+		if msg == "" {
+			msg = err.Error()
+		}
+		return nil, stdout.exceeded, fmt.Errorf("git %s: %s", strings.Join(args, " "), msg)
+	}
+	return stdout.Bytes(), stdout.exceeded, nil
+}
+
+// runWithEnvNoOutput is for Git mutations whose stdout is not part of their
+// contract (read-tree/add). The child writes stdout directly to the null
+// device, while stderr remains bounded for a useful failure diagnostic.
+func (c *Client) runWithEnvNoOutput(ctx context.Context, overrides map[string]string, args ...string) error {
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Dir = c.dir
+	c.configureEnvironment(cmd, overrides)
+	stderr := &boundedCommandBuffer{limit: maxGitDiagnosticBytes}
+	cmd.Stderr = stderr
+	if err := cmd.Run(); err != nil {
+		msg := strings.TrimSpace(string(stderr.Bytes()))
+		if stderr.exceeded {
+			msg += " … diagnostic output limit exceeded"
+		}
+		if msg == "" {
+			msg = err.Error()
+		}
+		return fmt.Errorf("git %s: %s", strings.Join(args, " "), msg)
+	}
+	return nil
+}
+
+// runWithEnvInputOutputLimit is the bounded-output equivalent used by Git
+// commands whose filename input must be NUL-delimited rather than placed in
+// argv. The caller owns the semantic interpretation of an exceeded result.
+func (c *Client) runWithEnvInputOutputLimit(ctx context.Context, overrides map[string]string, input []byte, limit int, args ...string) ([]byte, bool, error) {
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Dir = c.dir
+	c.configureEnvironment(cmd, overrides)
+	cmd.Stdin = bytes.NewReader(input)
+	stdout := &boundedCommandBuffer{limit: limit}
+	stderr := &boundedCommandBuffer{limit: maxGitDiagnosticBytes}
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
+	err := cmd.Run()
+	if stdout.exceeded {
+		return stdout.Bytes(), true, nil
+	}
+	if err != nil {
+		msg := strings.TrimSpace(string(stderr.Bytes()))
+		if stderr.exceeded {
+			msg += " … diagnostic output limit exceeded"
+		}
+		if msg == "" {
+			msg = err.Error()
+		}
+		return nil, false, fmt.Errorf("git %s: %s", strings.Join(args, " "), msg)
+	}
+	return stdout.Bytes(), false, nil
+}
+
+func (c *Client) runWithEnvInputNoOutput(ctx context.Context, overrides map[string]string, input []byte, args ...string) error {
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Dir = c.dir
+	c.configureEnvironment(cmd, overrides)
+	cmd.Stdin = bytes.NewReader(input)
+	stderr := &boundedCommandBuffer{limit: maxGitDiagnosticBytes}
+	cmd.Stderr = stderr
+	if err := cmd.Run(); err != nil {
+		msg := strings.TrimSpace(string(stderr.Bytes()))
+		if stderr.exceeded {
+			msg += " … diagnostic output limit exceeded"
+		}
+		if msg == "" {
+			msg = err.Error()
+		}
+		return fmt.Errorf("git %s: %s", strings.Join(args, " "), msg)
+	}
+	return nil
+}
+
+func (c *Client) configureEnvironment(cmd *exec.Cmd, overrides map[string]string) {
+	effectiveOverrides := overrides
+	if c.ceiling != "" {
+		effectiveOverrides = make(map[string]string, len(overrides)+1)
+		for name, value := range overrides {
+			effectiveOverrides[name] = value
+		}
+		effectiveOverrides["GIT_CEILING_DIRECTORIES"] = c.ceiling
+	}
+	if len(effectiveOverrides) > 0 {
+		cmd.Env = mergeEnvironment(effectiveOverrides)
+	}
+}
+
+type boundedCommandBuffer struct {
+	buf      bytes.Buffer
+	limit    int
+	exceeded bool
+}
+
+func (b *boundedCommandBuffer) Write(p []byte) (int, error) {
+	written := len(p)
+	remaining := max(b.limit-b.buf.Len(), 0)
+	if len(p) > remaining {
+		_, _ = b.buf.Write(p[:remaining])
+		b.exceeded = true
+		return written, errGitCommandOutputLimit
+	}
+	_, _ = b.buf.Write(p)
+	return written, nil
+}
+
+func (b *boundedCommandBuffer) Bytes() []byte {
+	return append([]byte(nil), b.buf.Bytes()...)
 }
 
 func mergeEnvironment(overrides map[string]string) []string {

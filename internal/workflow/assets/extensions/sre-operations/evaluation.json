@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "extension": "sre-operations",
+  "purpose": "Editorial cases for human or agent evaluation; structural tests do not establish these decisions.",
+  "cases": [
+    {
+      "id": "relevant",
+      "prompt": "define and test an actionable alert for a service with a rising error rate.",
+      "expected": "select",
+      "reason": "Connect user-perceived reliability, indicators, objectives, alerts, and responses to degradation."
+    },
+    {
+      "id": "irrelevant",
+      "prompt": "edit a document without affecting a service, signal, or operational procedure.",
+      "expected": "do-not-select",
+      "reason": "No responsibility of this domain is affected."
+    },
+    {
+      "id": "existing",
+      "prompt": "define and test an actionable alert for a service with a rising error rate. The project already has an implementation and evidence of this capability, but no dedicated document.",
+      "expected": "inspect-and-reuse",
+      "reason": "Inspect evidence, classify coverage, and address only gaps; missing documentation does not mean the domain practice is absent."
+    },
+    {
+      "id": "insufficient",
+      "prompt": "The dashboard exists, but a representative failure triggers no actionable alert.",
+      "expected": "failed-or-unverified",
+      "reason": "Compare against the approved criterion outcome; producing a file does not establish that the outcome was achieved."
+    }
+  ]
+}

@@ -15,12 +15,15 @@ import (
 	"runtime/debug"
 	"strconv"
 	"strings"
+	"unicode"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/colorprofile"
 	"github.com/muesli/termenv"
+	"golang.org/x/term"
 
 	"github.com/bryann2k/maestro/internal/agentcore"
+	"github.com/bryann2k/maestro/internal/cockpit"
 	"github.com/bryann2k/maestro/internal/config"
 	maestrogit "github.com/bryann2k/maestro/internal/git"
 	"github.com/bryann2k/maestro/internal/mcp"
@@ -63,7 +66,7 @@ func main() {
 }
 
 type options struct {
-	engine string // native | legacy internally; subscription is the public alias
+	engine string // native only; retired values parse for explicit migration errors
 	dir    string // project root
 }
 
@@ -75,14 +78,17 @@ func run(args []string, out, errOut io.Writer) error {
 	if err != nil {
 		return exitf(2, "%v", err)
 	}
-	if opts.engine != "native" && opts.engine != "legacy" {
-		return exitf(2, "--engine must be native or subscription (got %q)", opts.engine)
+	if opts.engine != "native" {
+		return exitf(2, "Maestro is the only harness; --engine must be native (got %q)", opts.engine)
 	}
 
 	switch commandName(sub) {
 	case "chat":
 		return runChat(sub[1:], opts, out, errOut)
 	case "tui":
+		if len(sub) > 1 && sub[1] == "--classic" {
+			return runClassicTUI(opts, out, errOut)
+		}
 		return runTUI(opts, out, errOut)
 	case "spec":
 		return runSpec(sub[1:], opts, out)
@@ -94,7 +100,7 @@ func run(args []string, out, errOut io.Writer) error {
 		return exitf(2, "adopt is a reviewed transcript conversation with static repository analysis; run 'maestro tui', then use /adopt")
 	case "accept", "validate", "answer", "build", "review", "fix", "docs", "archive", "resume",
 		"rename", "git", "rewind", "remember", "reflect", "rules", "commit", "learn",
-		"skills", "skill", "mcp", "provider", "model", "auth":
+		"skills", "skill", "mcp", "provider", "model", "auth", "workflow":
 		return runPipeline(sub[0], sub[1:], opts, out, errOut)
 	case "help", "-h", "--help":
 		printUsage(out, buildVersion)
@@ -126,7 +132,7 @@ func parseGlobal(args []string) (options, []string, error) {
 			return opts, []string{rest[0]}, nil
 		case "--engine":
 			if len(rest) < 2 {
-				return opts, nil, errors.New("--engine requires a value (native|subscription)")
+				return opts, nil, errors.New("--engine requires a value (native)")
 			}
 			opts.engine = normalizeCLIEngine(rest[1])
 			rest = rest[2:]
@@ -223,7 +229,7 @@ func runChat(args []string, opts options, out, errOut io.Writer) error {
 	dir := projectDir(opts)
 	cfg, v := loadEnv(dir, errOut)
 	st, settingsPath := loadSettings()
-	return repl.Run(context.Background(), repl.Options{
+	return repl.Run(context.Background(), repl.Options{RequireHarness: true,
 		Dir:          dir,
 		In:           os.Stdin,
 		Out:          out,
@@ -255,7 +261,7 @@ func newOrchestrator(opts options, out, errOut io.Writer) (*orchestrator.Orchest
 	cfg, v := loadEnv(dir, errOut)
 	st, settingsPath := loadSettings()
 	dev := newModelsDev(cfg)
-	return orchestrator.New(context.Background(), orchestrator.Options{
+	return orchestrator.New(context.Background(), orchestrator.Options{RequireHarness: true,
 		ProjectDir:   dir,
 		SessionsDir:  sessionsDir(),
 		Config:       cfg,
@@ -274,10 +280,14 @@ func newOrchestrator(opts options, out, errOut io.Writer) (*orchestrator.Orchest
 // (§10.2): option models-url, option provider-auto-update, and the
 // MAESTRO_DISABLE_MODELS_FETCH env override.
 func newModelsDev(cfg *config.Config) *agentcore.ModelsDev {
+	return newModelsDevMode(cfg, false)
+}
+
+func newModelsDevMode(cfg *config.Config, asyncStartup bool) *agentcore.ModelsDev {
 	if cfg == nil {
 		return nil
 	}
-	opts := agentcore.ModelsDevOptions{}
+	opts := agentcore.ModelsDevOptions{AsyncStartup: asyncStartup}
 	if u, ok := cfg.Options["models-url"]; ok && u != "" {
 		opts.URL = u
 	}
@@ -313,6 +323,9 @@ func runPipeline(cmd string, args []string, opts options, out, errOut io.Writer)
 		return err
 	}
 	defer func() { _ = orch.Close() }()
+	if cmd == "workflow" {
+		return orch.Dispatch(context.Background(), orchestrator.Command{Cmd: cmd, Args: args})
+	}
 	fs := flag.NewFlagSet(cmd, flag.ContinueOnError)
 	var m, branch, agent, model, id, path, title, format, typeFlag, baseURL, apiKey, provider, scope string
 	var worktree, yes, merge, isolated, deep, rewindCode, rewindConv, asJSON bool
@@ -391,7 +404,7 @@ func runPipeline(cmd string, args []string, opts options, out, errOut io.Writer)
 		fs.StringVar(&provider, "provider", provider, "filter by provider")
 		fs.BoolVar(&asJSON, "json", asJSON, "output JSON")
 	case "build":
-		fs.StringVar(&agent, "agent", "", "subscription agent name (codex, claude, cursor, opencode)")
+		fs.StringVar(&agent, "agent", "", "retired option; external agent harnesses are not supported")
 		fs.StringVar(&model, "model", "", "model override")
 		fs.BoolVar(&isolated, "isolated", false, "run in a dedicated git worktree")
 	case "archive":
@@ -724,13 +737,19 @@ func runPropose(args []string, opts options, out, errOut io.Writer) error {
 }
 
 // runTUI launches the charm.land v2 frontend (§5).
-func runTUI(opts options, out, errOut io.Writer) error {
+func runClassicTUI(opts options, out, errOut io.Writer) error {
+	// Fail before constructing the orchestrator or emitting any OSC/mode
+	// sequences. Pipes and CI logs need a clean diagnostic, not a partially
+	// initialized interactive terminal session.
+	if !term.IsTerminal(int(os.Stdin.Fd())) || !term.IsTerminal(int(os.Stdout.Fd())) {
+		return exitf(2, "interactive TUI requires terminal input and output; use 'maestro chat' for a line-oriented session")
+	}
 	dir := projectDir(opts)
 	cfg, v := loadEnv(dir, errOut)
 	st, settingsPath := loadSettings()
-	dev := newModelsDev(cfg)
+	dev := newModelsDevMode(cfg, true)
 	commandOut := tui.NewCommandOutput()
-	orch, err := orchestrator.New(context.Background(), orchestrator.Options{
+	orch, err := orchestrator.New(context.Background(), orchestrator.Options{RequireHarness: true, RecoverChangedBranch: true,
 		ProjectDir:   dir,
 		SessionsDir:  sessionsDir(),
 		Config:       cfg,
@@ -786,12 +805,28 @@ func runTUI(opts options, out, errOut io.Writer) error {
 // OSC 12 and returns a restore function (OSC 112) for teardown. Terminals
 // that ignore the sequence are unaffected.
 func setTermCursorColor(c color.Color) func() {
+	return writeTermCursorColor(os.Stderr, term.IsTerminal(int(os.Stderr.Fd())), c)
+}
+
+func writeTermCursorColor(out io.Writer, isTerminal bool, c color.Color) func() {
+	if !isTerminal || out == nil || terminalColorDisabled() {
+		return func() {}
+	}
 	hex := colorHex(c)
 	if len(hex) != 6 {
 		return func() {}
 	}
-	fmt.Fprintf(os.Stderr, "\x1b]12;#%s\x07", hex)
-	return func() { fmt.Fprint(os.Stderr, "\x1b]112\x07") }
+	fmt.Fprintf(out, "\x1b]12;#%s\x07", hex)
+	return func() { fmt.Fprint(out, "\x1b]112\x07") }
+}
+
+func terminalColorDisabled() bool {
+	// NO_COLOR is presence-based. It wins over an explicit MAESTRO_COLOR
+	// override for terminal side effects as well as rendered frame colors.
+	if _, disabled := os.LookupEnv("NO_COLOR"); disabled {
+		return true
+	}
+	return colorProfile() == termenv.Ascii
 }
 
 // colorProfile resolves the lipgloss color profile so weak terminals never
@@ -816,11 +851,16 @@ func colorProfile() termenv.Profile {
 // ANSI from Style.Render; the writer is therefore the boundary where
 // MAESTRO_COLOR and NO_COLOR must be enforced.
 func applyColorProfile() *profileOutput {
+	profile := colorProfile()
+	forward := io.Writer(os.Stdout)
+	if useASCIIGlyphs() {
+		forward = &asciiGlyphWriter{Forward: forward}
+	}
 	return &profileOutput{
 		File: os.Stdout,
 		writer: &colorprofile.Writer{
-			Forward: os.Stdout,
-			Profile: outputProfile(colorProfile()),
+			Forward: forward,
+			Profile: outputProfile(profile),
 		},
 	}
 }
@@ -830,11 +870,103 @@ func applyColorProfile() *profileOutput {
 // Read, and Close, which Bubble Tea needs for raw-mode and resize handling.
 type profileOutput struct {
 	*os.File
-	writer *colorprofile.Writer
+	writer io.Writer
 }
 
 func (w *profileOutput) Write(p []byte) (int, error) {
 	return w.writer.Write(p)
+}
+
+// useASCIIGlyphs resolves the character-cell capability independently from
+// color. MAESTRO_GLYPHS is the deterministic override; TERM=dumb and a strict
+// C/POSIX locale select the compatibility projection automatically.
+func useASCIIGlyphs() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("MAESTRO_GLYPHS"))) {
+	case "ascii", "none", "0", "false":
+		return true
+	case "unicode", "utf8", "utf-8", "1", "true":
+		return false
+	}
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("TERM")), "dumb") {
+		return true
+	}
+	locale := strings.TrimSpace(os.Getenv("LC_ALL"))
+	if locale == "" {
+		locale = strings.TrimSpace(os.Getenv("LC_CTYPE"))
+	}
+	if locale == "" {
+		locale = strings.TrimSpace(os.Getenv("LANG"))
+	}
+	return locale == "C" || locale == "POSIX"
+}
+
+type asciiGlyphWriter struct {
+	Forward io.Writer
+}
+
+func (w *asciiGlyphWriter) Write(p []byte) (int, error) {
+	projected := projectASCIIGlyphs(string(p))
+	written, err := io.WriteString(w.Forward, projected)
+	if err == nil && written != len(projected) {
+		err = io.ErrShortWrite
+	}
+	if err != nil {
+		return 0, err
+	}
+	// Report the source byte count, as transformation writers conventionally
+	// do; callers must not retry a suffix indexed into the projected payload.
+	return len(p), nil
+}
+
+func projectASCIIGlyphs(input string) string {
+	var out strings.Builder
+	out.Grow(len(input))
+	for _, r := range input {
+		if r < 0x80 {
+			out.WriteRune(r)
+			continue
+		}
+		if unicode.Is(unicode.Mn, r) || unicode.Is(unicode.Me, r) {
+			continue
+		}
+		switch r {
+		case '─', '━', '—', '–', '−':
+			out.WriteByte('-')
+		case '│', '┃', '▏', '▎', '▌', '█', '░':
+			out.WriteByte('|')
+		case '┌', '┐', '└', '┘', '╭', '╮', '╰', '╯':
+			out.WriteByte('+')
+		case '←', '‹':
+			out.WriteByte('<')
+		case '→', '›', '↗':
+			out.WriteByte('>')
+		case '↑':
+			out.WriteByte('^')
+		case '↓', '⌄':
+			out.WriteByte('v')
+		case '●', '◉', '•', '✦', '■':
+			out.WriteByte('*')
+		case '○', '◌', '◇', '◈':
+			out.WriteByte('o')
+		case '✓', '☑':
+			out.WriteByte('v')
+		case '✗', '×':
+			out.WriteByte('x')
+		case '☐':
+			out.WriteByte('_')
+		case '▸', '▾':
+			out.WriteByte('>')
+		case '…':
+			out.WriteByte('.')
+		case '·', '∴':
+			out.WriteByte('.')
+		case '⌥', '⎇', '⌖', '⚙', '⚠', '△', '◧', '▧', '＋', '≈', '↵':
+			out.WriteByte('#')
+		default:
+			out.WriteByte('?')
+		}
+	}
+	return out.String()
 }
 
 func outputProfile(p termenv.Profile) colorprofile.Profile {
@@ -907,12 +1039,14 @@ func printUsage(out io.Writer, buildVersion string) {
 	fmt.Fprintf(out, `maestro %s — the spec-driven AI orchestra
 
 Usage:
-  maestro [--engine native|subscription] [--dir <root>] [command]
+  maestro [--dir <root>] [command]
   maestro                       launch the premium TUI
 
 Commands:
+  maestro workflow [panel|bootstrap|explore|plan|validate|approve|start|delegate|contribution|check|docs|archive|profiles]
+                            Stipulate contract lifecycle and settings
   maestro chat [-m <msg>]   interactive REPL, or one-shot chat
-  maestro tui               premium TUI (charm.land v2)
+  maestro tui               OpenTUI + React workspace
   /bootstrap                in the TUI: initialize Git, discuss, and review MAESTRO.md
   /adopt                    in the TUI: analyse an existing repo and review MAESTRO.md
   /onboard                  compatibility alias for /adopt
@@ -921,7 +1055,7 @@ Commands:
   maestro validate                  check proposal readiness
   maestro answer Q-001 <answer>     resolve a blocking clarification
   maestro accept [--branch NAME]   accept into an automatic managed worktree
-  maestro build [<id>] [--engine] [--agent] [--model]   launch the dev sub-agent
+  maestro build [<id>] [--model]   launch Maestro on a legacy spec
   maestro review [<id>]     run the reviewer
   maestro fix               send review findings back to dev
   maestro docs [<id>]       generate documentation
@@ -947,9 +1081,45 @@ Commands:
   maestro git create <branch> | select <path>   create or select a workspace
   maestro provider list|add|remove   providers (catalog + env-detected)
   maestro model list [--json]  all known models
-  maestro auth login|status|logout   API keys and credential status
+  maestro auth login|oauth|status|logout   API keys and direct account access
   maestro spec list|show    inspect specs
   maestro help              this help
   maestro version           print version
 `, buildVersion)
+}
+
+func (k keyStore) SaveKey(ctx context.Context, name, value string) error {
+	if k.vault == nil {
+		return fmt.Errorf("credential vault unavailable")
+	}
+	k.vault.Set("key:"+name, value)
+	return k.vault.Save(ctx)
+}
+
+// runTUI launches the OpenTUI/React companion. Go remains the sole execution host.
+func runTUI(opts options, out, errOut io.Writer) error {
+	if !term.IsTerminal(int(os.Stdin.Fd())) || !term.IsTerminal(int(os.Stdout.Fd())) {
+		return exitf(2, "interactive TUI requires terminal input and output; use 'maestro chat' for a line-oriented session")
+	}
+	if _, err := cockpit.Path(); err != nil {
+		return err
+	}
+	dir := projectDir(opts)
+	cfg, v := loadEnv(dir, errOut)
+	st, settingsPath := loadSettings()
+	host := cockpit.New()
+	host.Parse = tui.ParseCommand
+	orch, err := orchestrator.New(context.Background(), orchestrator.Options{RequireHarness: true, RecoverChangedBranch: true, ProjectDir: dir, SessionsDir: sessionsDir(), Config: cfg, Keys: keyStore{vault: v}, Settings: st, SettingsPath: settingsPath, ModelsDev: newModelsDevMode(cfg, true), Vault: v, In: host, Out: host, Gate: host})
+	if err != nil {
+		return err
+	}
+	defer orch.Close()
+	host.Bind(orch)
+	terminalState, err := term.GetState(int(os.Stdin.Fd()))
+	if err != nil {
+		return err
+	}
+	defer term.Restore(int(os.Stdin.Fd()), terminalState)
+	defer fmt.Fprint(os.Stdout, "\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1004l\x1b[?2004l\x1b[?1049l\x1b[?25h\x1b[0m")
+	return host.Run(context.Background(), os.Stdin, os.Stdout, os.Stderr)
 }

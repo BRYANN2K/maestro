@@ -1,7 +1,7 @@
 {
   "name": "@bryann2k/maestro",
   "version": "1.0.0",
-  "description": "Code in Concert — version-pinned launcher for the spec-driven Maestro TUI",
+  "description": "Code in Concert \u2014 version-pinned launcher for the spec-driven Maestro TUI",
   "type": "commonjs",
   "bin": {
     "maestro": "npx-launcher.js"
@@ -11,9 +11,17 @@
     "README.md",
     "LICENSE",
     "THIRD_PARTY_NOTICES.md",
-    "LICENSES"
+    "LICENSES",
+    "RUNTIME_LICENSES"
   ],
-  "keywords": ["ai", "agent", "spec", "tui", "orchestrator", "mcp"],
+  "keywords": [
+    "ai",
+    "agent",
+    "spec",
+    "tui",
+    "orchestrator",
+    "mcp"
+  ],
   "license": "MIT",
   "repository": {
     "type": "git",

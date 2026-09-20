@@ -38,7 +38,7 @@ func ValidateProvider(provider Provider) error {
 		return err
 	}
 	switch provider.Type {
-	case "anthropic":
+	case "anthropic", "maestro":
 		return nil
 	case "openai", "openai-compat", "ollama", "llamacpp", "lmstudio", "litellm":
 		if strings.TrimSpace(provider.BaseURL) == "" {

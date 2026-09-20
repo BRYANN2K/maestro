@@ -316,29 +316,11 @@ func TestSettingsOverlayConsumesMouseOutsideItsSurface(t *testing.T) {
 	}
 }
 
-func TestSettingsAgentsPersistsReasoningPerRole(t *testing.T) {
+func TestSettingsAgentsRejectsUnsupportedReasoning(t *testing.T) {
 	m, _ := newTestModel(t)
-	o := newSettingsOverlay(m)
-	o.section = settingsAgents
-	route := o.state.RoleDefaults[settings.RoleDev]
-	route.Engine, route.Agent, route.Model = "legacy", "codex", "gpt-5.6-sol"
-	o.state.RoleDefaults[settings.RoleDev] = route
-	rows := o.rows()
-	for i, row := range rows {
-		if row.Role == settings.RoleDev && row.Kind == settingReasoning {
-			o.selected = i
-			o.change(m, row, 1)
-			got := m.orch.SettingsSnapshot().RoleDefaults[settings.RoleDev]
-			if got.ReasoningEffort != "minimal" {
-				t.Fatalf("dev reasoning = %q, want minimal", got.ReasoningEffort)
-			}
-			if value := o.value(row); value != "minimal" {
-				t.Fatalf("Settings value = %q", value)
-			}
-			return
-		}
+	if err := m.orch.SetTaskModelWithReasoning(m.ctx(), settings.RoleDev, "native", "", "unknown/model", "xhigh"); err == nil {
+		t.Fatal("unknown reasoning capability accepted")
 	}
-	t.Fatal("dev reasoning row is missing")
 }
 
 func TestSettingsAgentsSelectionRemainsVisibleAfterResize(t *testing.T) {

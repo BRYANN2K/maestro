@@ -3,6 +3,8 @@ package git
 import (
 	"bytes"
 	"context"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -323,6 +325,144 @@ func TestCheckpointListBySpec(t *testing.T) {
 	}
 }
 
+func TestCheckpointRejectsUntrackedFileOverPerFileLimitWithoutArtifacts(t *testing.T) {
+	dir := initRepo(t)
+	storeDir := filepath.Join(t.TempDir(), "cps")
+	store := NewCheckpointStore(storeDir)
+	writeSparseFile(t, filepath.Join(dir, "generated.bin"), checkpointMaxUntrackedFileBytes+1)
+
+	_, err := store.Create(context.Background(), New(dir), "{}", "rev")
+	if err == nil || !strings.Contains(err.Error(), "per-file checkpoint limit") {
+		t.Fatalf("Create error = %v", err)
+	}
+	assertNoCheckpointArtifacts(t, dir, storeDir)
+}
+
+func TestCheckpointRejectsAggregateUntrackedLimitWithoutArtifacts(t *testing.T) {
+	dir := initRepo(t)
+	storeDir := filepath.Join(t.TempDir(), "cps")
+	store := NewCheckpointStore(storeDir)
+	partSize := checkpointMaxUntrackedBytes/3 + 1
+	if partSize > checkpointMaxUntrackedFileBytes {
+		t.Fatalf("test part size %d exceeds per-file limit", partSize)
+	}
+	for i := range 3 {
+		writeSparseFile(t, filepath.Join(dir, fmt.Sprintf("generated-%d.bin", i)), partSize)
+	}
+
+	_, err := store.Create(context.Background(), New(dir), "{}", "rev")
+	if err == nil || !strings.Contains(err.Error(), "aggregate checkpoint limit") {
+		t.Fatalf("Create error = %v", err)
+	}
+	assertNoCheckpointArtifacts(t, dir, storeDir)
+}
+
+func TestCheckpointRejectsExcessiveEmptyUntrackedFiles(t *testing.T) {
+	dir := initRepo(t)
+	storeDir := filepath.Join(t.TempDir(), "cps")
+	store := NewCheckpointStore(storeDir)
+	for i := range checkpointMaxUntrackedFiles + 1 {
+		path := filepath.Join(dir, fmt.Sprintf("empty-%04d", i))
+		if err := os.WriteFile(path, nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	_, err := store.Create(context.Background(), New(dir), "{}", "rev")
+	if err == nil || !strings.Contains(err.Error(), "untracked file count") {
+		t.Fatalf("Create error = %v", err)
+	}
+	assertNoCheckpointArtifacts(t, dir, storeDir)
+}
+
+func TestCheckpointCreateCancellationLeavesNoArtifacts(t *testing.T) {
+	dir := initRepo(t)
+	storeDir := filepath.Join(t.TempDir(), "cps")
+	store := NewCheckpointStore(storeDir)
+	writeFile(t, dir, "untracked.txt", "payload\n")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if _, err := store.Create(ctx, New(dir), "{}", "rev"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Create error = %v, want context.Canceled", err)
+	}
+	assertNoCheckpointArtifacts(t, dir, storeDir)
+}
+
+func TestCheckpointListUsesMetadataWithoutLoadingSnapshotPayloads(t *testing.T) {
+	store := NewCheckpointStore(filepath.Join(t.TempDir(), "cps"))
+	const count = 24
+	for i := range count {
+		id := fmt.Sprintf("cp-metadata-%02d", i)
+		cp := Checkpoint{
+			ID:              id,
+			SnapshotVersion: checkpointSnapshotVersion,
+			SpecRev:         "rev",
+			Conv:            fmt.Sprintf("conversation-%d", i),
+			Changed:         []string{"generated.bin"},
+			Created:         time.Unix(int64(i), 0).UTC(),
+			UntrackedFiles: map[string]UntrackedFile{
+				"generated.bin": {Kind: "file", Data: bytes.Repeat([]byte{byte(i)}, 128<<10), Mode: 0o644},
+			},
+		}
+		if err := store.save(cp); err != nil {
+			t.Fatalf("save checkpoint %d: %v", i, err)
+		}
+		// A deliberately unreadable JSON value proves List used the small
+		// metadata sidecar instead of decoding and discarding each payload.
+		if err := os.WriteFile(filepath.Join(store.dir, id+".json"), []byte("{invalid snapshot payload"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	list, err := store.List(context.Background())
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(list) != count {
+		t.Fatalf("List returned %d checkpoints, want %d", len(list), count)
+	}
+	for _, cp := range list {
+		if cp.Conv == "" || len(cp.Changed) != 1 {
+			t.Fatalf("metadata missing for %s: %+v", cp.ID, cp)
+		}
+		if cp.UntrackedFiles != nil || cp.Code != "" || cp.Untracked != nil {
+			t.Fatalf("List loaded snapshot payload for %s", cp.ID)
+		}
+	}
+}
+
+func TestCheckpointSaveRejectsOversizeMetadataWithoutPublishing(t *testing.T) {
+	store := NewCheckpointStore(filepath.Join(t.TempDir(), "cps"))
+	cp := Checkpoint{
+		ID:      "cp-oversize-metadata",
+		Conv:    strings.Repeat("x", int(checkpointMaxMetadataBytes)+1),
+		Created: time.Now().UTC(),
+	}
+	if err := store.save(cp); err == nil || !strings.Contains(err.Error(), "size limit") {
+		t.Fatalf("save oversized metadata error = %v", err)
+	}
+	entries, err := os.ReadDir(store.dir)
+	if err != nil {
+		t.Fatalf("ReadDir: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("failed save published artifacts: %v", entries)
+	}
+}
+
+func TestCheckpointLoadRejectsOversizeRecordBeforeReading(t *testing.T) {
+	store := NewCheckpointStore(filepath.Join(t.TempDir(), "cps"))
+	if err := os.MkdirAll(store.dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(store.dir, "cp-oversize.json")
+	writeSparseFile(t, path, checkpointMaxRecordBytes+1)
+	if _, err := store.Load(context.Background(), "cp-oversize"); err == nil || !strings.Contains(err.Error(), "limit") {
+		t.Fatalf("Load oversized record error = %v", err)
+	}
+}
+
 func TestCheckpointLoadMissingAndRejectsTraversal(t *testing.T) {
 	store := NewCheckpointStore(filepath.Join(t.TempDir(), "cps"))
 	if _, err := store.Load(context.Background(), "cp-none"); err == nil {
@@ -339,5 +479,34 @@ func TestSpecRev(t *testing.T) {
 	}
 	if SpecRev("x") == "" || len(SpecRev("x")) != 24 {
 		t.Errorf("rev = %q", SpecRev("x"))
+	}
+}
+
+func writeSparseFile(t *testing.T, path string, size int64) {
+	t.Helper()
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Truncate(size); err != nil {
+		_ = file.Close()
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func assertNoCheckpointArtifacts(t *testing.T, repoDir, storeDir string) {
+	t.Helper()
+	entries, err := os.ReadDir(storeDir)
+	if err == nil && len(entries) != 0 {
+		t.Fatalf("failed checkpoint left store artifacts: %v", entries)
+	}
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("read checkpoint store: %v", err)
+	}
+	if refs := strings.TrimSpace(run(t, repoDir, "for-each-ref", "--format=%(refname)", "refs/maestro/checkpoints")); refs != "" {
+		t.Fatalf("failed checkpoint left protected refs: %s", refs)
 	}
 }

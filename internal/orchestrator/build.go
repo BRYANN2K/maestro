@@ -7,7 +7,6 @@ import (
 	"os"
 	"strings"
 
-	"github.com/bryann2k/maestro/internal/agent"
 	"github.com/bryann2k/maestro/internal/agentcore"
 	"github.com/bryann2k/maestro/internal/session"
 	"github.com/bryann2k/maestro/internal/spec"
@@ -29,6 +28,9 @@ type BuildOptions struct {
 
 // Build launches the dev sub-agent on the active spec's trio.
 func (o *Orchestrator) Build(ctx context.Context, opts BuildOptions) error {
+	if err := o.requireLegacyWorkflow(); err != nil {
+		return err
+	}
 	if o.spec == nil {
 		return errors.New("build: no active spec (propose + accept first)")
 	}
@@ -259,6 +261,9 @@ func (o *Orchestrator) taskProgress(ctx context.Context) (done, total int) {
 // explicit legacy/native, then settings. Isolation wraps whichever runner
 // was chosen.
 func (o *Orchestrator) buildRunner(opts BuildOptions) (Runner, error) {
+	if opts.Agent != "" {
+		return nil, errors.New("--agent has been removed; Maestro owns all agent execution")
+	}
 	var r Runner
 	snapshot := o.SettingsSnapshot()
 	switch {
@@ -275,30 +280,7 @@ func (o *Orchestrator) buildRunner(opts BuildOptions) (Runner, error) {
 		engine = normalizeEngineName(engine)
 		switch engine {
 		case "legacy":
-			name := opts.Agent
-			if name == "" {
-				name = snapshot.RoleDefaults["dev"].Agent
-			}
-			if name == "" {
-				name = "codex"
-			}
-			a, err := agent.Create(name)
-			if err != nil {
-				return nil, err
-			}
-			o.rememberEngine("dev", "legacy", name)
-			model := opts.Model
-			reasoningEffort := opts.ReasoningEffort
-			if model == "" {
-				model = snapshot.RoleDefaults["dev"].Model
-			}
-			if reasoningEffort == "" {
-				reasoningEffort = snapshot.RoleDefaults["dev"].ReasoningEffort
-			}
-			if !containsReasoningEffort(o.ReasoningEfforts("legacy", name, model), reasoningEffort) {
-				reasoningEffort = ""
-			}
-			r = &legacyRunner{agent: a, model: model, reasoningEffort: reasoningEffort, o: o}
+			return nil, errors.New("external harnesses have been removed; connect a provider in Maestro")
 		case "native":
 			o.rememberEngine("dev", "native", "")
 			route := o.effectiveRoleRoute("dev")

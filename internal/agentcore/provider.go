@@ -6,8 +6,19 @@ package agentcore
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
+)
+
+const (
+	// Providers must assemble tool calls before they can expose an EvToolCall to
+	// Loop. Mirror Loop's default retained-output ceiling here so a hostile or
+	// broken stream cannot hide unbounded argument fragments in provider-local
+	// builders before the shared accounting layer sees them.
+	providerToolPayloadLimit = loopDefaultMaxOutputBytes
+	providerToolCallLimit    = 4096
 )
 
 // Role identifies which agent produced an event.
@@ -53,7 +64,10 @@ type StreamEvent struct {
 
 // NewEvent builds an event with the next sequence number.
 func NewEvent(seq *uint64, role Role, typ EventType, content any) StreamEvent {
-	ev := StreamEvent{Type: typ, Role: role, Content: content, Meta: map[string]string{}}
+	// Meta is optional. Leaving it nil avoids one heap allocation for every
+	// streamed text/reasoning delta; callers that attach metadata can allocate
+	// the map explicitly in their event literal.
+	ev := StreamEvent{Type: typ, Role: role, Content: content}
 	if seq != nil {
 		*seq++
 		ev.Seq = *seq
@@ -133,8 +147,9 @@ func (e StreamError) Error() string { return e.Message }
 
 // Done marks the end of a turn with optional usage accounting.
 type Done struct {
-	Usage *Usage
-	Cost  *Cost
+	ProviderState json.RawMessage `json:",omitempty"`
+	Usage         *Usage
+	Cost          *Cost
 }
 
 // Usage is token accounting for one turn.
@@ -158,11 +173,32 @@ func (c Cost) Total() float64 {
 	return c.InputUSD + c.OutputUSD + c.CacheCreateUSD + c.CacheHitUSD
 }
 
+func validateUsage(usage Usage) error {
+	if usage.InputTokens < 0 || usage.OutputTokens < 0 || usage.CacheCreateTokens < 0 || usage.CacheHitTokens < 0 {
+		return fmt.Errorf("provider returned negative token usage: %+v", usage)
+	}
+	return nil
+}
+
+func validateCost(cost Cost) error {
+	values := []float64{cost.InputUSD, cost.OutputUSD, cost.CacheCreateUSD, cost.CacheHitUSD}
+	for _, value := range values {
+		if value < 0 || math.IsNaN(value) || math.IsInf(value, 0) {
+			return fmt.Errorf("provider returned invalid cost: %+v", cost)
+		}
+	}
+	if total := cost.Total(); math.IsNaN(total) || math.IsInf(total, 0) {
+		return fmt.Errorf("provider returned invalid total cost: %+v", cost)
+	}
+	return nil
+}
+
 // Message is one conversational turn sent to a provider.
 type Message struct {
-	Role      string // user | assistant | tool
-	Content   string // text payload
-	Reasoning string // assistant-only: thinking-mode reasoning (must be
+	ProviderState json.RawMessage `json:",omitempty"`
+	Role          string          // user | assistant | tool
+	Content       string          // text payload
+	Reasoning     string          // assistant-only: thinking-mode reasoning (must be
 	// passed back to reasoning providers on the next request)
 	ThinkingBlocks   []ThinkingBlock // signed Anthropic blocks, echoed verbatim
 	TextBlockIndex   int             // Anthropic content order
@@ -228,6 +264,22 @@ type AskFunc func(ctx context.Context, question string, options []string, recomm
 
 // ErrProviderClosed is returned by Stream when the provider is shut down.
 var ErrProviderClosed = errors.New("provider closed")
+
+// sendStreamEvent applies cancellation-aware backpressure to provider
+// streams. Loop may stop consuming as soon as a rule, output limit, or budget
+// fires; selecting on ctx prevents the provider goroutine and response body
+// from being stranded behind a full event channel.
+func sendStreamEvent(ctx context.Context, ch chan<- StreamEvent, ev StreamEvent) bool {
+	if ctx.Err() != nil {
+		return false
+	}
+	select {
+	case ch <- ev:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
 
 // CostOf computes the cost for usage against a model's pricing.
 func CostOf(m Model, usage Usage) Cost {

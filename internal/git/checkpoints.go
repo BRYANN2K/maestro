@@ -20,7 +20,19 @@ import (
 	"unicode/utf8"
 )
 
-const checkpointSnapshotVersion = 2
+const (
+	checkpointSnapshotVersion = 2
+
+	// Checkpoints embed untracked contents in JSON. Keep both an individual
+	// ceiling and a lower, process-wide payload ceiling so a generated artifact
+	// cannot make checkpoint creation consume memory without bound. The JSON
+	// representation is larger because []byte values are base64 encoded.
+	checkpointMaxUntrackedFileBytes = int64(16 << 20)
+	checkpointMaxUntrackedBytes     = int64(32 << 20)
+	checkpointMaxUntrackedFiles     = 4096
+	checkpointMaxRecordBytes        = int64(64 << 20)
+	checkpointMaxMetadataBytes      = int64(8 << 20)
+)
 
 // UntrackedFile is a binary-safe snapshot of an untracked regular file or
 // symbolic link. Directories are not represented because Git itself does not
@@ -43,12 +55,12 @@ type Checkpoint struct {
 	GitCommonDir    string                   `json:"git_common_dir,omitempty"`
 	IndexTree       string                   `json:"index_tree,omitempty"`
 	WorktreeTree    string                   `json:"worktree_tree,omitempty"`
-	UntrackedFiles  map[string]UntrackedFile `json:"untracked_files,omitempty"`
 	SpecRev         string                   `json:"spec_rev"`
 	Conv            string                   `json:"conv"`
 	Changed         []string                 `json:"changed"`
 	Created         time.Time                `json:"created"`
 	RecoveryFor     string                   `json:"recovery_for,omitempty"`
+	UntrackedFiles  map[string]UntrackedFile `json:"untracked_files,omitempty"`
 
 	// Code and Untracked only exist so old checkpoint files remain readable.
 	// Version 1 code snapshots cannot be restored safely because their diff is
@@ -272,8 +284,20 @@ func snapshotUntracked(ctx context.Context, c *Client) (map[string]UntrackedFile
 	if err != nil {
 		return nil, err
 	}
-	files := make(map[string]UntrackedFile, len(paths))
+	if len(paths) > checkpointMaxUntrackedFiles {
+		return nil, fmt.Errorf("untracked file count %d exceeds checkpoint limit of %d files", len(paths), checkpointMaxUntrackedFiles)
+	}
+	type candidate struct {
+		rel  string
+		full string
+		info os.FileInfo
+	}
+	candidates := make([]candidate, 0, len(paths))
+	var plannedBytes int64
 	for _, rel := range paths {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		full, err := safeWorktreePath(c.dir, rel)
 		if err != nil {
 			return nil, err
@@ -283,23 +307,111 @@ func snapshotUntracked(ctx context.Context, c *Client) (map[string]UntrackedFile
 			return nil, fmt.Errorf("snapshot %q: %w", rel, err)
 		}
 		switch {
-		case info.Mode().IsRegular():
-			data, err := os.ReadFile(full)
-			if err != nil {
-				return nil, fmt.Errorf("snapshot %q: %w", rel, err)
+		case info.Mode().IsRegular(), info.Mode()&os.ModeSymlink != 0:
+			if info.Size() < 0 {
+				return nil, fmt.Errorf("snapshot %q: invalid negative size", rel)
 			}
-			files[rel] = UntrackedFile{Kind: "file", Data: data, Mode: info.Mode().Perm()}
-		case info.Mode()&os.ModeSymlink != 0:
-			link, err := os.Readlink(full)
-			if err != nil {
-				return nil, fmt.Errorf("snapshot symlink %q: %w", rel, err)
+			if info.Size() > checkpointMaxUntrackedFileBytes {
+				return nil, fmt.Errorf("snapshot %q: untracked payload is %d bytes; per-file checkpoint limit is %d bytes", rel, info.Size(), checkpointMaxUntrackedFileBytes)
 			}
-			files[rel] = UntrackedFile{Kind: "symlink", Link: link}
+			if info.Size() > checkpointMaxUntrackedBytes-plannedBytes {
+				return nil, fmt.Errorf("snapshot %q: untracked payload total exceeds aggregate checkpoint limit of %d bytes", rel, checkpointMaxUntrackedBytes)
+			}
+			plannedBytes += info.Size()
+			candidates = append(candidates, candidate{rel: rel, full: full, info: info})
 		default:
 			return nil, fmt.Errorf("snapshot %q: unsupported untracked file mode %s", rel, info.Mode())
 		}
 	}
+
+	// Only start retaining contents after every candidate has passed the cheap
+	// lstat preflight. Reads remain limited because files may grow between the
+	// preflight and the open.
+	files := make(map[string]UntrackedFile, len(candidates))
+	var capturedBytes int64
+	for _, candidate := range candidates {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if candidate.info.Mode()&os.ModeSymlink != 0 {
+			link, err := os.Readlink(candidate.full)
+			if err != nil {
+				return nil, fmt.Errorf("snapshot symlink %q: %w", candidate.rel, err)
+			}
+			linkBytes := int64(len(link))
+			if linkBytes > checkpointMaxUntrackedFileBytes {
+				return nil, fmt.Errorf("snapshot symlink %q: untracked payload is %d bytes; per-file checkpoint limit is %d bytes", candidate.rel, linkBytes, checkpointMaxUntrackedFileBytes)
+			}
+			if linkBytes > checkpointMaxUntrackedBytes-capturedBytes {
+				return nil, fmt.Errorf("snapshot symlink %q: untracked payload total exceeds aggregate checkpoint limit of %d bytes", candidate.rel, checkpointMaxUntrackedBytes)
+			}
+			capturedBytes += linkBytes
+			files[candidate.rel] = UntrackedFile{Kind: "symlink", Link: link}
+			continue
+		}
+
+		data, mode, err := readCheckpointFile(ctx, candidate.full, candidate.rel, checkpointMaxUntrackedBytes-capturedBytes)
+		if err != nil {
+			return nil, err
+		}
+		capturedBytes += int64(len(data))
+		files[candidate.rel] = UntrackedFile{Kind: "file", Data: data, Mode: mode}
+	}
 	return files, nil
+}
+
+func readCheckpointFile(ctx context.Context, full, rel string, remainingBytes int64) ([]byte, os.FileMode, error) {
+	file, err := openReadOnly(full)
+	if err != nil {
+		return nil, 0, fmt.Errorf("snapshot %q: %w", rel, err)
+	}
+	defer file.Close()
+
+	openedInfo, err := file.Stat()
+	if err != nil {
+		return nil, 0, fmt.Errorf("snapshot %q: %w", rel, err)
+	}
+	pathInfo, err := os.Lstat(full)
+	if err != nil {
+		return nil, 0, fmt.Errorf("snapshot %q: %w", rel, err)
+	}
+	if !openedInfo.Mode().IsRegular() || !pathInfo.Mode().IsRegular() || !os.SameFile(openedInfo, pathInfo) {
+		return nil, 0, fmt.Errorf("snapshot %q: untracked file changed type while snapshotting", rel)
+	}
+	if openedInfo.Size() > checkpointMaxUntrackedFileBytes {
+		return nil, 0, fmt.Errorf("snapshot %q: untracked payload is %d bytes; per-file checkpoint limit is %d bytes", rel, openedInfo.Size(), checkpointMaxUntrackedFileBytes)
+	}
+	if openedInfo.Size() > remainingBytes {
+		return nil, 0, fmt.Errorf("snapshot %q: untracked payload total exceeds aggregate checkpoint limit of %d bytes", rel, checkpointMaxUntrackedBytes)
+	}
+
+	limit := min(checkpointMaxUntrackedFileBytes, remainingBytes)
+	data, err := io.ReadAll(io.LimitReader(checkpointContextReader{ctx: ctx, reader: file}, limit+1))
+	if err != nil {
+		return nil, 0, fmt.Errorf("snapshot %q: %w", rel, err)
+	}
+	if int64(len(data)) > limit {
+		if limit < checkpointMaxUntrackedFileBytes {
+			return nil, 0, fmt.Errorf("snapshot %q: untracked payload total exceeds aggregate checkpoint limit of %d bytes", rel, checkpointMaxUntrackedBytes)
+		}
+		return nil, 0, fmt.Errorf("snapshot %q: untracked payload exceeds per-file checkpoint limit of %d bytes", rel, checkpointMaxUntrackedFileBytes)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, 0, err
+	}
+	return data, openedInfo.Mode().Perm(), nil
+}
+
+type checkpointContextReader struct {
+	ctx    context.Context
+	reader io.Reader
+}
+
+func (r checkpointContextReader) Read(p []byte) (int, error) {
+	if err := r.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return r.reader.Read(p)
 }
 
 func changedPaths(ctx context.Context, c *Client, untracked map[string]UntrackedFile) ([]string, error) {
@@ -354,13 +466,42 @@ func (s *CheckpointStore) save(cp Checkpoint) (retErr error) {
 	if err := os.MkdirAll(s.dir, 0o700); err != nil {
 		return err
 	}
-	data, err := json.MarshalIndent(cp, "", "  ")
+	snapshotTemp, err := writeCheckpointJSONTemp(s.dir, ".checkpoint-*.tmp", cp, checkpointMaxRecordBytes)
 	if err != nil {
 		return err
 	}
-	tmp, err := os.CreateTemp(s.dir, ".checkpoint-*.tmp")
+	metadataTemp, err := writeCheckpointJSONTemp(s.dir, ".checkpoint-metadata-*.tmp", checkpointMetadata(cp), checkpointMaxMetadataBytes)
 	if err != nil {
+		_ = os.Remove(snapshotTemp)
 		return err
+	}
+	snapshotPath := filepath.Join(s.dir, cp.ID+".json")
+	metadataPath := filepath.Join(s.dir, cp.ID+".meta")
+	defer func() {
+		if retErr != nil {
+			_ = os.Remove(snapshotTemp)
+			_ = os.Remove(metadataTemp)
+		}
+	}()
+	// Publish metadata first and the discoverable .json snapshot last. A crash
+	// between the two renames can leave only an ignored .meta orphan, never a
+	// checkpoint that List mistakes for a committed legacy record.
+	if err := os.Rename(metadataTemp, metadataPath); err != nil {
+		return err
+	}
+	if err := os.Rename(snapshotTemp, snapshotPath); err != nil {
+		if removeErr := os.Remove(metadataPath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+			return fmt.Errorf("save checkpoint snapshot: %w (remove orphan metadata: %v)", err, removeErr)
+		}
+		return fmt.Errorf("save checkpoint snapshot: %w", err)
+	}
+	return nil
+}
+
+func writeCheckpointJSONTemp(dir, pattern string, value Checkpoint, limit int64) (name string, retErr error) {
+	tmp, err := os.CreateTemp(dir, pattern)
+	if err != nil {
+		return "", err
 	}
 	tmpName := tmp.Name()
 	defer func() {
@@ -370,23 +511,56 @@ func (s *CheckpointStore) save(cp Checkpoint) (retErr error) {
 	}()
 	if err := tmp.Chmod(0o600); err != nil {
 		_ = tmp.Close()
-		return err
+		return "", err
 	}
-	if _, err := io.Copy(tmp, bytes.NewReader(data)); err != nil {
+	encoder := json.NewEncoder(&checkpointLimitWriter{writer: tmp, remaining: limit})
+	encoder.SetIndent("", "  ")
+	if err := encoder.Encode(value); err != nil {
 		_ = tmp.Close()
-		return err
+		return "", err
 	}
 	if err := tmp.Sync(); err != nil {
 		_ = tmp.Close()
-		return err
+		return "", err
 	}
 	if err := tmp.Close(); err != nil {
-		return err
+		return "", err
 	}
-	return os.Rename(tmpName, filepath.Join(s.dir, cp.ID+".json"))
+	return tmpName, nil
 }
 
-// List returns the checkpoints, newest first.
+type checkpointLimitWriter struct {
+	writer    io.Writer
+	remaining int64
+}
+
+func (w *checkpointLimitWriter) Write(p []byte) (int, error) {
+	if int64(len(p)) <= w.remaining {
+		n, err := w.writer.Write(p)
+		w.remaining -= int64(n)
+		return n, err
+	}
+	if w.remaining > 0 {
+		n, err := w.writer.Write(p[:w.remaining])
+		w.remaining -= int64(n)
+		if err != nil {
+			return n, err
+		}
+		return n, fmt.Errorf("checkpoint JSON exceeds configured size limit")
+	}
+	return 0, fmt.Errorf("checkpoint JSON exceeds configured size limit")
+}
+
+func checkpointMetadata(cp Checkpoint) Checkpoint {
+	cp.UntrackedFiles = nil
+	cp.Code = ""
+	cp.Untracked = nil
+	return cp
+}
+
+// List returns checkpoint metadata, newest first. Snapshot payloads are loaded
+// only by Load, so listing remains cheap even when many admitted untracked
+// files are stored. Conversation state remains present for API compatibility.
 func (s *CheckpointStore) List(ctx context.Context) ([]Checkpoint, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -400,10 +574,20 @@ func (s *CheckpointStore) List(ctx context.Context) ([]Checkpoint, error) {
 	}
 	var out []Checkpoint
 	for _, e := range entries {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		if !strings.HasSuffix(e.Name(), ".json") {
 			continue
 		}
-		cp, err := s.load(e.Name())
+		cp, err := s.loadMetadata(e.Name())
+		if err != nil {
+			// Checkpoints created before metadata sidecars were introduced remain
+			// listable. Drop their bulk fields immediately after the one-time
+			// compatibility load.
+			cp, err = s.load(e.Name())
+			cp = checkpointMetadata(cp)
+		}
 		if err != nil {
 			continue
 		}
@@ -411,6 +595,24 @@ func (s *CheckpointStore) List(ctx context.Context) ([]Checkpoint, error) {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Created.After(out[j].Created) })
 	return out, nil
+}
+
+func (s *CheckpointStore) loadMetadata(snapshotName string) (Checkpoint, error) {
+	if filepath.Base(snapshotName) != snapshotName || !strings.HasSuffix(snapshotName, ".json") {
+		return Checkpoint{}, errors.New("invalid checkpoint filename")
+	}
+	id := strings.TrimSuffix(snapshotName, ".json")
+	if err := validCheckpointID(id); err != nil {
+		return Checkpoint{}, err
+	}
+	cp, err := loadCheckpointFile(filepath.Join(s.dir, id+".meta"), checkpointMaxMetadataBytes)
+	if err != nil {
+		return Checkpoint{}, err
+	}
+	if cp.ID != id {
+		return Checkpoint{}, errors.New("checkpoint metadata id does not match snapshot filename")
+	}
+	return checkpointMetadata(cp), nil
 }
 
 // ListBySpec filters the checkpoints of one spec revision.
@@ -432,15 +634,45 @@ func (s *CheckpointStore) load(name string) (Checkpoint, error) {
 	if filepath.Base(name) != name || !strings.HasSuffix(name, ".json") {
 		return Checkpoint{}, errors.New("invalid checkpoint filename")
 	}
-	data, err := os.ReadFile(filepath.Join(s.dir, name))
+	cp, err := loadCheckpointFile(filepath.Join(s.dir, name), checkpointMaxRecordBytes)
 	if err != nil {
 		return Checkpoint{}, err
 	}
-	var cp Checkpoint
-	if err := json.Unmarshal(data, &cp); err != nil {
+	if err := validCheckpointID(cp.ID); err != nil {
 		return Checkpoint{}, err
 	}
-	if err := validCheckpointID(cp.ID); err != nil {
+	return cp, nil
+}
+
+func loadCheckpointFile(path string, limit int64) (Checkpoint, error) {
+	pathInfo, err := os.Lstat(path)
+	if err != nil {
+		return Checkpoint{}, err
+	}
+	if !pathInfo.Mode().IsRegular() || pathInfo.Size() > limit {
+		return Checkpoint{}, fmt.Errorf("checkpoint record is not a regular file within the %d-byte limit", limit)
+	}
+	file, err := openReadOnly(path)
+	if err != nil {
+		return Checkpoint{}, err
+	}
+	defer file.Close()
+	openedInfo, err := file.Stat()
+	if err != nil {
+		return Checkpoint{}, err
+	}
+	if !openedInfo.Mode().IsRegular() || !os.SameFile(pathInfo, openedInfo) || openedInfo.Size() > limit {
+		return Checkpoint{}, fmt.Errorf("checkpoint record changed or exceeds the %d-byte limit", limit)
+	}
+	data, err := io.ReadAll(io.LimitReader(file, limit+1))
+	if err != nil {
+		return Checkpoint{}, err
+	}
+	if int64(len(data)) > limit {
+		return Checkpoint{}, fmt.Errorf("checkpoint record exceeds the %d-byte limit", limit)
+	}
+	var cp Checkpoint
+	if err := json.Unmarshal(data, &cp); err != nil {
 		return Checkpoint{}, err
 	}
 	return cp, nil

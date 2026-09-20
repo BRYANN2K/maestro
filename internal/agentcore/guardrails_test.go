@@ -2,6 +2,7 @@ package agentcore
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -207,6 +208,112 @@ func TestBudgetDailyAndWallClock(t *testing.T) {
 	}
 }
 
+func TestBudgetDailyRollsAtLocalMidnight(t *testing.T) {
+	dayOne := time.Date(2026, time.August, 23, 23, 59, 0, 0, time.Local)
+	current := dayOne
+	b := NewBudgetState(Budget{MaxDailyUSD: 1}, 0.75)
+	b.mu.Lock()
+	b.now = func() time.Time { return current }
+	b.started = current
+	b.dailyDay = current.Format(time.DateOnly)
+	b.mu.Unlock()
+
+	var recordedDay string
+	b.SetDailyRecorder(func(day string, delta float64) (float64, error) {
+		recordedDay = day
+		return delta, nil
+	})
+	current = dayOne.Add(2 * time.Minute)
+	if got := b.Daily(); got != 0 {
+		t.Fatalf("daily after midnight = %.2f, want 0", got)
+	}
+	kill, _ := b.Track(NewEvent(nil, RoleDev, EvDone, Done{Cost: &Cost{InputUSD: 0.10}}))
+	if kill {
+		t.Fatal("new calendar day inherited prior cap")
+	}
+	if recordedDay != current.Format(time.DateOnly) {
+		t.Fatalf("recorded day = %q, want %q", recordedDay, current.Format(time.DateOnly))
+	}
+}
+
+func TestBudgetEstimateFailsBeforeHardCap(t *testing.T) {
+	b := NewBudgetState(Budget{MaxUSD: 1, MaxDailyUSD: 2}, 0.25)
+	if err := b.CheckEstimate(0.50); err != nil {
+		t.Fatalf("safe estimate rejected: %v", err)
+	}
+	if err := b.CheckEstimate(1); err == nil {
+		t.Fatal("run-cap estimate accepted")
+	}
+	if err := b.CheckEstimate(1.75); err == nil {
+		t.Fatal("daily-cap estimate accepted")
+	}
+}
+
+func TestBudgetEstimateRejectsAlreadyReachedCapWithZeroEstimate(t *testing.T) {
+	b := NewBudgetState(Budget{MaxUSD: 1, MaxDailyUSD: 2}, 1)
+	b.spentUSD = 1
+	if err := b.CheckEstimate(0); err == nil {
+		t.Fatal("zero estimate bypassed an already reached run cap")
+	}
+
+	b = NewBudgetState(Budget{MaxDailyUSD: 1}, 1)
+	if err := b.CheckEstimate(0); err == nil {
+		t.Fatal("zero estimate bypassed an already reached daily cap")
+	}
+}
+
+func TestBudgetRecorderCannotDecreaseTotal(t *testing.T) {
+	b := NewBudgetState(Budget{MaxDailyUSD: 10}, 1)
+	b.SetDailyRecorder(func(string, float64) (float64, error) { return 0.5, nil })
+	kill, _ := b.Track(NewEvent(nil, RoleDev, EvDone, Done{Cost: &Cost{InputUSD: 0.25}}))
+	if !kill || b.Err() == nil || !strings.Contains(b.Err().Error(), "decreased") {
+		t.Fatalf("decreasing recorder result: kill=%v err=%v", kill, b.Err())
+	}
+}
+
+func TestBudgetRejectsOffsettingNegativeCostComponents(t *testing.T) {
+	b := NewBudgetState(Budget{MaxUSD: 10}, 0)
+	kill, _ := b.Track(NewEvent(nil, RoleDev, EvDone, Done{Cost: &Cost{InputUSD: -1, OutputUSD: 2}}))
+	if !kill || b.Err() == nil || b.Spent() != 0 {
+		t.Fatalf("invalid component cost: kill=%v err=%v spent=%v", kill, b.Err(), b.Spent())
+	}
+}
+
+func TestBudgetAccountingErrorSurvivesMidnight(t *testing.T) {
+	current := time.Date(2026, time.August, 23, 23, 59, 0, 0, time.Local)
+	b := NewBudgetState(Budget{MaxDailyUSD: 1}, 0)
+	b.mu.Lock()
+	b.now = func() time.Time { return current }
+	b.dailyDay = current.Format(time.DateOnly)
+	b.lastErr = errors.New("ledger unavailable")
+	b.mu.Unlock()
+	current = current.Add(2 * time.Minute)
+	if got := b.Daily(); got != 0 {
+		t.Fatalf("rolled daily total = %v", got)
+	}
+	if err := b.CheckEstimate(0); err == nil || !strings.Contains(err.Error(), "ledger unavailable") {
+		t.Fatalf("accounting error cleared at midnight: %v", err)
+	}
+}
+
+func TestBudgetKillCallbackMayInspectState(t *testing.T) {
+	b := NewBudgetState(Budget{MaxUSD: 1}, 0)
+	done := make(chan struct{})
+	b.SetKill(func() {
+		_ = b.Spent()
+		_ = b.Err()
+		close(done)
+	})
+	if kill, _ := b.Track(NewEvent(nil, RoleDev, EvDone, Done{Cost: &Cost{InputUSD: 1}})); !kill {
+		t.Fatal("cap did not kill")
+	}
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("kill callback deadlocked while inspecting budget state")
+	}
+}
+
 func TestBudgetToolCaps(t *testing.T) {
 	b := NewBudgetState(Budget{MaxToolCalls: 2}, 0)
 	b.Track(NewEvent(nil, RoleOrchestrator, EvToolCall, ToolCall{Name: "read", Args: "{}"}))
@@ -220,6 +327,20 @@ func TestBudgetToolCaps(t *testing.T) {
 	b2.Track(NewEvent(nil, RoleOrchestrator, EvToolCall, ToolCall{Name: "bash", Args: `{"c":"ls"}`}))
 	if kill, _ := b2.Track(NewEvent(nil, RoleOrchestrator, EvToolCall, ToolCall{Name: "bash", Args: `{"c":"ls"}`})); !kill {
 		t.Error("max repeated tool calls should kill")
+	}
+}
+
+func TestBudgetHashesLargeRepeatedArguments(t *testing.T) {
+	b := NewBudgetState(Budget{MaxRepeated: 2}, 0)
+	args := strings.Repeat("large generated content", 100_000)
+	b.Track(NewEvent(nil, RoleOrchestrator, EvToolCall, ToolCall{Name: "write", Args: args}))
+	if len(b.repeated) != 1 {
+		t.Fatalf("repetition keys = %d, want 1", len(b.repeated))
+	}
+	for key := range b.repeated {
+		if len(key) > 128 {
+			t.Fatalf("repetition key retained %d bytes of arguments", len(key))
+		}
 	}
 }
 
@@ -265,6 +386,32 @@ func TestAntiLoopReflectionInjection(t *testing.T) {
 	if !found {
 		t.Errorf("reflection prompt missing: %+v", loop.History)
 	}
+}
+
+func TestAntiLoopReflectionBoundsLargeArguments(t *testing.T) {
+	args := `{"content":"` + strings.Repeat("é", 10_000) + `"}`
+	repeat := ToolCall{ID: "c", Name: "write", Args: args}
+	p := &callProvider{calls: []ToolCall{repeat, repeat, repeat}, after: []string{"final"}, onlyFirst: true}
+	loop := &Loop{
+		Provider: p,
+		Model:    "m",
+		Tools:    map[string]Tool{},
+		Gate:     GateFunc(AllowAll),
+		AntiLoop: NewAntiLoop(8, 3),
+	}
+	if err := loop.Run(context.Background(), "keep trying"); err != nil {
+		t.Fatal(err)
+	}
+	for _, msg := range loop.History {
+		if msg.Role != "system" || !strings.Contains(msg.Content, "Reflection") {
+			continue
+		}
+		if len(msg.Content) > 1_000 || !strings.Contains(msg.Content, "sha256:") {
+			t.Fatalf("unbounded reflection prompt (%d bytes): %q", len(msg.Content), msg.Content)
+		}
+		return
+	}
+	t.Fatal("reflection prompt missing")
 }
 
 func TestAntiLoopNoFalsePositive(t *testing.T) {

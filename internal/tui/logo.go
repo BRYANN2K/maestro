@@ -38,7 +38,7 @@ func maestroLogoCompact(styles Styles, width int) string {
 	accent, score, _, body := maestroLogoStyles(styles)
 	lines := []string{
 		score.Render("M") + accent.Render(">") + " " + maestroWordmark(styles) + "  " + maestroReady(styles),
-		body.Render("Discuss first. Then /propose."),
+		body.Render("Your intent. A clear contract. Maestro builds."),
 	}
 	return maestroLogoClamp(strings.Join(lines, "\n"), width)
 }
@@ -50,11 +50,11 @@ func maestroLogoStandard(styles Styles, width int) string {
 		mark[0] + "   " + maestroWordmark(styles) + "  " + maestroReady(styles),
 		mark[1] + "   " + accent.Render("CODE IN CONCERT"),
 		mark[2] + "   " + body.Render("spec-driven development"),
-		mark[3] + "   " + muted.Render("decisions before edits"),
+		mark[3] + "   " + muted.Render("one harness / every phase"),
 		mark[4],
 		"",
-		body.Render("Discuss in read-only mode. /propose makes a reviewed spec."),
-		muted.Render("/propose  continue   /ide  code"),
+		body.Render("Explore the intent. Approve the contract. Follow the evidence."),
+		muted.Render("/workflow  contracts    /providers  connect    /ide  code"),
 	}
 	return maestroLogoClamp(strings.Join(lines, "\n"), width)
 }
@@ -66,12 +66,12 @@ func maestroLogoWide(styles Styles, width int) string {
 		mark[0] + "   " + maestroWordmark(styles) + "  " + maestroReady(styles),
 		mark[1] + "   " + accent.Render("CODE IN CONCERT"),
 		mark[2] + "   " + body.Render("spec-driven development"),
-		mark[3] + "   " + muted.Render("decisions before edits"),
+		mark[3] + "   " + muted.Render("one harness / every phase"),
 		mark[4],
 		"",
-		body.Render("Discuss the change with Maestro in read-only mode. Nothing becomes a"),
-		body.Render("spec until you explicitly choose /propose."),
-		muted.Render("/propose  use this discussion   /ide  open code"),
+		body.Render("Explore the intent. Approve the contract. Follow the evidence."),
+		body.Render("One built-in harness, connected to your models."),
+		muted.Render("/workflow  contracts    /providers  connect    /ide  code"),
 	}
 	return maestroLogoClamp(strings.Join(lines, "\n"), width)
 }

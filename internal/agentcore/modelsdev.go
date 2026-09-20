@@ -17,13 +17,18 @@ type ModelsDevOptions struct {
 	TTL       time.Duration // cache freshness, default 5m
 	Refresh   time.Duration // background refresh interval, default 60m
 	Disabled  bool          // MAESTRO_DISABLE_MODELS_FETCH
-	OnUpdate  func(map[string]CatalogProvider)
+	// AsyncStartup lets interactive frontends use stale cache/core immediately
+	// and refresh online after their first frame. Batch commands keep the
+	// synchronous Load contract by leaving it false.
+	AsyncStartup bool
+	OnUpdate     func(map[string]CatalogProvider)
 }
 
 const (
 	modelsDevURL        = "https://models.dev/api.json"
 	modelsDevDefaultTTL = 5 * time.Minute
 	modelsDevRefresh    = 60 * time.Minute
+	modelsDevMaxBytes   = 16 << 20
 )
 
 // ModelsDev is the remote catalog client: cache-first, atomic writes,
@@ -44,7 +49,15 @@ func NewModelsDev(opts ModelsDevOptions) *ModelsDev {
 	if opts.Refresh <= 0 {
 		opts.Refresh = modelsDevRefresh
 	}
-	return &ModelsDev{opts: opts, httpc: &http.Client{Timeout: 10 * time.Second}}
+	return &ModelsDev{opts: opts, httpc: &http.Client{Timeout: 10 * time.Second, Transport: providerTransport()}}
+}
+
+// Close releases the client's private idle connection pool. In-flight
+// requests remain controlled by the contexts passed to Load or Refresh.
+func (m *ModelsDev) Close() {
+	if m != nil && m.httpc != nil {
+		m.httpc.CloseIdleConnections()
+	}
 }
 
 // DefaultCachePath returns the cache file path.
@@ -60,7 +73,7 @@ func DefaultCachePath() (string, error) {
 // embedded core snapshot.
 func (m *ModelsDev) Load(ctx context.Context) (map[string]CatalogProvider, string, error) {
 	if !m.opts.Disabled {
-		if data, err := os.ReadFile(m.opts.CachePath); err == nil {
+		if data, err := readModelsDevCache(m.opts.CachePath); err == nil {
 			if fresh, err := cacheFresh(m.opts.CachePath, m.opts.TTL); err == nil && fresh {
 				if providers, err := ParseCatalog(data); err == nil {
 					return providers, "cache", nil
@@ -71,7 +84,7 @@ func (m *ModelsDev) Load(ctx context.Context) (map[string]CatalogProvider, strin
 			return providers, "remote", nil
 		}
 		// Stale cache still beats nothing.
-		if data, err := os.ReadFile(m.opts.CachePath); err == nil {
+		if data, err := readModelsDevCache(m.opts.CachePath); err == nil {
 			if providers, err := ParseCatalog(data); err == nil {
 				return providers, "cache", nil
 			}
@@ -82,6 +95,34 @@ func (m *ModelsDev) Load(ctx context.Context) (map[string]CatalogProvider, strin
 		return nil, "", err
 	}
 	return providers, "core", nil
+}
+
+// LoadCached never accesses the network. A valid stale cache is preferable to
+// blocking an interactive first frame; the caller may Refresh in background.
+func (m *ModelsDev) LoadCached() (map[string]CatalogProvider, string, error) {
+	if !m.opts.Disabled {
+		if data, err := readModelsDevCache(m.opts.CachePath); err == nil {
+			if providers, err := ParseCatalog(data); err == nil {
+				return providers, "cache", nil
+			}
+		}
+	}
+	providers, err := coreCatalog()
+	if err != nil {
+		return nil, "", err
+	}
+	return providers, "core", nil
+}
+
+// AsyncStartup reports whether the owner should refresh after initialization.
+func (m *ModelsDev) AsyncStartup() bool { return m != nil && m.opts.AsyncStartup }
+
+// RefreshInterval is the cadence for a long-lived owner's background loop.
+func (m *ModelsDev) RefreshInterval() time.Duration {
+	if m == nil {
+		return modelsDevRefresh
+	}
+	return m.opts.Refresh
 }
 
 // Refresh fetches the remote catalog immediately, bypassing the TTL cache.
@@ -109,9 +150,12 @@ func (m *ModelsDev) fetch(ctx context.Context) (map[string]CatalogProvider, erro
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("fetch %s: %s", m.opts.URL, resp.Status)
 	}
-	data, err := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
+	data, err := io.ReadAll(io.LimitReader(resp.Body, modelsDevMaxBytes+1))
 	if err != nil {
 		return nil, err
+	}
+	if len(data) > modelsDevMaxBytes {
+		return nil, fmt.Errorf("fetch %s: response exceeds %d bytes", m.opts.URL, modelsDevMaxBytes)
 	}
 	providers, err := ParseCatalog(data)
 	if err != nil {
@@ -123,6 +167,39 @@ func (m *ModelsDev) fetch(ctx context.Context) (map[string]CatalogProvider, erro
 		}
 	}
 	return providers, nil
+}
+
+func readModelsDevCache(path string) ([]byte, error) {
+	if path == "" {
+		return nil, os.ErrNotExist
+	}
+	pathInfo, err := os.Lstat(path)
+	if err != nil {
+		return nil, err
+	}
+	if !pathInfo.Mode().IsRegular() || pathInfo.Size() > modelsDevMaxBytes {
+		return nil, fmt.Errorf("models cache is not a regular file within the %d-byte limit", modelsDevMaxBytes)
+	}
+	f, err := openReadOnly(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	openedInfo, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !openedInfo.Mode().IsRegular() || !os.SameFile(pathInfo, openedInfo) || openedInfo.Size() > modelsDevMaxBytes {
+		return nil, fmt.Errorf("models cache changed or exceeds the %d-byte limit", modelsDevMaxBytes)
+	}
+	data, err := io.ReadAll(io.LimitReader(f, modelsDevMaxBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > modelsDevMaxBytes {
+		return nil, fmt.Errorf("models cache exceeds %d bytes", modelsDevMaxBytes)
+	}
+	return data, nil
 }
 
 // StartRefresh refreshes the catalog in the background.

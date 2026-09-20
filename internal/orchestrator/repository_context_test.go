@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -36,5 +37,20 @@ func TestBuildRepositoryContextIsBoundedAndSecretAware(t *testing.T) {
 	}
 	if len(got) > maxContextBytes+maxContextFiles*256 {
 		t.Fatalf("context unexpectedly large: %d bytes", len(got))
+	}
+}
+
+func TestBuildRepositoryContextStopsAtInventoryLimit(t *testing.T) {
+	dir := t.TempDir()
+	for i := 0; i < maxContextFiles+50; i++ {
+		name := filepath.Join(dir, fmt.Sprintf("file-%04d.txt", i))
+		if err := os.WriteFile(name, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := buildRepositoryContext(dir)
+	inventory := strings.Split(strings.TrimSpace(strings.SplitN(got, "### File inventory (bounded)\n", 2)[1]), "\n")
+	if len(inventory) != maxContextFiles {
+		t.Fatalf("inventory entries = %d, want %d", len(inventory), maxContextFiles)
 	}
 }

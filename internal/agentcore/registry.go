@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"reflect"
 	"slices"
 	"strings"
+	"sync/atomic"
 
 	"github.com/bryann2k/maestro/internal/config"
 )
@@ -21,10 +23,16 @@ type KeyStore interface {
 // catalog, and answers model lookups across them. Resolution order:
 // maestrorc > environment-detected catalog > local providers (§10.3).
 type Registry struct {
+	state atomic.Pointer[registryState]
+}
+
+// registryState is immutable after publication. Providers own their mutable
+// discovery caches and synchronize those internally; the registry maps and
+// catalog metadata are replaced as one snapshot.
+type registryState struct {
 	providers map[string]Provider
 	models    map[string]Model // model ID → model, deduplicated
 	catalog   map[string]CatalogProvider
-	envKeys   func(string) (string, bool)
 }
 
 // NewRegistry builds a provider per config.Provider entry, then auto-
@@ -32,7 +40,8 @@ type Registry struct {
 // providers (ollama, llamacpp, lmstudio, litellm). catalog may be nil —
 // then the embedded core snapshot is used.
 func NewRegistry(ctx context.Context, cfg *config.Config, keys KeyStore, catalog map[string]CatalogProvider) (*Registry, error) {
-	r := &Registry{providers: map[string]Provider{}, models: map[string]Model{}}
+	r := &Registry{}
+	state := &registryState{providers: map[string]Provider{}, models: map[string]Model{}}
 	if catalog == nil {
 		var err error
 		catalog, err = coreCatalog()
@@ -40,28 +49,19 @@ func NewRegistry(ctx context.Context, cfg *config.Config, keys KeyStore, catalog
 			return nil, err
 		}
 	}
+	// The caller and models.dev cache retain their own catalog maps. Clone all
+	// nested slices/maps before normalization so neither side can mutate the
+	// registry after this snapshot is published.
+	catalog = cloneCatalog(catalog)
 	ensureLocals(catalog)
 	var errs []error
-	validatedCatalog := make(map[string]CatalogProvider, len(catalog))
-	for id, provider := range catalog {
-		if err := config.ValidateProviderID(id); err != nil {
-			errs = append(errs, fmt.Errorf("catalog provider %q: %w", id, err))
-			continue
-		}
-		if provider.ID == "" {
-			provider.ID = id
-		} else if err := config.ValidateProviderID(provider.ID); err != nil {
-			errs = append(errs, fmt.Errorf("catalog provider %q metadata: %w", id, err))
-			continue
-		} else if provider.ID != id {
-			errs = append(errs, fmt.Errorf("catalog provider %q metadata ID %q does not match", id, provider.ID))
-			continue
-		}
-		validatedCatalog[id] = provider
+	validated, catalogErr := validateCatalog(catalog)
+	if catalogErr != nil {
+		errs = append(errs, catalogErr)
 	}
-	catalog = validatedCatalog
-	r.catalog = catalog
-	r.envKeys = func(name string) (string, bool) {
+	catalog = validated
+	state.catalog = catalog
+	envKey := func(name string) (string, bool) {
 		if keys != nil {
 			return keys.Key(name)
 		}
@@ -98,16 +98,16 @@ func NewRegistry(ctx context.Context, cfg *config.Config, keys KeyStore, catalog
 			errs = append(errs, err)
 			continue
 		}
-		r.providers[p.Name] = prov
+		state.providers[p.Name] = prov
 	}
 
 	// 2. Catalog providers detected via their env var (or local).
 	for id, cp := range catalog {
-		if _, configured := r.providers[id]; configured {
+		if _, configured := state.providers[id]; configured {
 			continue // maestrorc wins
 		}
 		if !isLocalProvider(cp) {
-			if _, ok := r.envKeys(id); !ok && !catalogEnvPresent(cp) {
+			if _, ok := envKey(id); !ok && !catalogEnvPresent(cp) {
 				continue // no key → skip (reported by auth status)
 			}
 		}
@@ -116,14 +116,80 @@ func NewRegistry(ctx context.Context, cfg *config.Config, keys KeyStore, catalog
 			errs = append(errs, err)
 			continue
 		}
-		r.providers[id] = prov
+		state.providers[id] = prov
 	}
 
+	for _, name := range AccountProviders() {
+		key, _ := envKey(name)
+		if !IsRuntimeCredential(key) {
+			continue
+		}
+		if _, exists := state.providers[name]; !exists {
+			state.providers[name] = newRuntimeProvider(name, "", "", keys, nil)
+		}
+	}
 	// 3. Explicit model add entries override catalog metadata.
 	for _, m := range cfg.Models {
-		r.models[m.ID] = modelFromConfig(m, m.ID)
+		state.models[m.ID] = modelFromConfig(m, m.ID)
 	}
+	r.state.Store(state)
 	return r, errors.Join(errs...)
+}
+
+func (r *Registry) snapshot() *registryState {
+	if r == nil {
+		return &registryState{
+			providers: map[string]Provider{},
+			models:    map[string]Model{},
+			catalog:   map[string]CatalogProvider{},
+		}
+	}
+	if state := r.state.Load(); state != nil {
+		return state
+	}
+	return &registryState{
+		providers: map[string]Provider{},
+		models:    map[string]Model{},
+		catalog:   map[string]CatalogProvider{},
+	}
+}
+
+func validateCatalog(catalog map[string]CatalogProvider) (map[string]CatalogProvider, error) {
+	validated := make(map[string]CatalogProvider, len(catalog))
+	var errs []error
+	for id, provider := range catalog {
+		if err := config.ValidateProviderID(id); err != nil {
+			errs = append(errs, fmt.Errorf("catalog provider %q: %w", id, err))
+			continue
+		}
+		if provider.ID == "" {
+			provider.ID = id
+		} else if err := config.ValidateProviderID(provider.ID); err != nil {
+			errs = append(errs, fmt.Errorf("catalog provider %q metadata: %w", id, err))
+			continue
+		} else if provider.ID != id {
+			errs = append(errs, fmt.Errorf("catalog provider %q metadata ID %q does not match", id, provider.ID))
+			continue
+		}
+		validated[id] = provider
+	}
+	return validated, errors.Join(errs...)
+}
+
+func cloneCatalog(catalog map[string]CatalogProvider) map[string]CatalogProvider {
+	cloned := make(map[string]CatalogProvider, len(catalog))
+	for id, provider := range catalog {
+		provider.Env = slices.Clone(provider.Env)
+		models := make(map[string]CatalogModel, len(provider.Models))
+		for modelID, model := range provider.Models {
+			model.Modalities.Input = slices.Clone(model.Modalities.Input)
+			model.Modalities.Output = slices.Clone(model.Modalities.Output)
+			models[modelID] = model
+		}
+		provider.Models = models
+		cloned[id] = provider
+	}
+	return cloned
 }
 
 // configuredModelsForProvider returns only explicit models whose first path
@@ -225,6 +291,9 @@ func buildCatalogProvider(ctx context.Context, id string, cp CatalogProvider, ke
 	if key == "" {
 		key, _ = catalogEnvKey(cp)
 	}
+	if IsRuntimeCredential(key) || id == "google" {
+		return newRuntimeProvider(id, "", key, keys, configured), nil
+	}
 	catalogStatic := catalogModels(cp)
 	discover := len(catalogStatic) == 0 // local providers and empty catalogs discover live
 	static := overrideModels(catalogStatic, configured)
@@ -237,7 +306,14 @@ func buildCatalogProvider(ctx context.Context, id string, cp CatalogProvider, ke
 }
 
 func buildProvider(ctx context.Context, p config.Provider, keys KeyStore, static []Model) (Provider, error) {
+	if keys != nil {
+		if key, ok := keys.Key(p.Name); ok && IsRuntimeCredential(key) {
+			return newRuntimeProvider(p.Name, "", key, keys, nil), nil
+		}
+	}
 	switch p.Type {
+	case "maestro":
+		return newRuntimeProvider(p.Name, p.BaseURL, p.APIKey, keys, static), nil
 	case "openai", "openai-compat", "ollama", "llamacpp", "lmstudio", "litellm":
 		key := p.APIKey
 		if key == "" && keys != nil {
@@ -299,14 +375,171 @@ func SamplingFromConfig(s config.Sampling) Sampling {
 	}
 }
 
-// Catalog returns the provider catalog backing the registry.
+// ReplaceCatalog atomically publishes a complete catalog snapshot. The input
+// is deep-cloned before validation and publication, and providers absent from
+// the replacement disappear (except the always-available local transports).
+func (r *Registry) ReplaceCatalog(catalog map[string]CatalogProvider) error {
+	if r == nil {
+		return errors.New("replace catalog: nil registry")
+	}
+	nextCatalog := cloneCatalog(catalog)
+	ensureLocals(nextCatalog)
+	validated, err := validateCatalog(nextCatalog)
+	if err != nil {
+		return err
+	}
+	for {
+		current := r.state.Load()
+		if current == nil {
+			initial := &registryState{
+				providers: map[string]Provider{},
+				models:    map[string]Model{},
+				catalog:   map[string]CatalogProvider{},
+			}
+			if !r.state.CompareAndSwap(nil, initial) {
+				continue
+			}
+			current = initial
+		}
+		next := &registryState{
+			providers: current.providers,
+			models:    current.models,
+			catalog:   validated,
+		}
+		if r.state.CompareAndSwap(current, next) {
+			return nil
+		}
+	}
+}
+
+// Replace atomically publishes all state from next while keeping the Registry
+// pointer stable for concurrent orchestrator readers.
+func (r *Registry) Replace(next *Registry) {
+	if r == nil || next == nil || r == next {
+		return
+	}
+	r.state.Store(cloneRegistryState(next.snapshot()))
+}
+
+// ReplaceAndClose atomically transfers next's provider snapshot into r and
+// releases the providers retired by the swap. The caller must not reuse next
+// after this ownership transfer. Orchestrator refresh paths serialize writers,
+// while readers continue to observe one immutable state or the other.
+func (r *Registry) ReplaceAndClose(next *Registry) error {
+	if r == nil {
+		return errors.New("replace registry: nil destination")
+	}
+	if next == nil {
+		return errors.New("replace registry: nil source")
+	}
+	if r == next {
+		return nil
+	}
+	replacement := cloneRegistryState(next.snapshot())
+	retired := r.state.Swap(replacement)
+	return closeRegistryProviders(retired, replacement.providers)
+}
+
+func cloneRegistryState(source *registryState) *registryState {
+	providers := make(map[string]Provider, len(source.providers))
+	for name, provider := range source.providers {
+		providers[name] = provider
+	}
+	models := make(map[string]Model, len(source.models))
+	for id, model := range source.models {
+		models[id] = model
+	}
+	return &registryState{
+		providers: providers,
+		models:    models,
+		catalog:   cloneCatalog(source.catalog),
+	}
+}
+
+// Close releases optional provider-owned background work and idle
+// connections. Providers without lifecycle resources need not implement it.
+// The method is safe to call repeatedly when provider Close methods are
+// idempotent, as Maestro's built-in providers are.
+func (r *Registry) Close() error {
+	if r == nil {
+		return nil
+	}
+	return closeRegistryProviders(r.state.Load(), nil)
+}
+
+func closeRegistryProviders(state *registryState, retained map[string]Provider) error {
+	if state == nil {
+		return nil
+	}
+	names := make([]string, 0, len(state.providers))
+	for name := range state.providers {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	var errs []error
+	closed := make([]Provider, 0, len(names))
+	for _, name := range names {
+		provider := state.providers[name]
+		if providerIsRetained(provider, retained) || providerInSlice(provider, closed) {
+			continue
+		}
+		closer, ok := provider.(interface{ Close() error })
+		if !ok {
+			continue
+		}
+		closed = append(closed, provider)
+		if err := closer.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("close provider %s: %w", name, err))
+		}
+	}
+	return errors.Join(errs...)
+}
+
+func providerInSlice(provider Provider, candidates []Provider) bool {
+	for _, candidate := range candidates {
+		if sameProvider(provider, candidate) {
+			return true
+		}
+	}
+	return false
+}
+
+func providerIsRetained(provider Provider, retained map[string]Provider) bool {
+	for _, candidate := range retained {
+		if sameProvider(provider, candidate) {
+			return true
+		}
+	}
+	return false
+}
+
+func sameProvider(left, right Provider) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	typ := reflect.TypeOf(left)
+	if reflect.TypeOf(right) != typ {
+		return false
+	}
+	if typ.Comparable() {
+		return left == right
+	}
+	// Provider implementations are normally pointers. For an unusual
+	// non-comparable value implementation, preserve it rather than risk
+	// closing an object still owned by the replacement snapshot.
+	return true
+}
+
+// Catalog returns an isolated copy of the provider catalog. Mutating the
+// returned map, providers, model maps, or modality slices cannot affect the
+// live registry.
 func (r *Registry) Catalog() map[string]CatalogProvider {
-	return r.catalog
+	return cloneCatalog(r.snapshot().catalog)
 }
 
 // Provider returns the provider registered under name.
 func (r *Registry) Provider(name string) (Provider, bool) {
-	p, ok := r.providers[name]
+	p, ok := r.snapshot().providers[name]
 	return p, ok
 }
 
@@ -314,30 +547,35 @@ func (r *Registry) Provider(name string) (Provider, bool) {
 // provider wire protocol. Provider display names are never used as a proxy
 // for capabilities, so a custom Anthropic/OpenAI provider behaves correctly.
 func (r *Registry) ReasoningEfforts(modelID string) []string {
-	providerName, ok := r.ProviderOf(modelID)
+	state := r.snapshot()
+	providerName, ok := providerOf(state, modelID)
 	if !ok {
 		if name, candidate, cut := strings.Cut(modelID, "/"); cut {
-			if catalogProvider, exists := r.catalog[name]; exists {
+			if catalogProvider, exists := state.catalog[name]; exists {
 				catalogModel, known := catalogProvider.Models[candidate]
 				return ReasoningEffortsForProvider(catalogType(catalogProvider), candidate, known && catalogModel.Reasoning)
 			}
 		}
 		return append([]string(nil), automaticEfforts...)
 	}
-	provider, ok := r.Provider(providerName)
+	provider, ok := state.providers[providerName]
 	if !ok {
 		return append([]string(nil), automaticEfforts...)
 	}
-	model, known := r.Model(modelID)
+	model, known := modelIn(state, modelID)
+	if provider.Type() == "maestro" {
+		return append([]string{"auto"}, model.Efforts...)
+	}
 	canReason := known && model.CanReason
-	apiModel := r.APIModelID(modelID)
+	apiModel := apiModelID(state, modelID)
 	return ReasoningEffortsForProvider(provider.Type(), apiModel, canReason)
 }
 
 // Providers returns the registered provider names, sorted.
 func (r *Registry) Providers() []string {
-	names := make([]string, 0, len(r.providers))
-	for n := range r.providers {
+	state := r.snapshot()
+	names := make([]string, 0, len(state.providers))
+	for n := range state.providers {
 		names = append(names, n)
 	}
 	slices.Sort(names)
@@ -346,7 +584,7 @@ func (r *Registry) Providers() []string {
 
 // Models returns the models of one provider: static + discovered.
 func (r *Registry) Models(ctx context.Context, provider string) ([]Model, error) {
-	p, ok := r.providers[provider]
+	p, ok := r.snapshot().providers[provider]
 	if !ok {
 		return nil, fmt.Errorf("provider %s not configured", provider)
 	}
@@ -356,25 +594,29 @@ func (r *Registry) Models(ctx context.Context, provider string) ([]Model, error)
 // Model finds a model by its fully qualified ID ("provider/model") or by a
 // bare ID across all providers.
 func (r *Registry) Model(id string) (Model, bool) {
+	return modelIn(r.snapshot(), id)
+}
+
+func modelIn(state *registryState, id string) (Model, bool) {
 	if provider, _, qualified := strings.Cut(id, "/"); qualified {
-		if _, active := r.providers[provider]; !active {
+		if _, active := state.providers[provider]; !active {
 			return Model{}, false
 		}
 	}
-	if m, ok := r.models[id]; ok {
+	if m, ok := state.models[id]; ok {
 		if !strings.Contains(id, "/") {
-			if _, resolved := r.ProviderOf(id); !resolved {
+			if _, resolved := providerOf(state, id); !resolved {
 				return Model{}, false
 			}
 		}
 		return m, true
 	}
 	if provider, model, ok := strings.Cut(id, "/"); ok {
-		if p, found := r.providers[provider]; found {
+		if p, found := state.providers[provider]; found {
 			// Legacy unqualified config entries are exposed through a qualified
 			// selection handle once their sole provider is known.
-			if configured, exists := r.models[model]; exists {
-				if owner, resolved := r.ProviderOf(model); resolved && owner == provider {
+			if configured, exists := state.models[model]; exists {
+				if owner, resolved := providerOf(state, model); resolved && owner == provider {
 					return configured, true
 				}
 			}
@@ -387,7 +629,7 @@ func (r *Registry) Model(id string) (Model, bool) {
 	}
 	var candidate Model
 	found := false
-	for _, p := range r.providers {
+	for _, p := range state.providers {
 		for _, m := range p.Models() {
 			if m.ID == id {
 				if found {
@@ -409,17 +651,22 @@ func (r *Registry) Model(id string) (Model, bool) {
 // continue to use ProviderOf, CheckModel, or Model and therefore fail closed
 // for ambiguous, missing, or disabled providers.
 func (r *Registry) ModelMetadata(id string) (Model, bool) {
-	if model, configured := r.models[id]; configured {
+	state := r.snapshot()
+	if model, configured := state.models[id]; configured {
 		return model, true
 	}
-	return r.Model(id)
+	return modelIn(state, id)
 }
 
 // ProviderOf returns the provider name that serves modelID, resolving both
 // qualified ("provider/model") and bare IDs.
 func (r *Registry) ProviderOf(modelID string) (string, bool) {
+	return providerOf(r.snapshot(), modelID)
+}
+
+func providerOf(state *registryState, modelID string) (string, bool) {
 	if provider, _, ok := strings.Cut(modelID, "/"); ok {
-		if _, found := r.providers[provider]; found {
+		if _, found := state.providers[provider]; found {
 			return provider, true
 		}
 		// Slash-bearing values are explicit selection handles. Never reinterpret
@@ -431,14 +678,14 @@ func (r *Registry) ProviderOf(modelID string) (string, bool) {
 	// attributed merely because one provider catalog happens to contain the
 	// same ID. Preserve the legacy sole-provider fallback, but fail closed as
 	// soon as more than one non-local provider could own it.
-	if _, ok := r.models[modelID]; ok {
-		candidates := r.configModelProviderCandidates()
+	if _, ok := state.models[modelID]; ok {
+		candidates := configModelProviderCandidates(state)
 		if len(candidates) == 1 {
 			return candidates[0], true
 		}
 		return "", false
 	}
-	matches := r.modelProviderMatches(modelID)
+	matches := modelProviderMatches(state, modelID)
 	if len(matches) == 1 {
 		return matches[0], true
 	}
@@ -451,9 +698,9 @@ func (r *Registry) ProviderOf(modelID string) (string, bool) {
 // entries. A custom provider with live discovery remains a candidate: an
 // empty or changing model list is not evidence that it cannot own the ID.
 // Sorting makes diagnostics and tests deterministic.
-func (r *Registry) configModelProviderCandidates() []string {
+func configModelProviderCandidates(state *registryState) []string {
 	var candidates []string
-	for name, provider := range r.providers {
+	for name, provider := range state.providers {
 		switch name {
 		case "ollama", "llamacpp", "lmstudio", "litellm":
 			continue
@@ -471,9 +718,9 @@ func (r *Registry) configModelProviderCandidates() []string {
 // modelProviderMatches returns every provider that advertises modelID.
 // Bare IDs are usable only when this set is unique; returning the first map
 // match would route prompts and credentials nondeterministically.
-func (r *Registry) modelProviderMatches(modelID string) []string {
+func modelProviderMatches(state *registryState, modelID string) []string {
 	var matches []string
-	for name, provider := range r.providers {
+	for name, provider := range state.providers {
 		for _, model := range provider.Models() {
 			if model.ID == modelID {
 				matches = append(matches, name)
@@ -488,8 +735,8 @@ func (r *Registry) modelProviderMatches(modelID string) []string {
 // catalogServes reports whether the live models.dev catalog (not the
 // provider's static snapshot, which is frozen at registration time) lists
 // the model for the provider.
-func (r *Registry) catalogServes(providerName, modelID string) bool {
-	cp, ok := r.catalog[providerName]
+func catalogServes(state *registryState, providerName, modelID string) bool {
+	cp, ok := state.catalog[providerName]
 	if !ok {
 		return false
 	}
@@ -510,34 +757,38 @@ func (r *Registry) catalogServes(providerName, modelID string) bool {
 //   - genuinely-qualified ids (e.g. "accounts/fireworks/models/x") → as-is
 //   - bare config entries → as-is
 func (r *Registry) APIModelID(modelID string) string {
+	return apiModelID(r.snapshot(), modelID)
+}
+
+func apiModelID(state *registryState, modelID string) string {
 	if provider, bare, cut := strings.Cut(modelID, "/"); cut && bare != "" {
 		// An exact qualified maestrorc entry is a Maestro selection handle.
 		// Its provider prefix never belongs on the provider wire; any further
 		// namespace in bare remains intact.
-		if _, configured := r.models[modelID]; configured {
-			if _, exists := r.providers[provider]; exists {
+		if _, configured := state.models[modelID]; configured {
+			if _, exists := state.providers[provider]; exists {
 				return bare
 			}
 		}
-		if configured, exists := r.models[bare]; exists {
-			if owner, resolved := r.ProviderOf(bare); resolved && owner == provider {
+		if configured, exists := state.models[bare]; exists {
+			if owner, resolved := providerOf(state, bare); resolved && owner == provider {
 				return configured.ID
 			}
 		}
-		if p, ok := r.providers[provider]; ok {
+		if p, ok := state.providers[provider]; ok {
 			for _, m := range p.Models() {
 				if m.ID == bare {
 					return m.ID
 				}
 			}
 		}
-		if cp, ok := r.catalog[provider]; ok {
+		if cp, ok := state.catalog[provider]; ok {
 			if _, ok := cp.Models[bare]; ok {
 				return bare
 			}
 		}
 	}
-	if m, ok := r.models[modelID]; ok && m.ID != "" {
+	if m, ok := state.models[modelID]; ok && m.ID != "" {
 		return m.ID
 	}
 	return modelID
@@ -553,10 +804,16 @@ type Discoverable interface {
 // ModelIDs returns every known model ID: provider models (qualified) plus
 // explicit model-add entries from the config.
 func (r *Registry) ModelIDs() []string {
+	state := r.snapshot()
 	seen := map[string]bool{}
 	var out []string
-	for _, name := range r.Providers() {
-		for _, m := range r.modelsFor(name) {
+	providerNames := make([]string, 0, len(state.providers))
+	for name := range state.providers {
+		providerNames = append(providerNames, name)
+	}
+	slices.Sort(providerNames)
+	for _, name := range providerNames {
+		for _, m := range modelsFor(state, name) {
 			if m.ID == "" {
 				continue
 			}
@@ -569,8 +826,8 @@ func (r *Registry) ModelIDs() []string {
 			}
 		}
 	}
-	for id := range r.models {
-		provider, resolved := r.ProviderOf(id)
+	for id := range state.models {
+		provider, resolved := providerOf(state, id)
 		if !resolved {
 			continue // ambiguous/unbound config entries are not selectable
 		}
@@ -588,8 +845,8 @@ func (r *Registry) ModelIDs() []string {
 }
 
 // modelsFor returns a provider's served models.
-func (r *Registry) modelsFor(name string) []Model {
-	if p, ok := r.providers[name]; ok {
+func modelsFor(state *registryState, name string) []Model {
+	if p, ok := state.providers[name]; ok {
 		return p.Models()
 	}
 	return nil
@@ -602,27 +859,28 @@ func (r *Registry) modelsFor(name string) []Model {
 // are exempt. Fails fast with a clean message instead of a raw provider
 // error dump mid-turn.
 func (r *Registry) CheckModel(modelID string) error {
-	providerName, ok := r.ProviderOf(modelID)
+	state := r.snapshot()
+	providerName, ok := providerOf(state, modelID)
 	if !ok {
 		if provider, _, qualified := strings.Cut(modelID, "/"); qualified {
 			return fmt.Errorf("model %q not available — provider %q is not configured", modelID, provider)
 		}
-		if _, configured := r.models[modelID]; configured {
-			candidates := r.configModelProviderCandidates()
+		if _, configured := state.models[modelID]; configured {
+			candidates := configModelProviderCandidates(state)
 			if len(candidates) > 1 {
 				return fmt.Errorf("model %q has an ambiguous provider binding across %s — declare and select it as provider/%s", modelID, strings.Join(candidates, ", "), modelID)
 			}
 			return fmt.Errorf("model %q has no provider binding — declare and select it as provider/%s", modelID, modelID)
 		}
-		if matches := r.modelProviderMatches(modelID); len(matches) > 1 {
+		if matches := modelProviderMatches(state, modelID); len(matches) > 1 {
 			return fmt.Errorf("model %q is ambiguous across providers %s — select a qualified ID such as %s/%s", modelID, strings.Join(matches, ", "), matches[0], modelID)
 		}
 		return fmt.Errorf("model %q not available — run 'maestro model list'", modelID)
 	}
-	if _, known := r.Model(modelID); known || r.catalogServes(providerName, modelID) {
+	if _, known := modelIn(state, modelID); known || catalogServes(state, providerName, modelID) {
 		return nil
 	}
-	if p, ok := r.providers[providerName]; ok {
+	if p, ok := state.providers[providerName]; ok {
 		if d, ok := p.(Discoverable); ok && d.Discoverable() {
 			return nil
 		}

@@ -14,18 +14,18 @@
 
   <defs>
     <radialGradient id="background" cx="50%" cy="47%" r="72%">
-      <stop offset="0" stop-color="#12171b" />
-      <stop offset="0.68" stop-color="#0f1418" />
-      <stop offset="1" stop-color="#0b0e11" />
+      <stop offset="0" stop-color="#191A22" />
+      <stop offset="0.68" stop-color="#101116" />
+      <stop offset="1" stop-color="#0B0C10" />
     </radialGradient>
     <linearGradient id="ivory" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#faf6ed" />
-      <stop offset="0.55" stop-color="#f7f2e9" />
-      <stop offset="1" stop-color="#f3eee5" />
+      <stop offset="0" stop-color="#F5F2EC" />
+      <stop offset="0.55" stop-color="#EEECE5" />
+      <stop offset="1" stop-color="#E3DFD8" />
     </linearGradient>
-    <linearGradient id="coral" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#ff6548" />
-      <stop offset="1" stop-color="#f04432" />
+    <linearGradient id="lavender" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#CBBBF2" />
+      <stop offset="1" stop-color="#B7A5E6" />
     </linearGradient>
   </defs>
 
@@ -51,7 +51,7 @@
 
   <path
     d="M745 429L804 479L745 530L733 508L769 479L733 450Z"
-    fill="url(#coral)"
+    fill="url(#lavender)"
   />
 
   <g fill="url(#ivory)">

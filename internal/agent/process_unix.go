@@ -39,6 +39,19 @@ func configureProcessTree(cmd *exec.Cmd) {
 	cmd.WaitDelay = legacyProcessWaitDelay
 }
 
+func startProcessTree(cmd *exec.Cmd) (processWaiter, error) {
+	configureProcessTree(cmd)
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+	return commandWaiter{cmd: cmd}, nil
+}
+
+func runProcessTree(cmd *exec.Cmd) error {
+	configureProcessTree(cmd)
+	return cmd.Run()
+}
+
 // killProcessTree first freezes the vendor process group, while parent/child
 // relationships are still intact, then discovers and freezes descendants that
 // deliberately escaped that group with setpgid(2) or setsid(2). Killing only
@@ -123,9 +136,11 @@ type processDescendant struct {
 // descendant. This closes the race where an escaped tool forks between the
 // first process-table snapshot and the SIGSTOP delivered to that tool.
 func freezeDescendants(rootPID int) []processDescendant {
+	ctx, cancel := context.WithTimeout(context.Background(), processSnapshotTimeout)
+	defer cancel()
 	known := make(map[int]processDescendant)
 	for pass := 0; pass < processTreeStabilizationPass; pass++ {
-		parents, err := snapshotProcessParents()
+		parents, err := snapshotProcessParents(ctx)
 		if err != nil {
 			break
 		}
@@ -162,13 +177,11 @@ func freezeDescendants(rootPID int) []processDescendant {
 	return result
 }
 
-func snapshotProcessParents() (map[int]int, error) {
+func snapshotProcessParents(ctx context.Context) (map[int]int, error) {
 	psPath, err := systemPSPath()
 	if err != nil {
 		return nil, err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), processSnapshotTimeout)
-	defer cancel()
 	output, err := exec.CommandContext(ctx, psPath, "-axo", "pid=,ppid=").Output()
 	if err != nil {
 		return nil, err

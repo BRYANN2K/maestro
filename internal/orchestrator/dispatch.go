@@ -29,6 +29,9 @@ type Command struct {
 // an error, never a silent no-op.
 func (o *Orchestrator) Dispatch(ctx context.Context, cmd Command) error {
 	switch cmd.Cmd {
+	case "workflow":
+		return o.dispatchWorkflow(ctx, cmd)
+
 	case "propose":
 		prompt := flagAndArgs(cmd, "m", 0)
 		recipe := flag(cmd, "recipe")

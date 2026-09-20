@@ -8,7 +8,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // sseServer starts a server that calls handler per request. The handler
@@ -76,8 +79,11 @@ func TestOpenAIStreamTextAndUsage(t *testing.T) {
 	if done == nil || done.Usage == nil {
 		t.Fatal("missing done event with usage")
 	}
-	if done.Usage.InputTokens != 10 || done.Usage.OutputTokens != 5 || done.Usage.CacheCreateTokens != 2 || done.Usage.CacheHitTokens != 3 {
+	if done.Usage.InputTokens != 5 || done.Usage.OutputTokens != 5 || done.Usage.CacheCreateTokens != 2 || done.Usage.CacheHitTokens != 3 {
 		t.Errorf("usage = %+v", done.Usage)
+	}
+	if totalInput := done.Usage.InputTokens + done.Usage.CacheCreateTokens + done.Usage.CacheHitTokens; totalInput != 10 {
+		t.Errorf("normalized prompt tokens = %d, want provider total 10", totalInput)
 	}
 	if done.Cost == nil || done.Cost.Total() <= 0 {
 		t.Errorf("cost = %+v", done.Cost)
@@ -90,6 +96,49 @@ func TestOpenAIStreamTextAndUsage(t *testing.T) {
 	}
 	if msgs, ok := gotBody["messages"].([]any); !ok || len(msgs) != 2 {
 		t.Errorf("messages = %v", gotBody["messages"])
+	}
+}
+
+func TestOpenAIStreamPreservesStaticThenDynamicSystemOrder(t *testing.T) {
+	var gotBody map[string]any
+	srv := sseServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Errorf("decode body: %v", err)
+		}
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	})
+	p := newOpenAI("mock", srv.URL, "sk-test", false, nil, nil)
+	ch, err := p.Stream(t.Context(), Request{
+		Model: "m",
+		System: []Message{
+			{Role: "system", Content: "STATIC-FIRST"},
+			{Role: "system", Content: "STATIC-SECOND"},
+		},
+		Messages: []Message{
+			{Role: "system", Content: "DYNAMIC-THIRD"},
+			{Role: "user", Content: "USER-LAST"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	collectEvents(t, ch)
+
+	messages, ok := gotBody["messages"].([]any)
+	if !ok || len(messages) != 4 {
+		t.Fatalf("messages = %#v", gotBody["messages"])
+	}
+	want := []struct{ role, content string }{
+		{"system", "STATIC-FIRST"},
+		{"system", "STATIC-SECOND"},
+		{"system", "DYNAMIC-THIRD"},
+		{"user", "USER-LAST"},
+	}
+	for i, expected := range want {
+		message := messages[i].(map[string]any)
+		if message["role"] != expected.role || message["content"] != expected.content {
+			t.Errorf("message %d = %#v, want role=%q content=%q", i, message, expected.role, expected.content)
+		}
 	}
 }
 
@@ -111,9 +160,22 @@ func TestOpenAIBodyOmitsAutomaticAndRejectsUnknownReasoning(t *testing.T) {
 	}
 }
 
+func TestOpenAIBodyRejectsReservedProviderOption(t *testing.T) {
+	p := newOpenAI("mock", "http://example.invalid", "sk-test", false, nil, nil)
+	_, err := p.buildBody(Request{
+		Model: "m",
+		Sampling: Sampling{ProviderOptions: map[string]any{
+			"max_tokens": 999_999,
+		}},
+	})
+	if err == nil || !strings.Contains(err.Error(), `provider option "max_tokens" is reserved`) {
+		t.Fatalf("reserved provider option error = %v", err)
+	}
+}
+
 func TestOpenAIStreamToolCallFragments(t *testing.T) {
-	chunk1 := `{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"read","arguments":"{\"path\":\""}}]}}]}`
-	chunk2 := `{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"main.go\"}"}}]}}]}`
+	chunk1 := `{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_","function":{"name":"re","arguments":"{\"path\":\""}}]}}]}`
+	chunk2 := `{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"1","function":{"name":"ad","arguments":"main.go\"}"}}]}}]}`
 	chunk3 := `{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}`
 	srv := sseServer(t, func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, "data: %s\n\n", chunk1)
@@ -138,6 +200,82 @@ func TestOpenAIStreamToolCallFragments(t *testing.T) {
 	}
 	if calls[0].ID != "call_1" || calls[0].Name != "read" || calls[0].Args != `{"path":"main.go"}` {
 		t.Errorf("tool call = %+v", calls[0])
+	}
+}
+
+func TestOpenAIStreamBoundsAccumulatedToolPayload(t *testing.T) {
+	fragment := strings.Repeat("x", 512<<10)
+	srv := sseServer(t, func(w http.ResponseWriter, r *http.Request) {
+		for i := 0; i < providerToolPayloadLimit/len(fragment)+1; i++ {
+			fmt.Fprintf(w, "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"function\":{\"name\":\"write\",\"arguments\":%q}}]}}]}\n\n", fragment)
+		}
+	})
+	p := newOpenAI("mock", srv.URL, "sk-test", false, nil, nil)
+	ch, err := p.Stream(t.Context(), Request{Model: "m", Messages: []Message{{Role: "user", Content: "write"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	events := collectEvents(t, ch)
+	seenLimit := false
+	for _, event := range events {
+		if event.Type == EvToolCall || event.Type == EvDone {
+			t.Fatalf("oversize tool payload emitted terminal event: %+v", event)
+		}
+		if event.Type == EvError && strings.Contains(event.Content.(StreamError).Message, "payload limit") {
+			seenLimit = true
+		}
+	}
+	if !seenLimit {
+		t.Fatalf("events = %+v, want tool payload limit error", events)
+	}
+}
+
+func TestOpenAIStreamCancellationReleasesFullEventChannel(t *testing.T) {
+	srv := sseServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		for i := 0; i < 256; i++ {
+			fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"x\"}}]}\n\n")
+		}
+	})
+	p := newOpenAI("mock", srv.URL, "sk-test", false, nil, nil)
+	ctx, cancel := context.WithCancel(t.Context())
+	ch, err := p.Stream(ctx, Request{Model: "m"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for len(ch) < cap(ch) && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if len(ch) < cap(ch) {
+		t.Fatalf("stream never filled its event channel: %d/%d", len(ch), cap(ch))
+	}
+	cancel()
+	done := make(chan struct{})
+	go func() {
+		for range ch {
+		}
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("cancelled OpenAI stream remained blocked on event delivery")
+	}
+}
+
+func TestOpenAIStreamRejectsInvalidUsage(t *testing.T) {
+	srv := sseServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, "data: {\"usage\":{\"prompt_tokens\":2,\"completion_tokens\":1,\"prompt_tokens_details\":{\"cached_tokens\":3}}}\n\n")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	})
+	p := newOpenAI("mock", srv.URL, "sk-test", false, nil, nil)
+	ch, err := p.Stream(t.Context(), Request{Model: "m"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	events := collectEvents(t, ch)
+	if len(events) != 1 || events[0].Type != EvError || !strings.Contains(events[0].Content.(StreamError).Message, "invalid token usage") {
+		t.Fatalf("invalid usage events = %+v", events)
 	}
 }
 
@@ -198,24 +336,269 @@ func TestOpenAIDiscovery(t *testing.T) {
 		fmt.Fprint(w, `{"data":[{"id":"gpt-4o"},{"id":"gpt-4o-mini"}]}`)
 	})
 	p := newOpenAI("mock", srv.URL, "sk", true, nil, []Model{{ID: "static-model"}})
-	models := p.Models()
-	ids := map[string]bool{}
-	for _, m := range models {
-		ids[m.ID] = true
+	t.Cleanup(func() { _ = p.Close() })
+
+	// The triggering call is a static snapshot, even when the server can reply
+	// immediately. Discovery is deliberately never on the caller's path.
+	if models := p.Models(); len(models) != 1 || models[0].ID != "static-model" {
+		t.Fatalf("initial models = %+v, want static snapshot", models)
 	}
-	if !ids["gpt-4o"] || !ids["gpt-4o-mini"] || !ids["static-model"] {
-		t.Errorf("discovered models = %v", ids)
+	models := waitForOpenAIModels(t, p, time.Second, "static-model", "gpt-4o", "gpt-4o-mini")
+	if len(models) != 3 {
+		t.Errorf("published models = %+v, want three unique models", models)
 	}
 }
 
 func TestOpenAIDiscoveryFailureIsSilent(t *testing.T) {
+	requestDone := make(chan struct{})
 	srv := sseServer(t, func(w http.ResponseWriter, r *http.Request) {
+		defer close(requestDone)
 		w.WriteHeader(http.StatusInternalServerError)
 	})
 	p := newOpenAI("mock", srv.URL, "sk", true, nil, []Model{{ID: "static"}})
+	t.Cleanup(func() { _ = p.Close() })
 	models := p.Models()
 	if len(models) != 1 || models[0].ID != "static" {
 		t.Errorf("models = %+v, want static only", models)
+	}
+	select {
+	case <-requestDone:
+	case <-time.After(time.Second):
+		t.Fatal("discovery request did not finish")
+	}
+	waitForOpenAIDiscoveryIdle(t, p, time.Second)
+	if models := p.Models(); len(models) != 1 || models[0].ID != "static" {
+		t.Errorf("models after failure = %+v, want static only", models)
+	}
+}
+
+func TestOpenAIDiscoveryModelsDoesNotWaitForSlowDrip(t *testing.T) {
+	started := make(chan struct{})
+	exited := make(chan struct{})
+	srv := sseServer(t, func(w http.ResponseWriter, r *http.Request) {
+		close(started)
+		defer close(exited)
+		flusher, _ := w.(http.Flusher)
+		for _, b := range []byte(`{"data":[{"id":"too-slow"}]}`) {
+			select {
+			case <-r.Context().Done():
+				return
+			case <-time.After(20 * time.Millisecond):
+			}
+			_, _ = w.Write([]byte{b})
+			if flusher != nil {
+				flusher.Flush()
+			}
+		}
+	})
+	p := newOpenAI("mock", srv.URL, "sk", true, nil, []Model{{ID: "static"}})
+	p.discoveryTimeout = 75 * time.Millisecond
+	t.Cleanup(func() { _ = p.Close() })
+
+	start := time.Now()
+	models := p.Models()
+	if elapsed := time.Since(start); elapsed > 150*time.Millisecond {
+		t.Fatalf("Models blocked for %v on live discovery", elapsed)
+	}
+	if len(models) != 1 || models[0].ID != "static" {
+		t.Fatalf("initial models = %+v, want static snapshot", models)
+	}
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("slow discovery request did not start")
+	}
+	waitForOpenAIDiscoveryIdle(t, p, time.Second)
+	select {
+	case <-exited:
+	case <-time.After(time.Second):
+		t.Fatal("timed-out discovery did not close its response")
+	}
+	if models := p.Models(); len(models) != 1 || models[0].ID != "static" {
+		t.Errorf("models after timeout = %+v, want static only", models)
+	}
+}
+
+func TestOpenAIDiscoveryRejectsOversizeBody(t *testing.T) {
+	srv := sseServer(t, func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, `{"data":[{"id":%q}]}`, strings.Repeat("x", 512))
+	})
+	p := newOpenAI("mock", srv.URL, "sk", true, nil, []Model{{ID: "static"}})
+	p.discoveryResponseMaxBody = 64
+	t.Cleanup(func() { _ = p.Close() })
+
+	p.Models()
+	waitForOpenAIDiscoveryIdle(t, p, time.Second)
+	p.mu.RLock()
+	done := p.discoveryDone
+	p.mu.RUnlock()
+	if done {
+		t.Fatal("oversize discovery response was published")
+	}
+	if models := p.Models(); len(models) != 1 || models[0].ID != "static" {
+		t.Errorf("models after oversize response = %+v, want static only", models)
+	}
+}
+
+func TestOpenAIDiscoveryConcurrentCallersSingleFetch(t *testing.T) {
+	var requests atomic.Int32
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var startOnce sync.Once
+	srv := sseServer(t, func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		startOnce.Do(func() { close(started) })
+		select {
+		case <-release:
+			fmt.Fprint(w, `{"data":[{"id":"live"}]}`)
+		case <-r.Context().Done():
+		}
+	})
+	p := newOpenAI("mock", srv.URL, "sk", true, nil, []Model{{ID: "static"}})
+	t.Cleanup(func() { _ = p.Close() })
+
+	const callers = 64
+	ready := make(chan struct{})
+	results := make(chan []Model, callers)
+	var wg sync.WaitGroup
+	wg.Add(callers)
+	for range callers {
+		go func() {
+			defer wg.Done()
+			<-ready
+			results <- p.Models()
+		}()
+	}
+	close(ready)
+	wg.Wait()
+	close(results)
+	for models := range results {
+		if len(models) != 1 || models[0].ID != "static" {
+			t.Fatalf("concurrent snapshot = %+v, want static only", models)
+		}
+	}
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("discovery request did not start")
+	}
+	if got := requests.Load(); got != 1 {
+		t.Fatalf("discovery requests = %d, want one", got)
+	}
+	close(release)
+	waitForOpenAIModels(t, p, time.Second, "static", "live")
+	if got := requests.Load(); got != 1 {
+		t.Fatalf("discovery requests after publication = %d, want one", got)
+	}
+}
+
+func TestOpenAIDiscoveryRetriesAfterCooldown(t *testing.T) {
+	var requests atomic.Int32
+	srv := sseServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if requests.Add(1) == 1 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		fmt.Fprint(w, `{"data":[{"id":"recovered"}]}`)
+	})
+	p := newOpenAI("mock", srv.URL, "sk", true, nil, []Model{{ID: "static"}})
+	p.discoveryRetryCooldown = 50 * time.Millisecond
+	t.Cleanup(func() { _ = p.Close() })
+
+	p.Models()
+	waitForOpenAIDiscoveryIdle(t, p, time.Second)
+	for range 32 {
+		p.Models()
+	}
+	if got := requests.Load(); got != 1 {
+		t.Fatalf("requests during cooldown = %d, want one", got)
+	}
+	time.Sleep(p.discoveryRetryCooldown)
+	waitForOpenAIModels(t, p, time.Second, "static", "recovered")
+	if got := requests.Load(); got != 2 {
+		t.Fatalf("requests after recovery = %d, want two", got)
+	}
+}
+
+func TestOpenAIDiscoveryCloseCancelsAndWaits(t *testing.T) {
+	started := make(chan struct{})
+	handlerExited := make(chan struct{})
+	srv := sseServer(t, func(w http.ResponseWriter, r *http.Request) {
+		close(started)
+		<-r.Context().Done()
+		close(handlerExited)
+	})
+	p := newOpenAI("mock", srv.URL, "sk", true, nil, []Model{{ID: "static"}})
+	p.discoveryTimeout = time.Hour
+	t.Cleanup(func() { _ = p.Close() })
+	p.Models()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("discovery request did not start")
+	}
+
+	closed := make(chan struct{})
+	go func() {
+		_ = p.Close()
+		close(closed)
+	}()
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("Close did not wait for cancelled discovery to stop")
+	}
+	select {
+	case <-handlerExited:
+	case <-time.After(time.Second):
+		t.Fatal("cancelled discovery handler did not exit")
+	}
+	// Close is idempotent, and a closed provider never starts discovery again.
+	if err := p.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if models := p.Models(); len(models) != 1 || models[0].ID != "static" {
+		t.Fatalf("models after Close = %+v, want static snapshot", models)
+	}
+}
+
+func waitForOpenAIModels(t *testing.T, p *openaiProvider, timeout time.Duration, want ...string) []Model {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for {
+		models := p.Models()
+		ids := make(map[string]bool, len(models))
+		for _, model := range models {
+			ids[model.ID] = true
+		}
+		matched := true
+		for _, id := range want {
+			matched = matched && ids[id]
+		}
+		if matched {
+			return models
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("models = %+v; did not publish %v within %v", models, want, timeout)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func waitForOpenAIDiscoveryIdle(t *testing.T, p *openaiProvider, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for {
+		p.mu.RLock()
+		inFlight := p.discoveryInFlight
+		p.mu.RUnlock()
+		if !inFlight {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("discovery still running after %v", timeout)
+		}
+		time.Sleep(time.Millisecond)
 	}
 }
 

@@ -1,0 +1,15 @@
+import { mkdirSync, copyFileSync, readdirSync } from 'node:fs';
+import { resolve, join } from 'node:path';
+const platform=process.argv[2] || process.platform;
+const arch=(process.argv[3] || process.arch).replace('amd64','x64');
+const os=platform==='windows'?'win32':platform;
+if(!['darwin','linux','win32'].includes(os)||!['x64','arm64'].includes(arch))throw new Error('Unsupported runtime target');
+if(os==='win32'&&arch==='arm64')throw new Error('Bun does not provide a Windows ARM64 compile target; do not publish an incomplete bundle');
+const dest=resolve(process.argv[4] || 'bin');mkdirSync(dest,{recursive:true});
+const target=`bun-${os==='win32'?'windows':os}-${arch}${arch==='x64'?'-baseline':''}`;
+const args=['bun','build','runtime/src/main.ts','--compile',`--target=${target}`,`--outfile=${join(dest,'maestro-runtime'+(os==='win32'?'.exe':''))}`];
+const proc=Bun.spawn(args,{stdout:'inherit',stderr:'inherit'});if(await proc.exited)throw new Error('Runtime compilation failed');
+const pkg=resolve(`runtime/node_modules/@oh-my-pi/pi-natives-${os}-${arch}`);
+const addons=readdirSync(pkg).filter(n=>n.endsWith('.node') && !n.includes('-modern.'));
+if(addons.length!==1)throw new Error(`Expected exactly one native addon in ${pkg}`);
+copyFileSync(join(pkg,addons[0]),join(dest,addons[0]));

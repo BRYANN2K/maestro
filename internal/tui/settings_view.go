@@ -64,7 +64,7 @@ var settingsSections = []settingsSection{
 	{settingsAgents, "Agents", "task routes"},
 	{settingsProviders, "Providers", "native and plans"},
 	{settingsIntegrations, "Integrations", "MCP · native only"},
-	{settingsSkills, "Skills", "native + subscription by route"},
+	{settingsSkills, "Skills", "Maestro native skills"},
 }
 
 type settingsProvider struct {
@@ -475,8 +475,6 @@ func (s *settingsOverlay) rows() []settingRow {
 		rows := make([]settingRow, 0, 18)
 		for _, role := range []string{settings.RoleOrchestrator, settings.RoleDev, settings.RoleReviewer, settings.RoleDocs} {
 			rows = append(rows,
-				settingRow{Label: role + " engine", Kind: settingEngine, Role: role},
-				settingRow{Label: role + " agent", Kind: settingAgent, Role: role},
 				settingRow{Label: role + " model", Kind: settingRoleModel, Role: role},
 				settingRow{Label: role + " reasoning", Kind: settingReasoning, Role: role},
 			)
@@ -732,8 +730,7 @@ func (s *settingsOverlay) activate(m *Model, delta int, explicit bool) tea.Cmd {
 		// connection manager is equivalent to closing Settings without save.
 		s.cancelAction()
 		m.applyTheme(s.committedTheme)
-		m.overlay = overlayProviders
-		m.overlayM = newProvidersOverlay(m.orch, provider.ID)
+		return m.openProviders(provider.ID)
 	case settingsIntegrations:
 		if explicit && s.selected < len(s.integrations) {
 			return s.reconnectMCP(m, s.integrations[s.selected].Name)

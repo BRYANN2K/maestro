@@ -7,11 +7,17 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/bryann2k/maestro/internal/agentcore"
+)
+
+const (
+	maxProposalFileBytes   int64 = 8 << 20
+	maxProposalRecordBytes int64 = 4*maxProposalFileBytes + 1<<20
 )
 
 // Hunk is one contiguous block of line replacements anchored by content
@@ -58,7 +64,10 @@ func (s *Store) Stage(path, content string) (Proposal, error) {
 	if err != nil {
 		return Proposal{}, err
 	}
-	base, err := os.ReadFile(path)
+	if int64(len(content)) > maxProposalFileBytes {
+		return Proposal{}, fmt.Errorf("stage %s: proposed content is %d bytes; limit is %d", path, len(content), maxProposalFileBytes)
+	}
+	base, err := readBoundedFile(path, maxProposalFileBytes)
 	if err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
 			return Proposal{}, fmt.Errorf("stage %s: %w", path, err)
@@ -82,6 +91,9 @@ func (s *Store) Stage(path, content string) (Proposal, error) {
 	if err != nil {
 		return Proposal{}, fmt.Errorf("stage %s: %w", path, err)
 	}
+	if int64(len(data)) > maxProposalRecordBytes {
+		return Proposal{}, fmt.Errorf("stage %s: proposal record is %d bytes; limit is %d", path, len(data), maxProposalRecordBytes)
+	}
 	if err := os.WriteFile(filepath.Join(s.dir, prop.ID+".json"), data, 0o600); err != nil {
 		return Proposal{}, fmt.Errorf("stage %s: %w", path, err)
 	}
@@ -90,7 +102,7 @@ func (s *Store) Stage(path, content string) (Proposal, error) {
 
 // Load reads a staged proposal by ID.
 func (s *Store) Load(id string) (Proposal, error) {
-	data, err := os.ReadFile(filepath.Join(s.dir, id+".json"))
+	data, err := readBoundedFile(filepath.Join(s.dir, id+".json"), maxProposalRecordBytes)
 	if err != nil {
 		return Proposal{}, fmt.Errorf("load proposal %s: %w", id, err)
 	}
@@ -143,28 +155,72 @@ func (s *Store) accept(p Proposal, validate func([]byte) error) error {
 	return nil
 }
 
-// applyHunks checks the anchor and produces the merged lines for the given
-// hunks (applied bottom-up so line numbers stay valid).
+// applyHunks checks the anchor and produces the merged lines in one pass over
+// the base. Rebuilding head+tail for every hunk made scattered edits O(H*N).
 func (s *Store) applyHunks(p Proposal, hunks []Hunk) ([]string, error) {
-	current, err := os.ReadFile(p.Path)
+	current, err := readBoundedFile(p.Path, maxProposalFileBytes)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, fmt.Errorf("accept %s: %w", p.Path, err)
 	}
 	if sha256Sum(string(current)) != p.Anchor {
 		return nil, fmt.Errorf("accept %s: stale — file changed since staging (anchor mismatch)", p.Path)
 	}
-	out := append([]string(nil), p.BaseLines...)
-	for i := len(hunks) - 1; i >= 0; i-- {
-		h := hunks[i]
-		if !linesMatch(out, h.Start-1, h.OldLines) {
+	capacity := len(p.BaseLines)
+	for _, h := range hunks {
+		capacity += len(h.NewLines) - len(h.OldLines)
+	}
+	if capacity < 0 {
+		capacity = 0
+	}
+	out := make([]string, 0, capacity)
+	cursor := 0
+	for _, h := range hunks {
+		start := h.Start - 1
+		if start < cursor {
+			return nil, fmt.Errorf("accept %s: hunk at line %d overlaps or is out of order", p.Path, h.Start)
+		}
+		if !linesMatch(p.BaseLines, start, h.OldLines) {
 			return nil, fmt.Errorf("accept %s: hunk at line %d does not match base", p.Path, h.Start)
 		}
-		head := append([]string(nil), out[:h.Start-1]...)
-		tail := append([]string(nil), out[h.Start-1+len(h.OldLines):]...)
-		head = append(head, h.NewLines...)
-		out = append(head, tail...)
+		out = append(out, p.BaseLines[cursor:start]...)
+		out = append(out, h.NewLines...)
+		cursor = start + len(h.OldLines)
 	}
+	out = append(out, p.BaseLines[cursor:]...)
 	return out, nil
+}
+
+func readBoundedFile(path string, limit int64) ([]byte, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("file is not regular")
+	}
+	if info.Size() > limit {
+		return nil, fmt.Errorf("file is %d bytes; limit is %d", info.Size(), limit)
+	}
+	f, err := openReadOnly(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	openedInfo, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !openedInfo.Mode().IsRegular() || !os.SameFile(info, openedInfo) {
+		return nil, fmt.Errorf("file changed type while opening")
+	}
+	data, err := io.ReadAll(io.LimitReader(f, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > limit {
+		return nil, fmt.Errorf("file is %d+ bytes; limit is %d", limit, limit)
+	}
+	return data, nil
 }
 
 // writeFile persists merged lines to the proposal's path.
@@ -269,6 +325,9 @@ func (s *Store) persist(p *Proposal) error {
 	if err != nil {
 		return err
 	}
+	if int64(len(data)) > maxProposalRecordBytes {
+		return fmt.Errorf("persist proposal %s: record is %d bytes; limit is %d", p.ID, len(data), maxProposalRecordBytes)
+	}
 	return os.WriteFile(filepath.Join(s.dir, p.ID+".json"), data, 0o600)
 }
 
@@ -311,22 +370,53 @@ func (p Proposal) String() string {
 	return b.String()
 }
 
-// lineDiff computes the minimal-ish line diff between base and target as
-// hunks. Simple LCS-based; good enough for previews and B4 acceptance.
+// maxLineDiffCells bounds the LCS workspace. Common prefixes and suffixes are
+// removed first, so localized edits in very large files still get precise
+// hunks. A wholesale rewrite falls back to one safe replacement hunk rather
+// than allocating O(len(base)*len(target)) memory.
+const maxLineDiffCells = 4 << 20
+
+// lineDiff computes a minimal-ish line diff between base and target as
+// hunks. Its auxiliary memory is bounded even for generated or minified files.
 func lineDiff(base, target []string) []Hunk {
-	n, m := len(base), len(target)
-	dp := make([][]int, n+1)
-	for i := range dp {
-		dp[i] = make([]int, m+1)
+	prefix := 0
+	for prefix < len(base) && prefix < len(target) && base[prefix] == target[prefix] {
+		prefix++
 	}
+	if prefix == len(base) && prefix == len(target) {
+		return nil
+	}
+
+	suffix := 0
+	for suffix < len(base)-prefix && suffix < len(target)-prefix &&
+		base[len(base)-1-suffix] == target[len(target)-1-suffix] {
+		suffix++
+	}
+	base = base[prefix : len(base)-suffix]
+	target = target[prefix : len(target)-suffix]
+	n, m := len(base), len(target)
+	rows, cols := n+1, m+1
+	if cols != 0 && rows > maxLineDiffCells/cols {
+		return []Hunk{{
+			Start:    prefix + 1,
+			OldLines: append([]string(nil), base...),
+			NewLines: append([]string(nil), target...),
+		}}
+	}
+
+	// A flat int32 table avoids one allocation per source line and halves the
+	// space of []int on 64-bit systems. The configured cell cap keeps lengths
+	// comfortably within int32.
+	dp := make([]int32, rows*cols)
 	for i := n - 1; i >= 0; i-- {
+		row, next := i*cols, (i+1)*cols
 		for j := m - 1; j >= 0; j-- {
 			if base[i] == target[j] {
-				dp[i][j] = dp[i+1][j+1] + 1
-			} else if dp[i+1][j] >= dp[i][j+1] {
-				dp[i][j] = dp[i+1][j]
+				dp[row+j] = dp[next+j+1] + 1
+			} else if dp[next+j] >= dp[row+j+1] {
+				dp[row+j] = dp[next+j]
 			} else {
-				dp[i][j] = dp[i][j+1]
+				dp[row+j] = dp[row+j+1]
 			}
 		}
 	}
@@ -347,9 +437,9 @@ func lineDiff(base, target []string) []Hunk {
 			continue
 		}
 		if cur == nil {
-			cur = &Hunk{Start: i + 1}
+			cur = &Hunk{Start: prefix + i + 1}
 		}
-		if dp[i+1][j] >= dp[i][j+1] {
+		if dp[(i+1)*cols+j] >= dp[i*cols+j+1] {
 			cur.OldLines = append(cur.OldLines, base[i])
 			i++
 		} else {
@@ -359,13 +449,13 @@ func lineDiff(base, target []string) []Hunk {
 	}
 	for ; i < n; i++ {
 		if cur == nil {
-			cur = &Hunk{Start: i + 1}
+			cur = &Hunk{Start: prefix + i + 1}
 		}
 		cur.OldLines = append(cur.OldLines, base[i])
 	}
 	for ; j < m; j++ {
 		if cur == nil {
-			cur = &Hunk{Start: n + 1}
+			cur = &Hunk{Start: prefix + n + 1}
 		}
 		cur.NewLines = append(cur.NewLines, target[j])
 	}

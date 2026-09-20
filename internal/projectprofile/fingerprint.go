@@ -14,7 +14,16 @@ import (
 	"strings"
 )
 
-const discoveryFingerprintVersion = "maestro-discovery-v2"
+const (
+	discoveryFingerprintVersion  = "maestro-discovery-v2"
+	validationFingerprintVersion = "maestro-validation-v1"
+)
+
+type workspaceState struct {
+	discoveryFingerprint  string
+	validationFingerprint string
+	cacheable             bool
+}
 
 // Revalidate verifies that the bounded repository facts captured by Discover
 // or GreenfieldDefaults are still current. It deliberately reuses the same
@@ -42,23 +51,154 @@ func Revalidate(ctx context.Context, profile ProjectProfile) error {
 // and no-follow metadata identities for lockfiles. Lockfile contents are never
 // opened, regardless of their size.
 func workspaceFingerprint(ctx context.Context, start string) (string, error) {
-	root, err := canonicalDirectory(start)
+	state, err := inspectWorkspace(ctx, start, true)
 	if err != nil {
 		return "", err
+	}
+	return state.discoveryFingerprint, nil
+}
+
+// workspaceValidationFingerprint recomputes the facts that can invalidate a
+// cached profile without re-reading candidate contents on filesystems whose
+// metadata exposes a change-time identity. On weaker platforms it hashes the
+// bounded candidate contents, preserving correctness at the cost of fewer I/O
+// savings.
+func workspaceValidationFingerprint(ctx context.Context, start string) (string, bool, error) {
+	state, err := inspectWorkspace(ctx, start, false)
+	if err != nil {
+		return "", false, err
+	}
+	return state.validationFingerprint, state.cacheable, nil
+}
+
+func inspectWorkspace(ctx context.Context, start string, includeContent bool) (workspaceState, error) {
+	root, err := canonicalDirectory(start)
+	if err != nil {
+		return workspaceState{}, err
 	}
 
 	gitRoot, gitErr := repositoryRoot(ctx, root)
 	if err := ctx.Err(); err != nil {
-		return "", err
+		return workspaceState{}, err
 	}
 	useGitInventory := gitErr == nil && sameDirectory(root, gitRoot)
 	view, usedGit, err := inventory(ctx, root, useGitInventory)
 	if err != nil {
-		return "", err
+		return workspaceState{}, err
 	}
 
-	digest := sha256.New()
-	writeFingerprintField(digest, "version", discoveryFingerprintVersion)
+	head, err := repositoryHEAD(ctx, root, gitErr == nil)
+	if err != nil {
+		return workspaceState{}, err
+	}
+	validationDigest := sha256.New()
+	writeWorkspaceFingerprintHeader(validationDigest, validationFingerprintVersion, view, usedGit, head)
+	var discoveryDigest hash.Hash
+	if includeContent {
+		discoveryDigest = sha256.New()
+		writeWorkspaceFingerprintHeader(discoveryDigest, discoveryFingerprintVersion, view, usedGit, head)
+	}
+
+	readBytes := int64(0)
+	cacheable := true
+	for _, relative := range view.Candidates {
+		if err := ctx.Err(); err != nil {
+			return workspaceState{}, err
+		}
+		if _, lockfile := lockfileManager(filepath.Base(relative)); lockfile {
+			info, metadataErr := regularMetadataNoFollow(root, relative, false)
+			writeFingerprintField(validationDigest, "lock", relative)
+			if includeContent {
+				writeFingerprintField(discoveryDigest, "lock", relative)
+			}
+			if metadataErr != nil {
+				kind := candidateErrorKind(metadataErr)
+				writeFingerprintField(validationDigest, "lock-error", kind)
+				if includeContent {
+					writeFingerprintField(discoveryDigest, "lock-error", kind)
+				}
+			} else {
+				identity := metadataIdentity(info)
+				writeFingerprintField(validationDigest, "lock-identity", identity)
+				if includeContent {
+					writeFingerprintField(discoveryDigest, "lock-identity", identity)
+				}
+			}
+			continue
+		}
+		if !contentDiscoveryCandidate(relative) {
+			continue
+		}
+
+		writeFingerprintField(validationDigest, "candidate", relative)
+		if includeContent {
+			writeFingerprintField(discoveryDigest, "candidate", relative)
+		}
+		info, metadataErr := regularMetadataNoFollow(root, relative, true)
+		if metadataErr != nil {
+			kind := candidateErrorKind(metadataErr)
+			writeFingerprintField(validationDigest, "candidate-error", kind)
+			if includeContent {
+				writeFingerprintField(discoveryDigest, "candidate-error", kind)
+			}
+			cacheable = false
+			continue
+		}
+		identity, strongIdentity := metadataIdentityDetails(info)
+		writeFingerprintField(validationDigest, "candidate-identity", identity)
+		if !includeContent && strongIdentity {
+			continue
+		}
+		if info.Size() > int64(maxDiscoveryBytes)-readBytes {
+			kind := candidateErrorKind(errDiscoveryReadBudget)
+			writeFingerprintField(validationDigest, "candidate-read-error", kind)
+			if includeContent {
+				writeFingerprintField(discoveryDigest, "candidate-error", kind)
+			}
+			cacheable = false
+			continue
+		}
+		data, readErr := readCandidate(root, relative)
+		if readErr != nil {
+			kind := candidateErrorKind(readErr)
+			writeFingerprintField(validationDigest, "candidate-read-error", kind)
+			if includeContent {
+				writeFingerprintField(discoveryDigest, "candidate-error", kind)
+			}
+			cacheable = false
+			continue
+		}
+		if int64(len(data)) > int64(maxDiscoveryBytes)-readBytes {
+			kind := candidateErrorKind(errDiscoveryReadBudget)
+			writeFingerprintField(validationDigest, "candidate-read-error", kind)
+			if includeContent {
+				writeFingerprintField(discoveryDigest, "candidate-error", kind)
+			}
+			cacheable = false
+			continue
+		}
+		readBytes += int64(len(data))
+		sum := sha256.Sum256(data)
+		encoded := hex.EncodeToString(sum[:])
+		if includeContent {
+			writeFingerprintField(discoveryDigest, "candidate-content", encoded)
+		}
+		if !strongIdentity {
+			writeFingerprintField(validationDigest, "candidate-content", encoded)
+		}
+	}
+	state := workspaceState{
+		validationFingerprint: "sha256:" + hex.EncodeToString(validationDigest.Sum(nil)),
+		cacheable:             cacheable,
+	}
+	if includeContent {
+		state.discoveryFingerprint = "sha256:" + hex.EncodeToString(discoveryDigest.Sum(nil))
+	}
+	return state, nil
+}
+
+func writeWorkspaceFingerprintHeader(digest hash.Hash, version string, view inventoryView, usedGit bool, head string) {
+	writeFingerprintField(digest, "version", version)
 	writeFingerprintField(digest, "inventory-source", strconv.FormatBool(usedGit))
 	writeFingerprintField(digest, "inventory-display-truncated", strconv.FormatBool(view.DisplayTruncated))
 	writeFingerprintField(digest, "inventory-scan-truncated", strconv.FormatBool(view.ScanTruncated))
@@ -68,55 +208,7 @@ func workspaceFingerprint(ctx context.Context, start string) (string, error) {
 	writeFingerprintField(digest, "inventory-excluded", strconv.Itoa(view.Excluded))
 	writeFingerprintField(digest, "inventory-unsafe", strconv.Itoa(view.UnsafePaths))
 	writeFingerprintField(digest, "inventory-digest", view.Digest)
-	head, err := repositoryHEAD(ctx, root, gitErr == nil)
-	if err != nil {
-		return "", err
-	}
 	writeFingerprintField(digest, "head", head)
-
-	readBytes := int64(0)
-	for _, relative := range view.Candidates {
-		if err := ctx.Err(); err != nil {
-			return "", err
-		}
-		if _, lockfile := lockfileManager(filepath.Base(relative)); lockfile {
-			info, metadataErr := regularMetadataNoFollow(root, relative, false)
-			writeFingerprintField(digest, "lock", relative)
-			if metadataErr != nil {
-				writeFingerprintField(digest, "lock-error", candidateErrorKind(metadataErr))
-			} else {
-				writeFingerprintField(digest, "lock-identity", metadataIdentity(info))
-			}
-			continue
-		}
-		if !contentDiscoveryCandidate(relative) {
-			continue
-		}
-
-		writeFingerprintField(digest, "candidate", relative)
-		info, metadataErr := regularMetadataNoFollow(root, relative, true)
-		if metadataErr != nil {
-			writeFingerprintField(digest, "candidate-error", candidateErrorKind(metadataErr))
-			continue
-		}
-		if info.Size() > int64(maxDiscoveryBytes)-readBytes {
-			writeFingerprintField(digest, "candidate-error", candidateErrorKind(errDiscoveryReadBudget))
-			continue
-		}
-		data, readErr := readCandidate(root, relative)
-		if readErr != nil {
-			writeFingerprintField(digest, "candidate-error", candidateErrorKind(readErr))
-			continue
-		}
-		if int64(len(data)) > int64(maxDiscoveryBytes)-readBytes {
-			writeFingerprintField(digest, "candidate-error", candidateErrorKind(errDiscoveryReadBudget))
-			continue
-		}
-		readBytes += int64(len(data))
-		sum := sha256.Sum256(data)
-		writeFingerprintField(digest, "candidate-content", hex.EncodeToString(sum[:]))
-	}
-	return "sha256:" + hex.EncodeToString(digest.Sum(nil)), nil
 }
 
 func contentDiscoveryCandidate(relative string) bool {
@@ -181,11 +273,17 @@ func candidateErrorKind(err error) string {
 // mtime was restored. Access time is intentionally excluded because reading a
 // manifest must not invalidate its own fingerprint.
 func metadataIdentity(info os.FileInfo) string {
+	identity, _ := metadataIdentityDetails(info)
+	return identity
+}
+
+func metadataIdentityDetails(info os.FileInfo) (string, bool) {
 	parts := []string{
 		"size=" + strconv.FormatInt(info.Size(), 10),
 		"mode=" + strconv.FormatUint(uint64(info.Mode()), 10),
 		"mtime=" + strconv.FormatInt(info.ModTime().UnixNano(), 10),
 	}
+	strong := false
 	value := reflect.ValueOf(info.Sys())
 	if value.IsValid() && value.Kind() == reflect.Pointer && !value.IsNil() {
 		value = value.Elem()
@@ -195,8 +293,9 @@ func metadataIdentity(info os.FileInfo) string {
 			field := value.FieldByName(name)
 			if field.IsValid() && field.CanInterface() {
 				parts = append(parts, name+"="+fmt.Sprint(field.Interface()))
+				strong = strong || name == "Ctim" || name == "Ctimespec" || name == "ChangeTime"
 			}
 		}
 	}
-	return strings.Join(parts, ";")
+	return strings.Join(parts, ";"), strong
 }

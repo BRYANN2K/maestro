@@ -9,6 +9,16 @@ import (
 	"github.com/bryann2k/maestro/internal/session"
 )
 
+// A changed branch is recoverable for interactive startup by opening a fresh
+// session. Explicit resume must still reject the old identity.
+type workspaceRefMismatchError struct {
+	path, actual, expected string
+}
+
+func (e *workspaceRefMismatchError) Error() string {
+	return fmt.Sprintf("worktree %q now has ref %q, expected %q", e.path, e.actual, e.expected)
+}
+
 // resolvePersistedSessionWorkspace completes and validates the exact routing
 // identity of a Git-backed session. Empty paths are never interpreted as "the
 // checkout of this process": linked worktrees share a session namespace, so
@@ -51,7 +61,7 @@ func resolvePersistedSessionWorkspace(ctx context.Context, client *git.Client, s
 				return session.Session{}, false, fmt.Errorf("worktree %q is unavailable: %s", sess.Worktree, workspace.DisabledReason)
 			}
 			if sess.WorkspaceRef != "" && sess.WorkspaceRef != workspace.Ref {
-				return session.Session{}, false, fmt.Errorf("worktree %q now has ref %q, expected %q", workspace.Path, workspace.Ref, sess.WorkspaceRef)
+				return session.Session{}, false, &workspaceRefMismatchError{path: workspace.Path, actual: workspace.Ref, expected: sess.WorkspaceRef}
 			}
 			migrated := sess.Worktree != workspace.Path || sess.WorkspaceRef == ""
 			sess.Worktree = workspace.Path

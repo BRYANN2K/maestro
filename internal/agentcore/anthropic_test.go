@@ -90,6 +90,84 @@ func TestAnthropicStreamTextToolUsage(t *testing.T) {
 	}
 }
 
+func TestAnthropicStreamBoundsAccumulatedToolPayload(t *testing.T) {
+	fragment := strings.Repeat("x", 512<<10)
+	var payload strings.Builder
+	payload.Grow(providerToolPayloadLimit + 4096)
+	payload.WriteString("event: content_block_start\n" +
+		`data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_1","name":"write"}}` + "\n\n")
+	for i := 0; i < providerToolPayloadLimit/len(fragment)+1; i++ {
+		fmt.Fprintf(&payload, "event: content_block_delta\n"+
+			`data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":%q}}`+"\n\n", fragment)
+	}
+	p, _ := anthropicStream(t, payload.String())
+	ch, err := p.Stream(t.Context(), Request{Model: "m", Messages: []Message{{Role: "user", Content: "write"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	events := collectEvents(t, ch)
+	seenLimit := false
+	for _, event := range events {
+		if event.Type == EvToolCall || event.Type == EvDone {
+			t.Fatalf("oversize tool payload emitted terminal event: %+v", event)
+		}
+		if event.Type == EvError && strings.Contains(event.Content.(StreamError).Message, "payload limit") {
+			seenLimit = true
+		}
+	}
+	if !seenLimit {
+		t.Fatalf("events = %+v, want tool payload limit error", events)
+	}
+}
+
+func TestAnthropicStreamRejectsIncompleteToolBlock(t *testing.T) {
+	payload := "event: content_block_start\n" +
+		`data: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_1","name":"read"}}` + "\n\n" +
+		"event: message_stop\n" + `data: {"type":"message_stop"}` + "\n\n"
+	p, _ := anthropicStream(t, payload)
+	ch, err := p.Stream(t.Context(), Request{Model: "m"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	events := collectEvents(t, ch)
+	if len(events) != 1 || events[0].Type != EvError || !strings.Contains(events[0].Content.(StreamError).Message, "before the active tool block completed") {
+		t.Fatalf("incomplete tool events = %+v", events)
+	}
+}
+
+func TestAnthropicStreamCancellationReleasesFullEventChannel(t *testing.T) {
+	var payload strings.Builder
+	for i := 0; i < 256; i++ {
+		payload.WriteString("event: content_block_delta\n" +
+			`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"x"}}` + "\n\n")
+	}
+	p, _ := anthropicStream(t, payload.String())
+	ctx, cancel := context.WithCancel(t.Context())
+	ch, err := p.Stream(ctx, Request{Model: "m"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for len(ch) < cap(ch) && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if len(ch) < cap(ch) {
+		t.Fatalf("stream never filled its event channel: %d/%d", len(ch), cap(ch))
+	}
+	cancel()
+	done := make(chan struct{})
+	go func() {
+		for range ch {
+		}
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("cancelled Anthropic stream remained blocked on event delivery")
+	}
+}
+
 func decodeAnthropicBody(t *testing.T, p *anthropicProvider, req Request) map[string]any {
 	t.Helper()
 	data, err := p.buildBody(req)
@@ -277,7 +355,7 @@ func TestAnthropicStreamBody(t *testing.T) {
 	ch, err := p.Stream(context.Background(), Request{
 		Model:    "m",
 		System:   []Message{{Role: "system", Content: "be brief"}},
-		Messages: []Message{{Role: "user", Content: "hi"}, {Role: "assistant", Content: "yo", ToolCalls: []ToolCall{{ID: "t1", Name: "read", Args: `{"path":"x"}`}}}},
+		Messages: []Message{{Role: "user", Content: "hi"}, {Role: "system", Content: "dynamic guardrail"}, {Role: "assistant", Content: "yo", ToolCalls: []ToolCall{{ID: "t1", Name: "read", Args: `{"path":"x"}`}}}},
 		Sampling: Sampling{Temperature: floatPtr(0.5), MaxTokens: 100},
 		Tools:    []ToolSpec{{Name: "read", Description: "Read", InputSchema: map[string]any{"type": "object"}}},
 	})
@@ -288,10 +366,12 @@ func TestAnthropicStreamBody(t *testing.T) {
 	if gotBody["model"] != "m" || gotBody["max_tokens"] != float64(100) || gotBody["temperature"] != 0.5 {
 		t.Errorf("body = %v", gotBody)
 	}
-	if sys, ok := gotBody["system"].([]any); !ok || len(sys) != 1 {
+	if sys, ok := gotBody["system"].([]any); !ok || len(sys) != 2 {
 		t.Errorf("system = %v", gotBody["system"])
 	} else if block, ok := sys[0].(map[string]any); !ok || block["type"] != "text" || block["text"] != "be brief" {
 		t.Errorf("system[0] = %v", sys[0])
+	} else if block, ok := sys[1].(map[string]any); !ok || block["type"] != "text" || block["text"] != "dynamic guardrail" {
+		t.Errorf("system[1] = %v", sys[1])
 	}
 	msgs, ok := gotBody["messages"].([]any)
 	if !ok || len(msgs) != 2 {
@@ -341,27 +421,67 @@ func hasCacheControl(t *testing.T, m map[string]any) bool {
 	return ok && cc["type"] == "ephemeral"
 }
 
+func countCacheControls(value any) int {
+	switch value := value.(type) {
+	case map[string]any:
+		count := 0
+		for key, child := range value {
+			if key == "cache_control" {
+				count++
+				continue
+			}
+			count += countCacheControls(child)
+		}
+		return count
+	case []any:
+		count := 0
+		for _, child := range value {
+			count += countCacheControls(child)
+		}
+		return count
+	default:
+		return 0
+	}
+}
+
+func stableCachePrefix(t *testing.T, body map[string]any) string {
+	t.Helper()
+	prefix, err := json.Marshal([]any{body["system"], body["tools"]})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(prefix)
+}
+
 func TestAnthropicBodyPromptCache(t *testing.T) {
 	old := cacheOn
 	defer func() { cacheOn = old }()
 	cacheOn = true
 
 	body := bodyCacheFlags(t, Request{
-		System:   []Message{{Role: "system", Content: "sys"}},
-		Messages: []Message{{Role: "user", Content: "m1"}, {Role: "user", Content: "m2"}, {Role: "user", Content: "m3"}, {Role: "user", Content: "m4"}, {Role: "user", Content: "m5"}},
+		System:   []Message{{Role: "system", Content: "static-1"}, {Role: "system", Content: "static-2"}},
+		Messages: []Message{{Role: "user", Content: "m1"}, {Role: "user", Content: "m2"}, {Role: "system", Content: "dynamic"}, {Role: "user", Content: "m3"}, {Role: "user", Content: "m4"}, {Role: "user", Content: "m5"}},
 		Tools:    []ToolSpec{{Name: "read", Description: "R"}, {Name: "write", Description: "W"}},
 	})
-	if sys, ok := body["system"].([]any); !ok || len(sys) != 1 {
+	if count := countCacheControls(body); count != 4 {
+		t.Fatalf("cache_control count = %d, want exactly 4: %v", count, body)
+	}
+	if sys, ok := body["system"].([]any); !ok || len(sys) != 3 {
 		t.Fatalf("system = %v", body["system"])
-	} else if !hasCacheControl(t, sys[0].(map[string]any)) {
-		t.Error("system block missing cache_control")
+	} else {
+		for i, raw := range sys {
+			want := i == len(sys)-1
+			if got := hasCacheControl(t, raw.(map[string]any)); got != want {
+				t.Errorf("system %d: cache_control present=%v, want %v", i, got, want)
+			}
+		}
 	}
 	msgs := body["messages"].([]any)
 	for i, raw := range msgs {
 		m := raw.(map[string]any)
 		content := m["content"].([]any)
 		block := content[0].(map[string]any)
-		want := i >= len(msgs)-3
+		want := i >= len(msgs)-2
 		if hasCacheControl(t, block) != want {
 			t.Errorf("msg %d: cache_control present=%v, want %v (block %v)", i, hasCacheControl(t, block), want, block)
 		}
@@ -372,6 +492,18 @@ func TestAnthropicBodyPromptCache(t *testing.T) {
 	}
 	if !hasCacheControl(t, tools[1].(map[string]any)) {
 		t.Error("last tool must carry cache_control")
+	}
+
+	nextBody := bodyCacheFlags(t, Request{
+		System:   []Message{{Role: "system", Content: "static-1"}, {Role: "system", Content: "static-2"}},
+		Messages: []Message{{Role: "user", Content: "m1"}, {Role: "user", Content: "m2"}, {Role: "system", Content: "dynamic"}, {Role: "user", Content: "m3"}, {Role: "user", Content: "m4"}, {Role: "user", Content: "m5"}, {Role: "user", Content: "m6"}},
+		Tools:    []ToolSpec{{Name: "read", Description: "R"}, {Name: "write", Description: "W"}},
+	})
+	if count := countCacheControls(nextBody); count > 4 {
+		t.Fatalf("next-turn cache_control count = %d, exceeds Anthropic limit: %v", count, nextBody)
+	}
+	if before, after := stableCachePrefix(t, body), stableCachePrefix(t, nextBody); before != after {
+		t.Errorf("static cache prefix changed across rolling turn\nbefore: %s\n after: %s", before, after)
 	}
 }
 
@@ -399,6 +531,19 @@ func TestAnthropicBodyPromptCacheDisabled(t *testing.T) {
 		if hasCacheControl(t, tools[0].(map[string]any)) {
 			t.Errorf("tool cache_control when disabled: %v", tools[0])
 		}
+	}
+}
+
+func TestAnthropicBodyRejectsReservedProviderOption(t *testing.T) {
+	p := newAnthropic("mock", "http://example.invalid", "sk-test", nil)
+	_, err := p.buildBody(Request{
+		Model: "claude-test",
+		Sampling: Sampling{ProviderOptions: map[string]any{
+			"messages": []any{"bypass normalized history"},
+		}},
+	})
+	if err == nil || !strings.Contains(err.Error(), `provider option "messages" is reserved`) {
+		t.Fatalf("reserved provider option error = %v", err)
 	}
 }
 

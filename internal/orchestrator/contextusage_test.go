@@ -66,9 +66,43 @@ func TestContextUsage(t *testing.T) {
 		t.Errorf("used = %d, want 180", used)
 	}
 
+	orch.trackSession(agentcore.NewEvent(nil, agentcore.RoleOrchestrator, agentcore.EvDone, agentcore.Done{
+		Usage: &agentcore.Usage{InputTokens: 20, OutputTokens: 5, CacheHitTokens: 10},
+	}))
+	used, _ = orch.ContextUsage()
+	if used != 35 {
+		t.Errorf("used after next turn = %d, want latest context 35", used)
+	}
+
 	orch.SetModel("")
 	_, total = orch.ContextUsage()
 	if total != 0 {
 		t.Errorf("total with unknown model = %d, want 0", total)
+	}
+}
+
+func TestSilentRunnerEventsStillAccountWithoutPublishing(t *testing.T) {
+	orch := newTestOrch(t, newTestRepo(t), &fakeRunner{})
+	orch.forwardRunnerEvent(agentcore.NewEvent(nil, agentcore.RoleOrchestrator, agentcore.EvDone, agentcore.Done{
+		Cost:  &agentcore.Cost{InputUSD: 0.5, OutputUSD: 0.25},
+		Usage: &agentcore.Usage{InputTokens: 80, CacheHitTokens: 20, OutputTokens: 10},
+	}), agentcore.RoleDocs, true)
+	orch.forwardRunnerEvent(agentcore.NewEvent(nil, agentcore.RoleOrchestrator, agentcore.EvToolResult, agentcore.ToolResult{
+		Name: "read", Output: "private result",
+	}), agentcore.RoleDocs, true)
+
+	if got := orch.SessionCost(); got != 0.75 {
+		t.Fatalf("silent session cost = %v, want 0.75", got)
+	}
+	if got := orch.SessionToolCalls(); got != 1 {
+		t.Fatalf("silent tool calls = %d, want 1", got)
+	}
+	if got, _ := orch.ContextUsage(); got != 0 {
+		t.Fatalf("docs context leaked into orchestrator meter: %d", got)
+	}
+	select {
+	case ev := <-orch.Stream:
+		t.Fatalf("silent event leaked to public stream: %+v", ev)
+	default:
 	}
 }

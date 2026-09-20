@@ -15,7 +15,7 @@ import (
 
 	"github.com/bryann2k/maestro/internal/agentcore"
 	"github.com/bryann2k/maestro/internal/config"
-	"github.com/bryann2k/maestro/internal/oauth"
+	"github.com/bryann2k/maestro/internal/runtimebridge"
 	"github.com/bryann2k/maestro/internal/vault"
 )
 
@@ -31,14 +31,22 @@ type ProviderInfo struct {
 
 // ProviderList returns the active providers with their source.
 func (o *Orchestrator) ProviderList(ctx context.Context) []ProviderInfo {
-	if o.registry == nil {
+	registry := o.registry
+	if registry == nil {
 		return nil
 	}
+	catalog := registry.Catalog()
 	var out []ProviderInfo
-	for _, name := range o.registry.Providers() {
-		p, _ := o.registry.Provider(name)
+	for _, name := range registry.Providers() {
+		p, ok := registry.Provider(name)
+		if !ok {
+			// A concurrent credential reload may replace the snapshot between
+			// the names and provider lookups. The next refresh will include the
+			// newly published state; this listing must never dereference nil.
+			continue
+		}
 		source := "env"
-		for _, cp := range o.catalog() {
+		for _, cp := range catalog {
 			if cp.ID == name {
 				if isLocalCatalog(cp) {
 					source = "local"
@@ -67,7 +75,7 @@ func (o *Orchestrator) ProviderList(ctx context.Context) []ProviderInfo {
 			}
 		}
 		if !keySet {
-			if cp, ok := o.catalog()[name]; ok {
+			if cp, ok := catalog[name]; ok {
 				keySet = providerEnvPresent(cp)
 			}
 		}
@@ -143,12 +151,7 @@ func providerEnvPresent(provider agentcore.CatalogProvider) bool {
 	return false
 }
 
-func providerTypeOf(p agentcore.Provider) string {
-	if p.Type() == "anthropic" {
-		return "anthropic"
-	}
-	return "openai-compat"
-}
+func providerTypeOf(p agentcore.Provider) string { return p.Type() }
 
 func (o *Orchestrator) catalog() map[string]agentcore.CatalogProvider {
 	if o.registry == nil {
@@ -172,14 +175,18 @@ type ModelInfo struct {
 // ModelList returns every known model across providers. Models absent
 // from the catalog are marked as discovered.
 func (o *Orchestrator) ModelList(ctx context.Context) []ModelInfo {
-	if o.registry == nil {
+	registry := o.registry
+	if registry == nil {
 		return nil
 	}
 	var out []ModelInfo
 	seen := map[string]bool{}
-	catalog := o.catalog()
-	for _, name := range o.registry.Providers() {
-		p, _ := o.registry.Provider(name)
+	catalog := registry.Catalog()
+	for _, name := range registry.Providers() {
+		p, ok := registry.Provider(name)
+		if !ok {
+			continue
+		}
 		cat := catalog[name]
 		for _, m := range p.Models() {
 			_, inCatalog := cat.Models[m.ID]
@@ -220,6 +227,9 @@ func (o *Orchestrator) ProviderAdd(ctx context.Context, p config.Provider, globa
 	if err := config.ValidateProvider(p); err != nil {
 		return fmt.Errorf("provider add: %w", err)
 	}
+	if p.Type == "openai-compat" {
+		p.DiscoverModels = true
+	}
 	key := strings.TrimSpace(p.APIKey)
 	p.APIKey = "" // credentials belong in the vault, never in maestrorc
 	if key != "" {
@@ -238,6 +248,22 @@ func (o *Orchestrator) ProviderAdd(ctx context.Context, p config.Provider, globa
 	}
 	if err := config.AppendProvider(path, line); err != nil {
 		return err
+	}
+	// Publish a new config snapshot so the running harness can discover and
+	// select this endpoint without restarting. In-flight catalog refreshes
+	// retain their old snapshot and are invalidated by reloadRegistryLocked.
+	o.registryMu.Lock()
+	defer o.registryMu.Unlock()
+	if o.cfg == nil || o.registry == nil {
+		// Config-only embedders have no running provider registry.
+		fmt.Fprintf(o.out, "provider %s added to %s\n", terminalSafeLine(p.Name), terminalSafeLine(path))
+		return nil
+	}
+	next := *o.cfg
+	next.Providers = append(append([]config.Provider(nil), o.cfg.Providers...), p)
+	o.cfg = &next
+	if err := o.reloadRegistryLocked(ctx); err != nil {
+		return fmt.Errorf("provider saved, but activation failed: %w", err)
 	}
 	fmt.Fprintf(o.out, "provider %s added to %s\n", terminalSafeLine(p.Name), terminalSafeLine(path))
 	return nil
@@ -324,13 +350,27 @@ func (o *Orchestrator) AuthAPIKey(ctx context.Context, provider, key string) err
 }
 
 func (o *Orchestrator) reloadRegistry(ctx context.Context) error {
+	o.registryMu.Lock()
+	defer o.registryMu.Unlock()
+	return o.reloadRegistryLocked(ctx)
+}
+
+func (o *Orchestrator) reloadRegistryLocked(ctx context.Context) error {
+	if o.closed {
+		return errors.New("auth: orchestrator is closed")
+	}
 	if o.cfg == nil {
 		return errors.New("auth: provider configuration unavailable")
 	}
-	catalog := map[string]agentcore.CatalogProvider(nil)
-	if o.registry != nil {
-		catalog = o.registry.Catalog()
+	// A credential/config reload is a newer registry generation than any
+	// catalog fetch already in flight. That older fetch may finish, but it must
+	// not replace providers built with these newer credentials.
+	o.modelRefreshGen++
+	registry := o.registry
+	if registry == nil {
+		return errors.New("auth: provider registry unavailable")
 	}
+	catalog := registry.Catalog()
 	keys := o.keys
 	if keys == nil {
 		keys = vaultKeyStore{vault: o.vault}
@@ -340,7 +380,9 @@ func (o *Orchestrator) reloadRegistry(ctx context.Context) error {
 		return fmt.Errorf("auth: reload provider: %w", err)
 	}
 	if reg != nil {
-		o.registry = reg
+		if replaceErr := registry.ReplaceAndClose(reg); replaceErr != nil {
+			return fmt.Errorf("auth: replace provider registry: %w", replaceErr)
+		}
 	}
 	return nil
 }
@@ -388,13 +430,13 @@ func (o *Orchestrator) AuthStatus(ctx context.Context) {
 	for _, name := range names {
 		status := "—"
 		if o.vault != nil {
-			_, hasKey := o.vault.Get("key:" + name)
+			key, hasKey := o.vault.Get("key:" + name)
 			_, hasOAuth := o.vault.Get("oauth:" + name + ":access")
 			switch {
+			case hasKey && agentcore.IsRuntimeCredential(key):
+				status = "account"
 			case hasKey:
 				status = "api key"
-			case hasOAuth && agentcore.OAuthRuntimeSupported(name):
-				status = "oauth"
 			case hasOAuth:
 				status = "oauth stored (runtime unsupported)"
 			}
@@ -425,33 +467,65 @@ func (o *Orchestrator) AuthLogout(ctx context.Context, provider string) error {
 
 // AuthOAuth runs the provider's OAuth flow and stores the token.
 func (o *Orchestrator) AuthOAuth(ctx context.Context, provider string) error {
-	flow, ok := oauth.Flows[provider]
-	if !ok {
-		return fmt.Errorf("auth: no OAuth flow for %q (available: %v)", provider, oauth.Names())
-	}
 	if !agentcore.OAuthRuntimeSupported(provider) {
-		return fmt.Errorf("auth: OAuth for %q is not supported by the native provider runtime; no authorization flow was started and no token was stored (use an API-key provider or connect the official vendor CLI from the TUI)", provider)
-	}
-	tok, err := oauth.Authorize(ctx, flow, func(url string) {
-		fmt.Fprintf(o.out, "Open this URL to authorize: %s\n", url)
-	})
-	if err != nil {
-		return err
+		return fmt.Errorf("auth: no built-in account login for %q", provider)
 	}
 	if o.vault == nil {
 		return errors.New("auth: vault unavailable")
 	}
-	o.vault.Set("oauth:"+provider+":access", tok.AccessToken)
-	if tok.RefreshToken != "" {
-		o.vault.Set("oauth:"+provider+":refresh", tok.RefreshToken)
-	}
-	if err := o.vault.Save(ctx); err != nil {
+	reader := bufio.NewReader(o.in)
+	stored := false
+	err := runtimebridge.Run(ctx, map[string]any{"version": 1, "operation": "login", "provider": provider}, func(ctx context.Context, message runtimebridge.Message) (any, error) {
+		switch message.Method {
+		case "auth":
+			var info struct {
+				URL          string
+				Instructions string
+			}
+			if err := json.Unmarshal(message.Params, &info); err != nil {
+				return nil, err
+			}
+			fmt.Fprintf(o.out, "Open to connect %s:\n%s\n%s\n", terminalSafeLine(provider), terminalSafeLine(info.URL), terminalSafeLine(info.Instructions))
+			return nil, nil
+		case "prompt":
+			var prompt struct {
+				Message     string
+				Placeholder string
+			}
+			if err := json.Unmarshal(message.Params, &prompt); err != nil {
+				return nil, err
+			}
+			fmt.Fprintf(o.out, "%s: ", terminalSafeLine(prompt.Message))
+			line, err := reader.ReadString('\n')
+			return strings.TrimSpace(line), err
+		case "credentials":
+			var result struct{ Credentials json.RawMessage }
+			if err := json.Unmarshal(message.Params, &result); err != nil {
+				return nil, err
+			}
+			if len(result.Credentials) == 0 || string(result.Credentials) == "null" {
+				return nil, errors.New("auth: missing credentials")
+			}
+			encoded, _ := json.Marshal(map[string]any{"maestro_oauth": result.Credentials})
+			if err := (vaultKeyStore{vault: o.vault}).SaveKey(ctx, provider, string(encoded)); err != nil {
+				return nil, err
+			}
+			stored = true
+			return nil, nil
+		default:
+			return nil, fmt.Errorf("auth: unexpected runtime request %q", message.Method)
+		}
+	})
+	if err != nil {
 		return err
+	}
+	if !stored {
+		return errors.New("auth: account login ended without a credential")
 	}
 	if err := o.reloadRegistry(ctx); err != nil {
 		return err
 	}
-	fmt.Fprintf(o.out, "oauth token for %s stored\n", terminalSafeLine(provider))
+	fmt.Fprintf(o.out, "%s account connected to Maestro\n", terminalSafeLine(provider))
 	return nil
 }
 
@@ -592,10 +666,29 @@ func (o *Orchestrator) dispatchAuth(ctx context.Context, cmd Command) error {
 		return o.AuthLogout(ctx, cmd.Args[1])
 	case "oauth":
 		if len(cmd.Args) < 2 {
-			return fmt.Errorf("auth oauth: usage: maestro auth oauth <provider> (available: %v)", oauth.Names())
+			return fmt.Errorf("auth oauth: usage: maestro auth oauth <provider> (available: %v)", agentcore.AccountProviders())
 		}
 		return o.AuthOAuth(ctx, cmd.Args[1])
 	default:
 		return errors.New("auth: usage: login <provider> | status | logout <provider> | oauth <provider>")
 	}
+}
+
+func (k vaultKeyStore) SaveKey(ctx context.Context, name, value string) error {
+	if k.vault == nil {
+		return fmt.Errorf("credential vault unavailable")
+	}
+	k.vault.Set("key:"+name, value)
+	return k.vault.Save(ctx)
+}
+
+// ReloadCredentials applies a completed account login to the active registry.
+func (o *Orchestrator) ReloadCredentials(ctx context.Context) error {
+	if o.vault == nil {
+		return errors.New("credential vault unavailable")
+	}
+	if err := o.vault.Reload(ctx); err != nil {
+		return err
+	}
+	return o.reloadRegistry(ctx)
 }

@@ -41,6 +41,37 @@ func TestStoreSaveLoadRoundTrip(t *testing.T) {
 	}
 }
 
+func TestStoreBoundsSessionRecords(t *testing.T) {
+	st := NewStore(t.TempDir())
+	ctx := context.Background()
+
+	tooLarge := New("oversize-save")
+	tooLarge.DraftPrompt = strings.Repeat("x", int(maxSessionRecordBytes)+1)
+	if err := st.Save(ctx, tooLarge); err == nil || !strings.Contains(err.Error(), "limit") {
+		t.Fatalf("Save oversized record error = %v", err)
+	}
+
+	projectDir := filepath.Join(st.Dir(), "oversize-load")
+	if err := os.MkdirAll(projectDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(projectDir, "record.json")
+	file, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Truncate(maxSessionRecordBytes + 1); err != nil {
+		_ = file.Close()
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.Load(ctx, "oversize-load", "record"); err == nil || !strings.Contains(err.Error(), "limit") {
+		t.Fatalf("Load oversized record error = %v", err)
+	}
+}
+
 func TestStoreSaveInvalid(t *testing.T) {
 	st := NewStore(t.TempDir())
 	if err := st.Save(context.Background(), Session{}); err == nil {

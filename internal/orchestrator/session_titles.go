@@ -79,11 +79,10 @@ func (o *Orchestrator) ListSessionSummaries(ctx context.Context) ([]session.Summ
 		if summaries[i].Disabled {
 			continue
 		}
-		saved, loadErr := o.sessions.Load(ctx, o.sess.Project, summaries[i].ID)
-		if loadErr != nil {
-			disableSummary(&summaries[i], loadErr.Error())
-			continue
-		}
+		// ListSummaries already decoded and validated each record. Reconstruct
+		// only the routing/spec metadata needed below instead of reading every
+		// potentially large session JSON a second time on each picker refresh.
+		saved := summaries[i].RoutingSession(o.sess.Project)
 		if workspaceErr == nil && (saved.Worktree == "" || saved.WorkspaceRef == "") {
 			resolved, _, resolveErr := resolvePersistedSessionWorkspace(ctx, o.workspaceRoute().git, saved)
 			if resolveErr != nil {
@@ -269,12 +268,37 @@ func (runner *metadataTitleRunner) Run(ctx context.Context, role agentcore.Role,
 	if !ok {
 		return agentcore.AgentResult{}, errors.New("session title model provider unavailable")
 	}
+	modelMetadata, _ := runner.o.registry.Model(runner.model)
+	guardrails := runner.o.guardrailSnapshot()
 	loop, err := agentcore.Spawn(ctx, agentcore.SpawnOptions{
 		Role: role, Provider: provider, Model: runner.o.canonicalModel(runner.model),
-		Tools: map[string]agentcore.Tool{}, Stopper: agentcore.NewStopper(), MaxTurn: sessionTitleTimeout,
+		ContextWindow: modelMetadata.ContextWindow, DefaultMaxTokens: modelMetadata.DefaultMaxTokens,
+		Sampling: agentcore.Sampling{MaxTokens: 128},
+		Tools:    map[string]agentcore.Tool{}, Stopper: agentcore.NewStopper(), MaxTurn: sessionTitleTimeout,
+		Budget: guardrails.Budget,
+		OnEvent: func(event agentcore.StreamEvent) {
+			// Title metadata is a hidden follow-up request on the orchestrator
+			// model. Charge its cost without replacing the visible chat turn's
+			// context-window meter with this tiny internal prompt.
+			if event.Type == agentcore.EvDone {
+				if done, ok := event.Content.(agentcore.Done); ok {
+					done.Usage = nil
+					event.Content = done
+				}
+			}
+			runner.o.accountSession(event)
+		},
 	})
 	if err != nil {
 		return agentcore.AgentResult{}, err
+	}
+	loop.MaxTurns = 1
+	loop.MaxOutputBytes = 4 << 10
+	if loop.Budget != nil {
+		estimate := runner.o.estimateRunCost(provider, runner.model, loop, prompt)
+		if err := loop.Budget.CheckEstimate(estimate); err != nil {
+			return agentcore.AgentResult{}, fmt.Errorf("session title budget preflight: %w", err)
+		}
 	}
 	return agentcore.RunResult(ctx, loop, prompt)
 }

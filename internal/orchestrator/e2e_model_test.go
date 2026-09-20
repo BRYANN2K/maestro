@@ -101,6 +101,81 @@ func TestChatPreservesNamespacedAPIModelIDAfterProviderPrefix(t *testing.T) {
 	)
 }
 
+func TestNativeRunnerTransportsConfiguredContextLimitsBeforeProviderCall(t *testing.T) {
+	requests := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	const model = "smoke-native/strict-32k"
+	orch, err := New(t.Context(), Options{
+		ProjectDir: t.TempDir(), SessionsDir: filepath.Join(t.TempDir(), "sessions"),
+		In: strings.NewReader(""), Out: &bytes.Buffer{},
+		Config: &config.Config{
+			Providers: []config.Provider{{Name: "smoke-native", Type: "openai-compat", BaseURL: srv.URL, APIKey: "test-key"}},
+			Models:    []config.Model{{ID: model, ContextWindow: 32_000, DefaultMaxTokens: 8_192}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = (&nativeRunner{o: orch, model: model}).Run(t.Context(), agentcore.RoleOrchestrator, strings.Repeat("context", 4_000))
+	if err == nil || !strings.Contains(err.Error(), "context window exceeded") || !strings.Contains(err.Error(), "reserved output 8192") {
+		t.Fatalf("native context preflight error = %v", err)
+	}
+	if requests != 0 {
+		t.Fatalf("oversized native request reached provider %d time(s)", requests)
+	}
+}
+
+func TestNativeDocsSendsNoTools(t *testing.T) {
+	requests := 0
+	var gotTools []any
+	var gotMaxTokens float64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode request: %v", err)
+		}
+		gotTools, _ = body["tools"].([]any)
+		gotMaxTokens, _ = body["max_tokens"].(float64)
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"docs complete\"}}]}\n\ndata: [DONE]\n\n")
+	}))
+	defer srv.Close()
+
+	const model = "smoke-native/docs-model"
+	orch, err := New(t.Context(), Options{
+		ProjectDir: t.TempDir(), SessionsDir: filepath.Join(t.TempDir(), "sessions"),
+		In: strings.NewReader(""), Out: &bytes.Buffer{},
+		Config: &config.Config{
+			Providers: []config.Provider{{Name: "smoke-native", Type: "openai-compat", BaseURL: srv.URL, APIKey: "test-key"}},
+			Models:    []config.Model{{ID: model, ContextWindow: 128_000, DefaultMaxTokens: 4_096}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := (&nativeRunner{o: orch, model: model}).Run(t.Context(), agentcore.RoleDocs, "produce documentation without tools")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Summary != "docs complete" || requests != 1 {
+		t.Fatalf("docs result = %+v, requests = %d", res, requests)
+	}
+	if len(gotTools) != 0 {
+		t.Fatalf("native docs exposed %d provider ToolSpec(s): %+v", len(gotTools), gotTools)
+	}
+	if gotMaxTokens != 4_096 {
+		t.Fatalf("native docs max_tokens = %.0f, want configured model limit 4096", gotMaxTokens)
+	}
+}
+
 func testChatSendsConfiguredAPIModelID(t *testing.T, selectionHandle, wantAPIModel string) {
 	t.Helper()
 	var gotModel string

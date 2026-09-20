@@ -139,25 +139,3 @@ func TestDefaultModelFromSettingsSlots(t *testing.T) {
 		t.Errorf("defaultModel with empty roles = %q, want settings fallback", got)
 	}
 }
-
-func TestActiveModelUsesPersistedOrchestratorRouteBeforeSlot(t *testing.T) {
-	dir := t.TempDir()
-	orch, err := New(context.Background(), Options{
-		ProjectDir:  dir,
-		SessionsDir: filepath.Join(t.TempDir(), "s"),
-		In:          strings.NewReader(""),
-		Out:         &bytes.Buffer{},
-		Settings: settings.Settings{
-			ModelSlots: map[string]string{"large": "slot-fallback"},
-			RoleDefaults: map[string]settings.RoleDefaults{
-				settings.RoleOrchestrator: {Engine: "legacy", Agent: "codex", Model: "gpt-5.6-luna"},
-			},
-		},
-	})
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	if got := orch.ActiveModel(); got != "gpt-5.6-luna" {
-		t.Fatalf("ActiveModel = %q, want persisted orchestrator route", got)
-	}
-}

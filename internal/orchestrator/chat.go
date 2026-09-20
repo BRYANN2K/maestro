@@ -47,6 +47,7 @@ func (o *Orchestrator) Chat(ctx context.Context, message string) error {
 	result, err := runner.Run(ctx, role, task)
 	status := "done"
 	detail := ""
+	contextStopped := errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 	if err != nil {
 		status = "error"
 		detail = err.Error()
@@ -58,9 +59,10 @@ func (o *Orchestrator) Chat(ctx context.Context, message string) error {
 	o.emit(agentcore.NewEvent(nil, role, agentcore.EvSubAgent, agentcore.SubAgentStatus{
 		Role: "orchestrator", Status: status, Detail: detail,
 	}))
-	// Never commit a partial answer from a cancelled run to durable context.
+	// Never commit a partial answer or the synthetic RunResult error summary
+	// from a cancelled or deadline-expired run to durable context.
 	responseSaved := false
-	if !errors.Is(err, context.Canceled) && strings.TrimSpace(result.Summary) != "" {
+	if !contextStopped && strings.TrimSpace(result.Summary) != "" {
 		o.appendConversation("assistant", result.Summary)
 		if saveErr := o.save(); saveErr != nil {
 			if err == nil {

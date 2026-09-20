@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -159,10 +160,12 @@ func (e *Editor) updatePicker(k Key) EditAction {
 }
 
 const (
-	listFilesGitTimeout    = 5 * time.Second
-	listFilesGitBufferSize = 64 << 10
-	listFilesGitMaxBytes   = 32 << 20
-	listFilesGitMaxRecords = 100_000
+	listFilesGitTimeout     = 5 * time.Second
+	listFilesGitBufferSize  = 64 << 10
+	listFilesGitMaxBytes    = 32 << 20
+	listFilesGitMaxRecords  = 100_000
+	listFilesWalkMaxEntries = 100_000
+	listFilesWalkMaxDirs    = 10_000
 )
 
 // ListFiles returns project-relative files for the picker. Git is the source
@@ -170,39 +173,61 @@ const (
 // ignore rules, while untracked ignored files never leak into the picker. The
 // NUL-delimited format preserves every valid Git filename, including spaces,
 // Unicode, and newlines. Non-repositories retain a bounded filesystem walk.
-func ListFiles(root string, limit int) []string {
+// Cancellation is propagated to both the Git subprocess and the fallback
+// traversal; a cancelled listing returns the context error and no partial UI
+// snapshot.
+func ListFiles(ctx context.Context, root string, limit int) ([]string, error) {
 	if limit <= 0 {
-		return nil
+		return nil, nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	info, err := os.Stat(root)
 	if err != nil || !info.IsDir() {
-		return nil
+		return nil, nil
 	}
 	root = filepath.Clean(root)
-	ctx, cancel := context.WithTimeout(context.Background(), listFilesGitTimeout)
+	ctx, cancel := context.WithTimeout(ctx, listFilesGitTimeout)
 	defer cancel()
-	if files, ok := listGitFiles(ctx, root, limit); ok {
-		return files
+	files, ok, gitErr := listGitFiles(ctx, root, limit)
+	if ok {
+		return files, nil
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	// A failed listing inside a recognized Git repository must fail closed:
 	// walking the filesystem here would surface ignored files. The fallback is
 	// reserved for directories that are genuinely outside Git.
-	if isGitDirectory(ctx, root) || ctx.Err() != nil {
-		return nil
+	if isGitDirectory(ctx, root) || hasGitMetadata(root) {
+		if gitErr == nil {
+			gitErr = errors.New("git file listing failed")
+		}
+		return nil, gitErr
 	}
-	return listWalkedFiles(root, limit)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return listWalkedFiles(ctx, root, limit)
 }
 
-func listGitFiles(ctx context.Context, root string, limit int) ([]string, bool) {
+func listGitFiles(ctx context.Context, root string, limit int) ([]string, bool, error) {
 	cmd := exec.CommandContext(ctx, "git", "-C", root, "ls-files", "--cached", "--others", "--exclude-standard", "-z")
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		return nil, false
+		return nil, false, fmt.Errorf("open git file listing: %w", err)
 	}
 	if err := cmd.Start(); err != nil {
-		return nil, false
+		if ctx.Err() != nil {
+			return nil, false, ctx.Err()
+		}
+		return nil, false, fmt.Errorf("start git file listing: %w", err)
 	}
-	files, stopped, readErr := readGitFileList(stdout, root, limit)
+	files, stopped, readErr := readGitFileList(ctx, stdout, root, limit)
 	if stopped {
 		// The hard byte/record ceiling bounds adversarial or enormous indexes.
 		// Stop the producer once the reader has retained a deterministic,
@@ -212,16 +237,22 @@ func listGitFiles(ctx context.Context, root string, limit int) ([]string, bool) 
 		}
 	}
 	waitErr := cmd.Wait()
+	if ctx.Err() != nil {
+		return nil, true, ctx.Err()
+	}
 	if stopped {
-		return files, true
+		return files, true, nil
 	}
-	if readErr != nil || waitErr != nil {
-		return nil, false
+	if readErr != nil {
+		return nil, false, fmt.Errorf("read git file listing: %w", readErr)
 	}
-	return files, true
+	if waitErr != nil {
+		return nil, false, fmt.Errorf("git file listing: %w", waitErr)
+	}
+	return files, true, nil
 }
 
-func readGitFileList(input io.Reader, root string, limit int) ([]string, bool, error) {
+func readGitFileList(ctx context.Context, input io.Reader, root string, limit int) ([]string, bool, error) {
 	if limit <= 0 {
 		return nil, true, nil
 	}
@@ -231,6 +262,9 @@ func readGitFileList(input io.Reader, root string, limit int) ([]string, bool, e
 	bytesRead := 0
 	recordsRead := 0
 	for {
+		if err := ctx.Err(); err != nil {
+			return nil, true, err
+		}
 		record, err := reader.ReadSlice(0)
 		bytesRead += len(record)
 		if errors.Is(err, bufio.ErrBufferFull) || bytesRead > listFilesGitMaxBytes || recordsRead >= listFilesGitMaxRecords {
@@ -287,6 +321,18 @@ func isGitDirectory(ctx context.Context, root string) bool {
 	return false
 }
 
+func hasGitMetadata(root string) bool {
+	for dir := filepath.Clean(root); ; dir = filepath.Dir(dir) {
+		if _, err := os.Lstat(filepath.Join(dir, ".git")); err == nil {
+			return true
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return false
+		}
+	}
+}
+
 func parseNULFileList(data []byte, limit int) []string {
 	if limit <= 0 {
 		return nil
@@ -319,29 +365,77 @@ func normalizeRelativeFile(path string) (string, bool) {
 	return rel, safeRelativeFile(rel)
 }
 
-func listWalkedFiles(root string, limit int) []string {
+func listWalkedFiles(ctx context.Context, root string, limit int) ([]string, error) {
+	return listWalkedFilesBounded(ctx, root, limit, listFilesWalkMaxEntries, listFilesWalkMaxDirs)
+}
+
+func listWalkedFilesBounded(ctx context.Context, root string, limit, maxEntries, maxDirs int) ([]string, error) {
+	type walkNode struct {
+		path  string
+		isDir bool
+	}
+
 	var files []string
-	_ = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return nil
+	stack := []walkNode{{path: root, isDir: true}}
+	entries := 0
+	dirs := 0
+	for len(stack) > 0 && len(files) < limit {
+		if err := ctx.Err(); err != nil {
+			return nil, err
 		}
-		if d.IsDir() {
-			name := d.Name()
-			if path != root && (strings.HasPrefix(name, ".") || name == "vendor" || name == "node_modules" || name == "specs") {
-				return filepath.SkipDir
+		node := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if !node.isDir {
+			if rel, err := filepath.Rel(root, node.path); err == nil && safeRelativeFile(rel) {
+				files = append(files, rel)
 			}
-			return nil
+			continue
 		}
-		if len(files) >= limit {
-			return filepath.SkipAll
+
+		dirs++
+		if dirs > maxDirs || entries >= maxEntries {
+			continue
 		}
-		if rel, err := filepath.Rel(root, path); err == nil && safeRelativeFile(rel) {
-			files = append(files, rel)
+		dir, err := os.Open(node.path)
+		if err != nil {
+			continue
 		}
-		return nil
-	})
+		remaining := maxEntries - entries
+		children := make([]os.DirEntry, 0, min(remaining, 256))
+		for len(children) < remaining {
+			if err := ctx.Err(); err != nil {
+				_ = dir.Close()
+				return nil, err
+			}
+			batch, readErr := dir.ReadDir(min(remaining-len(children), 256))
+			children = append(children, batch...)
+			if errors.Is(readErr, io.EOF) {
+				break
+			}
+			if readErr != nil || len(batch) == 0 {
+				break
+			}
+		}
+		_ = dir.Close()
+		entries += len(children)
+		sort.Slice(children, func(i, j int) bool { return children[i].Name() < children[j].Name() })
+
+		// Reverse push preserves filepath.WalkDir's lexical depth-first order
+		// without letting one enormous directory allocate beyond maxEntries.
+		for i := len(children) - 1; i >= 0; i-- {
+			child := children[i]
+			isDir := child.IsDir()
+			if isDir {
+				name := child.Name()
+				if strings.HasPrefix(name, ".") || name == "vendor" || name == "node_modules" || name == "specs" {
+					continue
+				}
+			}
+			stack = append(stack, walkNode{path: filepath.Join(node.path, child.Name()), isDir: isDir})
+		}
+	}
 	sort.Strings(files)
-	return files
+	return files, nil
 }
 
 func safeRelativeFile(path string) bool {

@@ -9,7 +9,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"os/exec"
-	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -70,7 +69,8 @@ func TestHelperMCPProcess(t *testing.T) {
 			result = page
 		case "tools/call":
 			if mode == "treehang" {
-				child := exec.Command("sleep", "600")
+				child := exec.Command(os.Args[0], "-test.run=^TestMCPDescendantProcess$")
+				child.Env = append(os.Environ(), "GO_WANT_MCP_DESCENDANT=1")
 				if child.Start() == nil {
 					_ = os.WriteFile(os.Getenv("MCP_CHILD_PID_FILE"), []byte(strconv.Itoa(child.Process.Pid)), 0o600)
 				}
@@ -116,6 +116,15 @@ func TestHelperMCPProcess(t *testing.T) {
 		_ = json.NewEncoder(os.Stdout).Encode(map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": result})
 	}
 	os.Exit(0)
+}
+
+func TestMCPDescendantProcess(t *testing.T) {
+	if os.Getenv("GO_WANT_MCP_DESCENDANT") != "1" {
+		return
+	}
+	for {
+		time.Sleep(time.Hour)
+	}
 }
 
 func helperClient(t *testing.T, mode string) *Client {
@@ -233,34 +242,95 @@ func TestStdioCancellationKillsBlockedServer(t *testing.T) {
 }
 
 func TestStdioCancellationKillsProcessTree(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("process-group assertion is Unix-specific")
-	}
 	pidFile := t.TempDir() + "/child.pid"
 	t.Setenv("MCP_CHILD_PID_FILE", pidFile)
 	client := helperClient(t, "treehang")
 	if _, err := client.ListTools(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	_, _ = client.CallTool(ctx, "echo", map[string]any{"message": "hello"})
-	raw, err := os.ReadFile(pidFile)
-	if err != nil {
-		t.Fatalf("helper child pid: %v", err)
+	callDone := make(chan error, 1)
+	go func() {
+		_, err := client.CallTool(ctx, "echo", map[string]any{"message": "hello"})
+		callDone <- err
+	}()
+	pid := waitForTestProcessPID(t, pidFile)
+	if !testProcessAlive(pid) {
+		t.Fatalf("MCP descendant %d exited before cancellation", pid)
 	}
-	pid, err := strconv.Atoi(string(raw))
-	if err != nil || pid <= 0 {
-		t.Fatalf("child pid = %q, %v", raw, err)
+	cancel()
+	select {
+	case err := <-callDone:
+		if err == nil {
+			t.Fatal("canceled MCP call returned no error")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("MCP call did not return after cancellation")
 	}
+	t.Cleanup(func() { terminateTestProcess(pid) })
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if exec.Command("kill", "-0", strconv.Itoa(pid)).Run() != nil {
+		if !testProcessAlive(pid) {
 			return
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
 	t.Fatalf("MCP grandchild process %d survived cancellation", pid)
+}
+
+func TestCloseKillsStdioProcessTree(t *testing.T) {
+	pidFile := t.TempDir() + "/child.pid"
+	t.Setenv("MCP_CHILD_PID_FILE", pidFile)
+	client := helperClient(t, "treehang")
+	if _, err := client.ListTools(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	callDone := make(chan error, 1)
+	go func() {
+		_, err := client.CallTool(context.Background(), "echo", map[string]any{"message": "hello"})
+		callDone <- err
+	}()
+
+	pid := waitForTestProcessPID(t, pidFile)
+	t.Cleanup(func() { terminateTestProcess(pid) })
+	if !testProcessAlive(pid) {
+		t.Fatalf("MCP descendant %d exited before Close", pid)
+	}
+	if err := client.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-callDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("in-flight stdio call did not stop after Close")
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if !testProcessAlive(pid) {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("MCP descendant %d survived Close", pid)
+}
+
+func waitForTestProcessPID(t *testing.T, path string) int {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		raw, err := os.ReadFile(path)
+		if err == nil {
+			pid, parseErr := strconv.Atoi(string(raw))
+			if parseErr != nil || pid <= 0 {
+				t.Fatalf("invalid child PID %q: %v", raw, parseErr)
+			}
+			return pid
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("timed out waiting for MCP child PID")
+	return 0
 }
 
 func errorsIsDeadline(err error) bool {
@@ -435,6 +505,99 @@ func TestHTTPLifecycleHeadersSchemasAndToolError(t *testing.T) {
 	}
 }
 
+func TestCloseCancelsInflightHTTPToolCall(t *testing.T) {
+	callStarted := make(chan struct{})
+	callCanceled := make(chan struct{})
+	releaseCall := make(chan struct{})
+	var startOnce, cancelOnce sync.Once
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			ID     int64  `json:"id"`
+			Method string `json:"method"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		switch req.Method {
+		case "notifications/initialized":
+			w.WriteHeader(http.StatusAccepted)
+			return
+		case "initialize":
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"jsonrpc": "2.0", "id": req.ID,
+				"result": map[string]any{
+					"protocolVersion": ProtocolVersion,
+					"capabilities":    map[string]any{"tools": map[string]any{}},
+				},
+			})
+			return
+		case "tools/list":
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"jsonrpc": "2.0", "id": req.ID,
+				"result": map[string]any{"tools": []any{testToolDefinition("blocked", false)}},
+			})
+			return
+		case "tools/call":
+			startOnce.Do(func() { close(callStarted) })
+			select {
+			case <-r.Context().Done():
+				cancelOnce.Do(func() { close(callCanceled) })
+			case <-releaseCall:
+			}
+			return
+		default:
+			http.Error(w, "unexpected method", http.StatusBadRequest)
+		}
+	}))
+	defer server.Close()
+	defer close(releaseCall)
+
+	client := New(Server{Name: "http-close", Type: "http", URL: server.URL})
+	if err := client.Connect(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.ListTools(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	callDone := make(chan error, 1)
+	go func() {
+		_, err := client.CallTool(context.Background(), "blocked", map[string]any{"message": "wait"})
+		callDone <- err
+	}()
+	select {
+	case <-callStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("tools/call request did not start")
+	}
+
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- client.Close() }()
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Close blocked behind an inflight tools/call request")
+	}
+	select {
+	case err := <-callDone:
+		if err != context.Canceled {
+			t.Fatalf("CallTool error = %v, want context.Canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("inflight CallTool survived Client.Close")
+	}
+	select {
+	case <-callCanceled:
+	case <-time.After(time.Second):
+		t.Fatal("Client.Close did not cancel the remote HTTP request")
+	}
+}
+
 func TestHTTPFailedInitializationDeletesAllocatedSession(t *testing.T) {
 	var deleted atomic.Bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -517,7 +680,7 @@ func TestHTTPSSEReturnsBeforeStreamCloseAndTracksListChanged(t *testing.T) {
 	}
 	start := time.Now()
 	tools, err := client.ListTools(t.Context())
-	if err != nil || len(tools) != 1 {
+	if err == nil || !strings.Contains(err.Error(), "catalog invalidated") || tools != nil {
 		t.Fatalf("ListTools = %+v, %v", tools, err)
 	}
 	if elapsed := time.Since(start); elapsed > 500*time.Millisecond {
@@ -599,6 +762,25 @@ func TestRegistryDeterminismDuplicateAndUnknownTransport(t *testing.T) {
 	unknown := New(Server{Name: "x", Type: "carrier-pigeon"})
 	if err := unknown.Connect(t.Context()); err == nil {
 		t.Fatal("unknown transport should fail")
+	}
+}
+
+func TestRegistryBoundsConfiguredServers(t *testing.T) {
+	registry := NewRegistry()
+	for i := 0; i < MaxConfiguredServers+7; i++ {
+		client := registry.Add(Server{
+			Name: fmt.Sprintf("server-%03d", i), Type: "http", URL: "https://example.test/mcp",
+		})
+		if i >= MaxConfiguredServers && client.Snapshot().Status != "error" {
+			t.Fatalf("overflow server %d status = %q, want error", i, client.Snapshot().Status)
+		}
+	}
+	if got := len(registry.Clients()); got != MaxConfiguredServers {
+		t.Fatalf("retained servers = %d, want limit %d", got, MaxConfiguredServers)
+	}
+	err := registry.ConfigurationError()
+	if err == nil || !strings.Contains(err.Error(), "omitted 7") || !strings.Contains(err.Error(), fmt.Sprint(MaxConfiguredServers)) {
+		t.Fatalf("ConfigurationError = %v", err)
 	}
 }
 

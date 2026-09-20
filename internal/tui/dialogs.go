@@ -34,7 +34,7 @@ type permissionButtonHit struct {
 }
 
 func newPermissionDialog(req *permissionRequest, queue *PermissionQueue) *permissionDialog {
-	return &permissionDialog{req: req, queue: queue}
+	return &permissionDialog{req: req, queue: queue, buttonSel: 2}
 }
 
 func (d *permissionDialog) Title() string { return "Permission required" }

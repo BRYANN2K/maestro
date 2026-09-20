@@ -84,6 +84,25 @@ func TestModifiedFiles(t *testing.T) {
 	}
 }
 
+func TestCountFileNewlinesIsBoundedAndCancellable(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "artifact.log")
+	if err := os.WriteFile(path, []byte("one\ntwo\nthree\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := countFileNewlines(context.Background(), path, 64); !ok || got != 3 {
+		t.Fatalf("small file count = (%d, %v), want (3, true)", got, ok)
+	}
+	if got, ok := countFileNewlines(context.Background(), path, 4); ok || got != 0 {
+		t.Fatalf("oversized file count = (%d, %v), want (0, false)", got, ok)
+	}
+
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if got, ok := countFileNewlines(canceled, path, 64); ok || got != 0 {
+		t.Fatalf("canceled count = (%d, %v), want (0, false)", got, ok)
+	}
+}
+
 func TestModifiedFilesSnapshotSurvivesWorkspaceSwitch(t *testing.T) {
 	dirA := newTestRepo(t)
 	dirB := newTestRepo(t)

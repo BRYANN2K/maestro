@@ -197,8 +197,8 @@ func (m *Model) updateSelectionEditKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // updateSelectionAskKey handles the inline question editor shown above a
 // selected IDE/chat range. Enter sends the question with the selected text as
-// context; Shift+Enter keeps the question multiline (Bubble Tea exposes that
-// modified Enter form through KeyMsg.Alt on supported terminals).
+// context; Ctrl+J keeps the question multiline portably, and Alt+Enter remains
+// an alias on terminals that expose that modified Enter form.
 func (m *Model) updateSelectionAskKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.selectionAsk == nil {
 		return m, nil
@@ -312,11 +312,11 @@ func (m *Model) commitSelectionEdit() tea.Cmd {
 	if b := m.ide.Ed.Buffer(); b != nil {
 		m.ide.Ed.Status = "selection replaced"
 		if m.ide.UI.Gutter != nil {
-			m.ide.UI.Gutter.Refresh(m.ctx(), b.Path)
+			m.ide.clearGutter(b.Path)
 		}
 	}
 	m.ide.Focus = ideEditor
-	return nil
+	return m.refreshIDEGutter()
 }
 
 func (m *Model) closeSelectionMenu() {
@@ -384,7 +384,7 @@ func (m *Model) renderSelectionEdit() string {
 	b.WriteString(m.styles.DialogTitle("Edit selection") + "\n")
 	b.WriteString(m.styles.Hint.Render("replace the selected text") + "\n\n")
 	b.WriteString(m.selectionEdit.view(width-4) + "\n\n")
-	b.WriteString(m.styles.Hint.Render("enter apply · shift+enter newline · esc cancel"))
+	b.WriteString(m.styles.Hint.Render("enter apply · ctrl+j newline · esc cancel"))
 	return b.String()
 }
 
@@ -404,7 +404,7 @@ func (m *Model) renderSelectionAsk() string {
 		content = m.styles.InputHint.Render("What would you like to know?")
 	}
 	b.WriteString(m.styles.InputFocus.Width(max(width-4, 1)).MaxWidth(max(width-4, 1)).Render(content) + "\n\n")
-	b.WriteString(m.styles.Hint.Render("enter send · shift+enter newline · esc cancel"))
+	b.WriteString(m.styles.Hint.Render("enter send · ctrl+j newline · esc cancel"))
 	return b.String()
 }
 

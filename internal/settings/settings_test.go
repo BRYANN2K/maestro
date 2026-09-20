@@ -25,7 +25,7 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	ctx := context.Background()
 
 	s := Defaults()
-	s.RoleDefaults[RoleDev] = RoleDefaults{Engine: "legacy", Agent: "codex", Model: "gpt-4o", ReasoningEffort: "high", ReasoningSet: true}
+	s.RoleDefaults[RoleDev] = RoleDefaults{Engine: "native", Model: "openai/gpt-4o", ReasoningEffort: "high", ReasoningSet: true}
 	s.ModelSlots["large"] = "openai/gpt-4o"
 	s.PermissionMode = PermAllow
 	s.Theme = "dark"
@@ -38,7 +38,7 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if got.RoleDefaults[RoleDev] != (RoleDefaults{Engine: "legacy", Agent: "codex", Model: "gpt-4o", ReasoningEffort: "high", ReasoningSet: true}) {
+	if got.RoleDefaults[RoleDev] != (RoleDefaults{Engine: "native", Model: "openai/gpt-4o", ReasoningEffort: "high", ReasoningSet: true}) {
 		t.Errorf("dev defaults = %+v", got.RoleDefaults[RoleDev])
 	}
 	if got.ModelSlots["large"] != "openai/gpt-4o" || got.PermissionMode != PermAllow || got.Theme != "dark" || !got.DisableUpdateChecks {
@@ -59,8 +59,8 @@ func TestLoadMigratesReasoningAutoToOmitted(t *testing.T) {
 	if effort := got.RoleDefaults[RoleDev].ReasoningEffort; effort != "" {
 		t.Fatalf("migrated reasoning effort = %q, want omitted auto", effort)
 	}
-	if !got.RoleDefaults[RoleDev].ReasoningSet {
-		t.Fatal("explicit legacy auto was not preserved as an explicit override")
+	if got.RoleDefaults[RoleDev].Engine != "native" || got.RetiredRoutes[RoleDev].Agent != "codex" {
+		t.Fatal("retired route was not preserved during migration")
 	}
 }
 
@@ -123,7 +123,7 @@ func TestValid(t *testing.T) {
 		{"defaults", Defaults(), true},
 		{"bad mode", Settings{PermissionMode: "explosive"}, false},
 		{"bad engine", Settings{PermissionMode: PermAsk, RoleDefaults: map[string]RoleDefaults{RoleDev: {Engine: "nope"}}}, false},
-		{"legacy engine ok", Settings{PermissionMode: PermAsk, RoleDefaults: map[string]RoleDefaults{RoleDev: {Engine: "legacy"}}}, true},
+		{"legacy engine refused", Settings{PermissionMode: PermAsk, RoleDefaults: map[string]RoleDefaults{RoleDev: {Engine: "legacy"}}}, false},
 		{"reasoning effort ok", Settings{PermissionMode: PermAsk, RoleDefaults: map[string]RoleDefaults{RoleDev: {ReasoningEffort: "xhigh"}}}, true},
 		{"bad reasoning", Settings{PermissionMode: PermAsk, RoleDefaults: map[string]RoleDefaults{RoleDev: {ReasoningEffort: "ultra"}}}, false},
 	}

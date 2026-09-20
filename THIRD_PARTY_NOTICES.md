@@ -96,3 +96,17 @@ go run ./scripts/check_licenses.go
 ```
 
 The gate recomputes all six linked graphs, rejects unmapped modules or version/target drift, validates every bundled SHA-256, checks that every mapped component appears in this notice, verifies the exact npm mirror, and confirms that npm and GoReleaser include the notice tree exactly once.
+
+## Maestro harness runtime
+
+The built-in runtime includes a pinned fork of oh-my-pi's agent scheduler, its provider adapters, Prime Agent's Python RLM kernel, and Stipulate's workflow engine and coordinator. Source revisions are recorded in `runtime/upstream.json`. Runtime dependencies are locked by `runtime/bun.lock`; their license texts, the Bun runtime license, and bundled native-library notices are distributed under [RUNTIME_LICENSES](RUNTIME_LICENSES/manifest.json). This additional manifest records their file hashes; it supplements the Go module manifest above.
+
+Runtime archives are built for macOS and Linux on amd64/arm64 and Windows on amd64. Windows ARM64 is not packaged because the pinned Bun compiler does not supply that native target. The Go module license inventory still covers its six cross-compilation targets.
+
+## OpenTUI interface
+
+The compiled `maestro-ui` uses OpenTUI core/react 0.5.11 and React 19.2.4,
+locked in `ui/bun.lock`. Their license texts and the distributed native
+OpenTUI notices are retained under `RUNTIME_LICENSES/ui`, with hashes in
+`RUNTIME_LICENSES/manifest.json`. The interface is original Maestro code;
+StackDeploy supplied the stack and interaction reference.

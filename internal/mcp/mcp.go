@@ -32,17 +32,27 @@ const (
 	// ProtocolVersion is the newest MCP revision implemented by this client.
 	ProtocolVersion = "2025-06-18"
 
-	maxRequestBytes     = 256 << 10
-	maxResponseBytes    = 1 << 20
-	maxToolOutputBytes  = 64 << 10
-	maxTools            = 128
-	maxToolPages        = 32
-	maxToolNameBytes    = 128
-	maxDescriptionBytes = 4 << 10
-	maxCursorBytes      = 4 << 10
-	defaultConnectTime  = 8 * time.Second
-	defaultDiscoverTime = 8 * time.Second
-	defaultCallTime     = 60 * time.Second
+	maxRequestBytes    = 256 << 10
+	maxResponseBytes   = 1 << 20
+	maxToolOutputBytes = 64 << 10
+	maxTools           = 128
+	maxToolPages       = 32
+	// maxCatalogSchemaBytes is the aggregate input+output schema budget for
+	// one server. Exceeding it rejects the complete discovery result; a partial
+	// page is never published as an apparently complete catalog.
+	maxCatalogSchemaBytes = 128 << 10
+	maxToolNameBytes      = 128
+	maxDescriptionBytes   = 4 << 10
+	maxCursorBytes        = 4 << 10
+	defaultConnectTime    = 8 * time.Second
+	defaultDiscoverTime   = 8 * time.Second
+	defaultCallTime       = 60 * time.Second
+	registryConcurrency   = 4
+
+	// MaxConfiguredServers bounds retained clients and every registry-wide
+	// network operation. A malformed or generated config therefore cannot
+	// create an unbounded process/socket fan-out.
+	MaxConfiguredServers = 64
 )
 
 // Version is set by the command at startup and defaults to an honest local
@@ -157,14 +167,23 @@ type Client struct {
 	toolsCapable    bool
 	toolsDirty      bool
 	toolsRevision   uint64
+	toolsListed     bool
+	toolsListing    bool
+	toolsListDone   chan struct{}
 	tools           map[string]Tool
 	httpClient      *http.Client
 	disabledErr     error
+	lifecycleCtx    context.Context
+	lifecycleCancel context.CancelFunc
 }
 
 // New builds a client (not yet connected).
 func New(s Server) *Client {
-	return &Client{Server: s, Status: "disconnected", tools: map[string]Tool{}, httpClient: newHTTPClient()}
+	lifecycleCtx, lifecycleCancel := context.WithCancel(context.Background())
+	return &Client{
+		Server: s, Status: "disconnected", tools: map[string]Tool{}, httpClient: newHTTPClient(),
+		lifecycleCtx: lifecycleCtx, lifecycleCancel: lifecycleCancel,
+	}
 }
 
 func newHTTPClient() *http.Client {
@@ -228,9 +247,15 @@ func (c *Client) Connect(ctx context.Context) error {
 		c.mu.Unlock()
 		return errors.New("MCP connection is already in progress")
 	}
+	if c.lifecycleCtx == nil || c.lifecycleCtx.Err() != nil {
+		c.lifecycleCtx, c.lifecycleCancel = context.WithCancel(context.Background())
+	}
+	lifecycleCtx := c.lifecycleCtx
 	c.Status, c.Err = "connecting", ""
 	disabledErr := c.disabledErr
 	c.mu.Unlock()
+	ctx, stopLifecycle := contextWithCancellation(ctx, lifecycleCtx)
+	defer stopLifecycle()
 	if disabledErr != nil {
 		c.setStatus("error", disabledErr)
 		return disabledErr
@@ -239,7 +264,7 @@ func (c *Client) Connect(ctx context.Context) error {
 	var err error
 	switch c.Server.Type {
 	case "stdio":
-		err = c.connectStdio(ctx)
+		err = c.connectStdio(ctx, lifecycleCtx)
 	case "http", "sse":
 		err = c.connectHTTP(ctx)
 	default:
@@ -274,7 +299,7 @@ func (c *Client) markConnected() error {
 	return nil
 }
 
-func (c *Client) connectStdio(ctx context.Context) error {
+func (c *Client) connectStdio(ctx, lifecycleCtx context.Context) error {
 	argv, err := splitCommand(c.Server.Command)
 	if err != nil {
 		return fmt.Errorf("mcp %s: invalid stdio command", safeName(c.Server.Name))
@@ -283,10 +308,9 @@ func (c *Client) connectStdio(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("mcp %s: invalid working directory", safeName(c.Server.Name))
 	}
-	cmd := exec.Command(argv[0], argv[1:]...)
+	cmd := newStdioCommand(lifecycleCtx, argv[0], argv[1:]...)
 	cmd.Dir = workDir
 	cmd.Stderr = io.Discard
-	configureProcessGroup(cmd)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return fmt.Errorf("mcp %s: prepare stdio transport", safeName(c.Server.Name))
@@ -295,7 +319,9 @@ func (c *Client) connectStdio(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("mcp %s: prepare stdio transport", safeName(c.Server.Name))
 	}
-	if err := cmd.Start(); err != nil {
+	process, err := startProcessGroup(cmd)
+	if err != nil {
+		_ = stdin.Close()
 		return fmt.Errorf("mcp %s: start stdio server", safeName(c.Server.Name))
 	}
 	scanner := bufio.NewScanner(stdout)
@@ -303,10 +329,10 @@ func (c *Client) connectStdio(ctx context.Context) error {
 	done := make(chan struct{})
 	c.mu.Lock()
 	c.cmd, c.stdin, c.scanner, c.processDone = cmd, stdin, scanner, done
-	c.sessionID, c.protocolVersion, c.toolsCapable, c.toolsDirty, c.toolsRevision = "", "", false, false, 0
+	c.sessionID, c.protocolVersion, c.toolsCapable, c.toolsDirty, c.toolsRevision, c.toolsListed = "", "", false, false, 0, false
 	c.mu.Unlock()
 	go func() {
-		_ = cmd.Wait()
+		_ = process.Wait()
 		close(done)
 		c.mu.Lock()
 		if c.cmd == cmd {
@@ -346,7 +372,7 @@ func (c *Client) connectHTTP(ctx context.Context) error {
 		return fmt.Errorf("mcp %s: invalid HTTP headers", safeName(c.Server.Name))
 	}
 	c.mu.Lock()
-	c.sessionID, c.protocolVersion, c.toolsCapable, c.toolsDirty, c.toolsRevision = "", "", false, false, 0
+	c.sessionID, c.protocolVersion, c.toolsCapable, c.toolsDirty, c.toolsRevision, c.toolsListed = "", "", false, false, 0, false
 	c.mu.Unlock()
 	if err := c.initialize(ctx); err != nil {
 		return err
@@ -396,6 +422,7 @@ func (c *Client) Close() error {
 	// Kill before waiting for the serialized call lock. Otherwise Close could
 	// wait behind a blocked scanner while the scanner waits for Close to kill
 	// its process.
+	c.cancelLifecycle()
 	c.mu.Lock()
 	activeCmd := c.liveStdioCommandLocked()
 	c.mu.Unlock()
@@ -408,7 +435,12 @@ func (c *Client) Close() error {
 	typeName, endpoint := c.Server.Type, c.Server.URL
 	sessionID, protocol := c.sessionID, c.protocolVersion
 	c.cmd, c.stdin, c.scanner, c.processDone = nil, nil, nil, nil
-	c.sessionID, c.protocolVersion, c.toolsCapable, c.toolsDirty, c.toolsRevision = "", "", false, false, 0
+	c.sessionID, c.protocolVersion, c.toolsCapable, c.toolsDirty, c.toolsRevision, c.toolsListed = "", "", false, false, 0, false
+	if c.toolsListDone != nil {
+		close(c.toolsListDone)
+		c.toolsListing = false
+		c.toolsListDone = nil
+	}
 	c.tools = map[string]Tool{}
 	c.Status, c.Err = "disconnected", ""
 	c.mu.Unlock()
@@ -442,6 +474,15 @@ func (c *Client) Close() error {
 	}
 	c.httpClient.CloseIdleConnections()
 	return nil
+}
+
+func (c *Client) cancelLifecycle() {
+	c.mu.Lock()
+	cancel := c.lifecycleCancel
+	c.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
 }
 
 func (c *Client) stopStdio(cmd *exec.Cmd) {
@@ -490,6 +531,9 @@ func (c *Client) callRaw(ctx context.Context, method string, params any) (json.R
 		raw, err = c.stdioCall(ctx, method, params)
 	}
 	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return nil, err
+		}
 		return nil, errors.New(c.redactText(err.Error(), 512))
 	}
 	return raw, nil
@@ -830,16 +874,61 @@ func (c *Client) ListTools(ctx context.Context) ([]Tool, error) {
 	ctx, cancel := withDefaultTimeout(ctx, defaultDiscoverTime)
 	defer cancel()
 	c.mu.Lock()
-	capable := c.toolsCapable
-	startRevision := c.toolsRevision
+	lifecycleCtx := c.lifecycleCtx
 	c.mu.Unlock()
-	if !capable {
-		return nil, errors.New("MCP server did not declare the tools capability")
+	ctx, stopLifecycle := contextWithCancellation(ctx, lifecycleCtx)
+	defer stopLifecycle()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	var (
+		startRevision uint64
+		discoveryDone chan struct{}
+	)
+	for {
+		c.mu.Lock()
+		if c.toolsListed && !c.toolsDirty {
+			cached := sortedTools(c.tools)
+			c.mu.Unlock()
+			return cached, nil
+		}
+		if !c.toolsCapable {
+			c.mu.Unlock()
+			return nil, errors.New("MCP server did not declare the tools capability")
+		}
+		if c.toolsListing {
+			// Concurrent native runs and status refreshes share one discovery.
+			// Followers remain cancellable while the leader owns the network work.
+			done := c.toolsListDone
+			c.mu.Unlock()
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-done:
+				continue
+			}
+		}
+		c.toolsListing = true
+		c.toolsListDone = make(chan struct{})
+		startRevision = c.toolsRevision
+		discoveryDone = c.toolsListDone
+		c.mu.Unlock()
+		defer func() {
+			c.mu.Lock()
+			if c.toolsListDone == discoveryDone {
+				c.toolsListing = false
+				c.toolsListDone = nil
+				close(discoveryDone)
+			}
+			c.mu.Unlock()
+		}()
+		break
 	}
 
 	seenNames := map[string]bool{}
 	seenCursors := map[string]bool{}
 	var out []Tool
+	schemaBytes := 0
 	cursor := ""
 	for page := 0; page < maxToolPages; page++ {
 		params := map[string]any{}
@@ -858,6 +947,9 @@ func (c *Client) ListTools(ctx context.Context) ([]Tool, error) {
 			return nil, errors.New("MCP tools/list returned an invalid result")
 		}
 		for _, rawTool := range parsed.Tools {
+			if len(out) >= maxTools {
+				return nil, fmt.Errorf("MCP server exposes more than %d tools", maxTools)
+			}
 			tool, err := decodeTool(rawTool)
 			if err != nil {
 				return nil, err
@@ -866,10 +958,12 @@ func (c *Client) ListTools(ctx context.Context) ([]Tool, error) {
 				return nil, fmt.Errorf("MCP tools/list returned duplicate tool %q", safeName(tool.Name))
 			}
 			seenNames[tool.Name] = true
-			out = append(out, tool)
-			if len(out) > maxTools {
-				return nil, fmt.Errorf("MCP server exposes more than %d tools", maxTools)
+			toolSchemaBytes := tool.SchemaBytes()
+			if toolSchemaBytes > maxCatalogSchemaBytes-schemaBytes {
+				return nil, fmt.Errorf("MCP tools/list schemas exceed %d bytes", maxCatalogSchemaBytes)
 			}
+			schemaBytes += toolSchemaBytes
+			out = append(out, tool)
 		}
 		if parsed.NextCursor == "" {
 			break
@@ -889,10 +983,32 @@ func (c *Client) ListTools(ctx context.Context) ([]Tool, error) {
 		catalog[tool.Name] = tool
 	}
 	c.mu.Lock()
+	if c.toolsListDone != discoveryDone || c.Status != "connected" {
+		c.mu.Unlock()
+		return nil, errors.New("MCP tools/list closed before catalog publication")
+	}
+	if c.toolsRevision != startRevision {
+		// A list_changed notification observed anywhere between the first
+		// request byte and publication invalidates this complete response. Keep
+		// the prior catalog (if any) dirty and never expose stale ToolSpecs.
+		c.toolsDirty = true
+		c.mu.Unlock()
+		return nil, errors.New("MCP tools/list changed during discovery; catalog invalidated")
+	}
 	c.tools = catalog
-	c.toolsDirty = c.toolsRevision != startRevision
+	c.toolsDirty = false
+	c.toolsListed = true
 	c.mu.Unlock()
 	return append([]Tool(nil), out...), nil
+}
+
+func sortedTools(catalog map[string]Tool) []Tool {
+	out := make([]Tool, 0, len(catalog))
+	for _, tool := range catalog {
+		out = append(out, tool)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
 }
 
 func decodeTool(raw json.RawMessage) (Tool, error) {
@@ -923,16 +1039,47 @@ func decodeTool(raw json.RawMessage) (Tool, error) {
 	return Tool{
 		Name: wire.Name, Title: sanitizeText(wire.Title, 256),
 		Description: sanitizeText(wire.Description, maxDescriptionBytes),
-		InputSchema: input.wire, OutputSchema: cloneSchema(output),
+		InputSchema: wire.InputSchema, OutputSchema: wire.OutputSchema,
 		inputValidator: input, outputValidator: output,
 	}, nil
 }
 
-func cloneSchema(s *compiledSchema) map[string]any {
-	if s == nil {
-		return nil
+// SchemaBytes is the exact compact-JSON size validated during discovery for
+// this tool's input and optional output schemas. It lets the orchestrator
+// enforce a multi-server memory budget without serializing the maps again.
+func (t Tool) SchemaBytes() int {
+	total := 0
+	if t.inputValidator != nil {
+		total += t.inputValidator.encodedBytes
 	}
-	return cloneMap(s.wire)
+	if t.outputValidator != nil {
+		total += t.outputValidator.encodedBytes
+	}
+	return total
+}
+
+// RetainDiscoveredTools removes catalog entries that were deliberately not
+// admitted to the global native-loop budget. Whole schemas are retained or
+// removed; their JSON maps are never truncated into invalid provider input.
+func (c *Client) RetainDiscoveredTools(names []string) {
+	keep := make(map[string]struct{}, len(names))
+	for _, name := range names {
+		keep[name] = struct{}{}
+	}
+	c.mu.Lock()
+	pruned := false
+	for name := range c.tools {
+		if _, ok := keep[name]; !ok {
+			delete(c.tools, name)
+			pruned = true
+		}
+	}
+	if pruned {
+		// A future explicit rebuild must fetch the complete remote catalog again;
+		// the retained callable subset is not a valid discovery cache.
+		c.toolsListed = false
+	}
+	c.mu.Unlock()
 }
 
 // CallTool validates the exact discovered schema before sending any bytes.
@@ -943,7 +1090,13 @@ func (c *Client) CallTool(ctx context.Context, name string, args map[string]any)
 	c.mu.Lock()
 	tool, ok := c.tools[name]
 	dirty := c.toolsDirty
+	lifecycleCtx := c.lifecycleCtx
 	c.mu.Unlock()
+	ctx, stopLifecycle := contextWithCancellation(ctx, lifecycleCtx)
+	defer stopLifecycle()
+	if err := ctx.Err(); err != nil {
+		return CallToolResult{}, err
+	}
 	if dirty {
 		return CallToolResult{}, errors.New("MCP tool catalog changed; reconnect required")
 	}
@@ -1196,6 +1349,28 @@ func withDefaultTimeout(ctx context.Context, timeout time.Duration) (context.Con
 	return context.WithTimeout(ctx, timeout)
 }
 
+func contextWithCancellation(parent, cancelOn context.Context) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(parent)
+	if cancelOn == nil {
+		return ctx, cancel
+	}
+	if cancelOn.Err() != nil {
+		cancel()
+		return ctx, cancel
+	}
+	stop := context.AfterFunc(cancelOn, cancel)
+	// AfterFunc schedules callbacks asynchronously when cancelOn is already
+	// done. Recheck so a request started after Close observes cancellation
+	// synchronously rather than briefly reaching the transport.
+	if cancelOn.Err() != nil {
+		cancel()
+	}
+	return ctx, func() {
+		stop()
+		cancel()
+	}
+}
+
 func safeName(s string) string {
 	s = sanitizeText(s, 128)
 	if strings.TrimSpace(s) == "" {
@@ -1251,8 +1426,9 @@ func (c *Client) redactText(value string, max int) string {
 
 // Registry manages configured servers.
 type Registry struct {
-	mu      sync.Mutex
-	clients map[string]*Client
+	mu       sync.Mutex
+	clients  map[string]*Client
+	rejected int
 }
 
 func NewRegistry() *Registry { return &Registry{clients: map[string]*Client{}} }
@@ -1270,9 +1446,30 @@ func (r *Registry) Add(s Server) *Client {
 		existing.setStatus("error", err)
 		return existing
 	}
+	if len(r.clients) >= MaxConfiguredServers {
+		r.rejected++
+		err := fmt.Errorf("MCP registry limit is %d configured servers", MaxConfiguredServers)
+		c := New(s)
+		c.mu.Lock()
+		c.disabledErr = err
+		c.mu.Unlock()
+		c.setStatus("error", err)
+		return c
+	}
 	c := New(s)
 	r.clients[s.Name] = c
 	return c
+}
+
+// ConfigurationError reports bounded registry omissions without retaining
+// attacker-controlled server names or one error allocation per rejected row.
+func (r *Registry) ConfigurationError() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.rejected == 0 {
+		return nil
+	}
+	return fmt.Errorf("MCP registry omitted %d configured server(s) beyond the limit of %d", r.rejected, MaxConfiguredServers)
 }
 
 func (r *Registry) Get(name string) (*Client, bool) {
@@ -1299,22 +1496,40 @@ func (r *Registry) Clients() []*Client {
 }
 
 func (r *Registry) ConnectAll(ctx context.Context) {
-	for _, c := range r.Clients() {
-		if err := c.Connect(ctx); err != nil {
-			continue
-		}
-	}
+	forEachClientBounded(r.Clients(), func(c *Client) { _ = c.Connect(ctx) })
 }
 
 func (r *Registry) CloseAll() {
 	clients := r.Clients()
-	var wg sync.WaitGroup
-	wg.Add(len(clients))
+	// Cancellation is cheap and must reach every in-flight request immediately;
+	// process/session teardown remains pooled because it can block.
 	for _, client := range clients {
-		client := client
+		client.cancelLifecycle()
+	}
+	forEachClientBounded(clients, func(c *Client) { _ = c.Close() })
+}
+
+func forEachClientBounded(clients []*Client, fn func(*Client)) {
+	if len(clients) == 0 {
+		return
+	}
+	workers := registryConcurrency
+	if len(clients) < workers {
+		workers = len(clients)
+	}
+	jobs := make(chan *Client, len(clients))
+	for _, client := range clients {
+		jobs <- client
+	}
+	close(jobs)
+	var wg sync.WaitGroup
+	wg.Add(workers)
+	for range workers {
 		go func() {
 			defer wg.Done()
-			_ = client.Close()
+			for client := range jobs {
+				fn(client)
+			}
 		}()
 	}
 	wg.Wait()

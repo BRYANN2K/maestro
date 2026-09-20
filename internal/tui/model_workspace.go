@@ -65,33 +65,33 @@ type taskModelOverlay struct {
 	hits                []workspaceHit
 	originX, originY    int
 	compact             bool
+	loading             bool
+	loadErr             string
+	discoveryPending    bool
+	discoveryBaseline   string
 }
 
 func newTaskModelOverlay(orch *orchestrator.Orchestrator) *taskModelOverlay {
+	o, _ := loadTaskModelOverlay(context.Background(), orch)
+	return o
+}
+
+func newLoadingTaskModelOverlay() *taskModelOverlay {
+	return &taskModelOverlay{tasks: append([]taskRoute(nil), taskRoutes...), focus: 2, loading: true}
+}
+
+var taskModelOverlayLoader = loadTaskModelOverlay
+
+func loadTaskModelOverlay(ctx context.Context, orch *orchestrator.Orchestrator) (*taskModelOverlay, error) {
 	o := &taskModelOverlay{tasks: append([]taskRoute(nil), taskRoutes...), focus: 2}
-	for _, sub := range orch.SubscriptionList(context.Background()) {
-		models := make([]routeModel, 0, len(sub.Models))
-		for _, id := range sub.Models {
-			name := id
-			if id == "auto" {
-				name = "Automatic · vendor default"
-			}
-			models = append(models, routeModel{
-				id: id, displayID: safeIDEPlainText(id), name: safeIDEPlainText(name), reasoning: sub.Agent == "codex",
-				efforts: orch.ReasoningEfforts("legacy", sub.Agent, id),
-			})
-		}
-		o.sources = append(o.sources, modelSource{
-			id: sub.ID, label: safeIDEPlainText(sub.Label), kind: "subscription", agent: sub.Agent,
-			status: safeIDEPlainText(sub.Status), ready: sub.Authenticated, installed: sub.Installed, models: models,
-		})
-	}
+	providerList := orch.ProviderList(ctx)
 	providers := map[string]orchestrator.ProviderInfo{}
-	for _, p := range orch.ProviderList(context.Background()) {
+	for _, p := range providerList {
 		providers[p.Name] = p
 	}
 	byProvider := map[string][]routeModel{}
-	for _, model := range orch.ModelList(context.Background()) {
+	modelList := orch.ModelList(ctx)
+	for _, model := range modelList {
 		handle := qualifiedModelID(model.Provider, model.ID)
 		byProvider[model.Provider] = append(byProvider[model.Provider], routeModel{
 			id: handle, displayID: safeIDEPlainText(handle), name: safeIDEPlainText(model.Name),
@@ -115,9 +115,12 @@ func newTaskModelOverlay(orch *orchestrator.Orchestrator) *taskModelOverlay {
 		return ids[i] < ids[j]
 	})
 	for _, id := range ids {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		info, ok := providers[id]
 		if !ok {
-			info, _ = orch.ProviderInfo(context.Background(), id)
+			info, _ = orch.ProviderInfo(ctx, id)
 		}
 		status := "API key required"
 		ready := !info.RequiresKey || info.KeySet
@@ -131,8 +134,68 @@ func newTaskModelOverlay(orch *orchestrator.Orchestrator) *taskModelOverlay {
 			ready: ready, installed: true, models: byProvider[id],
 		})
 	}
+	o.discoveryBaseline = modelListFingerprint(modelList)
+	for _, provider := range providerList {
+		if provider.RequiresKey || provider.Models != 0 || len(byProvider[provider.Name]) != 0 {
+			continue
+		}
+		o.discoveryPending = true
+		break
+	}
 	o.selectCurrentRoute(orch)
-	return o
+	return o, ctx.Err()
+}
+
+func modelListFingerprint(models []orchestrator.ModelInfo) string {
+	var b strings.Builder
+	for _, model := range models {
+		b.WriteString(model.Provider)
+		b.WriteByte(0)
+		b.WriteString(model.ID)
+		b.WriteByte(0)
+	}
+	return b.String()
+}
+
+func (o *taskModelOverlay) applyDiscovery(next *taskModelOverlay) {
+	if next == nil {
+		return
+	}
+	task, focus, query := o.task, o.focus, o.query
+	sourceID := ""
+	modelID := ""
+	effort := ""
+	if source := o.currentSource(); source != nil {
+		sourceID = source.id
+	}
+	if models := o.filteredModels(); o.model >= 0 && o.model < len(models) {
+		modelID = models[o.model].id
+	}
+	if efforts := o.currentReasoningEfforts(); o.reasoning >= 0 && o.reasoning < len(efforts) {
+		effort = efforts[o.reasoning]
+	}
+
+	*o = *next
+	o.discoveryPending = false
+	o.task = clamp(task, 0, max(len(o.tasks)-1, 0))
+	o.focus = clamp(focus, 0, 3)
+	o.query = query
+	for i := range o.sources {
+		if o.sources[i].id != sourceID {
+			continue
+		}
+		o.source = i
+		o.model = 0
+		o.reasoning = 0
+		for j, model := range o.filteredModels() {
+			if model.id == modelID {
+				o.model = j
+				break
+			}
+		}
+		o.selectReasoning(effort)
+		break
+	}
 }
 
 func (o *taskModelOverlay) selectCurrentRoute(orch *orchestrator.Orchestrator) {
@@ -172,6 +235,9 @@ func (o *taskModelOverlay) View(styles Styles, width int) string {
 }
 
 func (o *taskModelOverlay) viewSized(styles Styles, width, height int) string {
+	if o.loading || o.loadErr != "" {
+		return o.viewLoadState(styles, width, height)
+	}
 	if width < 72 || height < 22 {
 		return o.viewCompact(styles, width, height)
 	}
@@ -305,6 +371,29 @@ func (o *taskModelOverlay) viewSized(styles Styles, width, height int) string {
 	footer := muted.Render("FOCUS: " + focusName + " · tab focus · arrows navigate · enter apply · esc close")
 	content := head.String() + "\n\n" + columns + "\n" + accent.Render("ROUTE STATUS") + "  " + status + "\n" + reasoningLine + "\n" + footer
 	return lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(styles.T.Color(TokenIron)).Padding(0, 1).Width(width).Height(height).Render(content)
+}
+
+func (o *taskModelOverlay) viewLoadState(styles Styles, width, height int) string {
+	width = max(width, 1)
+	height = max(height, 1)
+	innerW := max(width-4, 1)
+	accent := lipgloss.NewStyle().Foreground(styles.T.Color(TokenCharple)).Bold(true)
+	state := "Checking model routes and vendor CLI sessions…"
+	footer := "esc close"
+	if o.loadErr != "" {
+		state = "Model routes unavailable: " + o.loadErr
+		footer = "r retry · esc close"
+	}
+	content := accent.Render("MODEL ROUTING") + "\n\n" +
+		styles.Hint.Render(truncateRunes(state, innerW)) + "\n\n" + styles.Hint.Render(footer)
+	content = clampANSIHeight(clampANSIWidth(content, innerW), max(height-2, 1))
+	return lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(styles.T.Color(TokenIron)).
+		Padding(0, 1).
+		Width(width).MaxWidth(width).
+		Height(height).MaxHeight(height).
+		Render(content)
 }
 
 // viewCompact keeps model routing operable in small terminals. The full
@@ -472,36 +561,37 @@ func (o *taskModelOverlay) apply(m *Model) tea.Cmd {
 	o.reasoning = clamp(o.reasoning, 0, len(efforts)-1)
 	effort := efforts[o.reasoning]
 	role := o.tasks[o.task].role
-	if source.kind == "subscription" {
-		if !source.installed || !source.ready {
-			m.overlay = overlayProviders
-			m.overlayM = newProvidersOverlay(m.orch, source.id)
-			m.status.pushToast("info", "connect "+source.label+" first", 3*time.Second)
-			return nil
-		}
-		if err := m.orch.SetTaskModelWithReasoning(m.ctx(), role, "legacy", source.agent, model.id, effort); err != nil {
-			m.status.pushToast("error", safeIDEPlainText(err.Error()), 4*time.Second)
-			return nil
-		}
-	} else {
-		if !source.ready {
-			m.overlay = overlayAuth
-			m.overlayM = newTaskAuthOverlay(source.id, model.id, role)
-			return nil
-		}
-		if err := m.orch.SetTaskModelWithReasoning(m.ctx(), role, "native", "", model.id, effort); err != nil {
-			m.status.pushToast("error", safeIDEPlainText(err.Error()), 4*time.Second)
-			return nil
-		}
+	if source.kind != "native" {
+		return m.openProviders(source.id)
+	}
+	if !source.ready {
+		m.invalidateModelPickerRequest()
+		m.invalidateModelRefreshRequest()
+		m.overlay = overlayAuth
+		m.overlayM = newTaskAuthOverlay(source.id, model.id, role)
+		return nil
+	}
+	if err := m.orch.SetTaskModelWithReasoning(m.ctx(), role, "native", "", model.id, effort); err != nil {
+		m.status.pushToast("error", safeIDEPlainText(err.Error()), 4*time.Second)
+		return nil
 	}
 	m.status.pushToast("success", o.tasks[o.task].label+" → "+model.display()+" · "+safeIDEPlainText(effort), 3*time.Second)
 	return nil
 }
 
 func (o *taskModelOverlay) update(m *Model, msg tea.KeyMsg) tea.Cmd {
+	if o.loading || o.loadErr != "" {
+		switch {
+		case msg.Type == tea.KeyEsc:
+			m.closeModelPicker()
+		case o.loadErr != "" && msg.Type == tea.KeyRunes && msg.String() == "r":
+			return m.openModelPicker()
+		}
+		return nil
+	}
 	switch msg.Type {
 	case tea.KeyEsc:
-		m.overlay = overlayNone
+		m.closeModelPicker()
 	case tea.KeyTab:
 		o.focus = (o.focus + 1) % 4
 	case tea.KeyShiftTab:
@@ -553,10 +643,9 @@ func (o *taskModelOverlay) update(m *Model, msg tea.KeyMsg) tea.Cmd {
 			return o.apply(m)
 		}
 	case tea.KeyCtrlP:
-		m.overlay = overlayProviders
-		m.overlayM = newProvidersOverlay(m.orch, "")
+		return m.openProviders("")
 	case tea.KeyCtrlR:
-		return func() tea.Msg { return modelsRefreshedMsg{err: m.orch.RefreshModels(context.Background())} }
+		return m.refreshModelsForOverlay()
 	case tea.KeyRunes:
 		o.query += sanitizeSingleLineInput(string(msg.Runes))
 		o.model, o.reasoning, o.focus = 0, 0, 2
@@ -565,6 +654,9 @@ func (o *taskModelOverlay) update(m *Model, msg tea.KeyMsg) tea.Cmd {
 }
 
 func (o *taskModelOverlay) mouse(m *Model, msg tea.MouseMsg) tea.Cmd {
+	if o.loading || o.loadErr != "" {
+		return nil
+	}
 	if msg.Button == tea.MouseButtonWheelUp || msg.Button == tea.MouseButtonWheelDown {
 		delta := 1
 		if msg.Button == tea.MouseButtonWheelUp {

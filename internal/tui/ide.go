@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/bryann2k/maestro/internal/editor"
 	"github.com/bryann2k/maestro/internal/git"
+	"github.com/bryann2k/maestro/internal/orchestrator"
 	"github.com/bryann2k/maestro/internal/proposals"
 )
 
@@ -53,16 +55,73 @@ type IDEState struct {
 	proposalHunk    int
 	fileCache       []string
 	treeCache       []treeEntry
-	fileCacheValid  bool
 	treeCacheValid  bool
 	filesLoading    bool
 	gutterDeferred  bool
+	gutterError     string
+	hydrating       bool
+	hydration       ideHydrationPlan
+	operation       uint64
+	operationCancel context.CancelFunc
+	queuedOpen      *ideOpenRequest
 	project         string
 	git             *git.Client
 	themePicker     *themePickerState
 	notify          func(level, message string)
 	onOpenRejected  func()
+	symbolCache     ideSymbolCache
 }
+
+type ideHydrationPlan struct {
+	project    string
+	keymap     string
+	sessionDir string
+	specPath   string
+}
+
+type ideOpenRequest struct {
+	path         string
+	line, column int
+	manual       bool
+}
+
+type ideOperationKind uint8
+
+const (
+	ideOperationHydrate ideOperationKind = iota + 1
+	ideOperationOpen
+	ideOperationStage
+)
+
+const (
+	ideHydrationTimeout = 5 * time.Second
+	ideFileOpenTimeout  = 3 * time.Second
+	ideHunkStageTimeout = 5 * time.Second
+)
+
+// ideOperationMsg is applied by Model.Update. target, operation, and
+// workspace form the stale-result identity; workers never mutate the model.
+type ideOperationMsg struct {
+	kind      ideOperationKind
+	operation uint64
+	target    *IDEState
+	workspace orchestrator.WorkspaceSnapshot
+	editor    *editor.Editor
+	buffer    *editor.Buffer
+	ackCrash  bool
+	path      string
+	line      int
+	column    int
+	manual    bool
+	warning   string
+	err       error
+}
+
+var (
+	ideEditorHydrator = hydrateIDEEditor
+	ideFileLoader     = editor.LoadContext
+	ideHunkStager     = editor.StageHunks
+)
 
 // themePickerState is the Space t overlay.
 type themePickerState struct {
@@ -107,81 +166,41 @@ func NewIDE(m *Model, project string, g *git.Client) *IDEState {
 
 // newDeferredIDE builds the immediately usable editor shell without running
 // Git commands on Bubble Tea's event loop. The file tree and gutter arrive in
-// the existing background workspace refresh. This path is used when an agent
-// is actively streaming, where even a short synchronous Git command can make
-// keyboard and mouse input appear frozen behind queued model deltas.
+// the existing background workspace refresh. Runtime tab/session transitions
+// use this path unconditionally: even an idle repository can have a slow
+// index, filesystem, or full diff that must not own the event loop.
 func newDeferredIDE(m *Model, project string, g *git.Client) *IDEState {
 	return newIDE(m, project, g, true)
 }
 
 func newIDE(m *Model, project string, g *git.Client, deferGit bool) *IDEState {
+	plan := snapshotIDEHydration(m, project)
 	ed := editor.NewEditor(project)
-	if m != nil && m.orch != nil {
-		ed.SetKeymap(m.orch.SettingsSnapshot().EditorMode)
-	}
-	ed.OpenFile = func(path string) error {
-		if err := ed.Open(path); err != nil {
-			return err
-		}
-		return nil
-	}
-	ed.SaveBuffer = func(b *editor.Buffer) error {
-		if err := b.WriteFile(); err != nil {
-			return err
-		}
-		return nil
-	}
-	ed.StageHunks = func(b *editor.Buffer) error {
-		return editor.StageHunks(context.Background(), g, b.Path)
-	}
-	ed.ProposalSrc = func() []editor.ReviewProposal {
-		if m.proposals == nil {
-			return nil
-		}
-		ids, err := m.proposals.Pending()
-		if err != nil {
-			return nil
-		}
-		var out []editor.ReviewProposal
-		for _, id := range ids {
-			p, err := m.proposals.Load(id)
-			if err != nil {
-				continue
+	ed.SetKeymap(plan.keymap)
+	ed.Sessions.SetDir(plan.sessionDir)
+	ed.Crash.SetDir(plan.sessionDir)
+	if !deferGit {
+		if loaded, warning, ackCrash, err := hydrateIDEEditor(context.Background(), plan); err == nil && loaded != nil {
+			ed = loaded
+			if ackCrash {
+				ed.Crash.AcknowledgeRestore()
 			}
-			out = append(out, editor.ReviewProposal{Prop: p, Store: m.proposals})
-		}
-		return out
-	}
-	// Session + crash recovery wiring.
-	home, _ := userHome()
-	sessDir := filepath.Join(home, ".maestro", "editor", sanitize(project))
-	ed.Sessions.SetDir(sessDir)
-	ed.Crash.SetDir(sessDir)
-	if _, err := ed.Sessions.Load(ed); err != nil {
-		ed.Status = "Editor session recovery was skipped because its state was unsafe or unreadable."
-	}
-	if states, err := ed.Crash.Restore(); err == nil && len(states) > 0 {
-		ed.RestoreBuffers(states)
-	} else if err != nil {
-		ed.Status = "Editor crash recovery was skipped because its state was unsafe or unreadable."
-	}
-	if len(ed.Buffers) == 0 {
-		// Open the active spec as a starting buffer.
-		if sp := m.orch.ActiveSpec(); sp != nil {
-			_ = ed.Open(m.orch.SpecPath(sp.ID))
-		}
-	}
-	if len(ed.Buffers) == 0 || (len(ed.Buffers) == 1 && ed.Buffers[0].Path == "untitled" && !ed.Buffers[0].Dirty) {
-		if starter := starterFile(project); starter != "" {
-			ed.Buffers = nil
-			ed.CurBuf = 0
-			_ = ed.Open(starter)
+			if warning != "" {
+				ed.Status = warning
+			}
+		} else if err != nil {
+			ed.Status = "Editor recovery was unavailable: " + err.Error()
 		}
 	}
 	if len(ed.Buffers) == 0 {
 		ed.Buffers = append(ed.Buffers, editor.NewBuffer("untitled", nil))
 	}
-	ui := editor.NewUI(ed, m.styles.T.EditorPalette())
+	configureIDEEditor(m, ed, g)
+	palette := Charmtone().EditorPalette()
+	if m != nil {
+		palette = m.styles.T.EditorPalette()
+	}
+	ui := editor.NewUI(ed, palette)
 	ui.Gutter = editor.NewGutter(g)
 	if deferGit {
 		ui.Gutter.Path = ed.Buffer().Path
@@ -192,9 +211,16 @@ func newIDE(m *Model, project string, g *git.Client, deferGit bool) *IDEState {
 		Ed: ed, UI: ui, Focus: ideEditor,
 		treeExpanded: map[string]bool{},
 		project:      project, git: g,
-		fileCacheValid: deferGit,
 		filesLoading:   deferGit,
 		gutterDeferred: deferGit,
+		hydrating:      deferGit,
+		hydration:      plan,
+	}
+	if !deferGit {
+		// The public constructor is also used by benchmarks and headless tests.
+		// Runtime screen transitions use newDeferredIDE and install this snapshot
+		// from a tea.Cmd, keeping View observational.
+		state.fileCache, _ = editor.ListFiles(context.Background(), project, 500)
 	}
 	if m != nil && m.status != nil {
 		state.notify = func(level, message string) {
@@ -213,8 +239,115 @@ func newIDE(m *Model, project string, g *git.Client, deferGit bool) *IDEState {
 	return state
 }
 
-func starterFile(project string) string {
+func snapshotIDEHydration(m *Model, project string) ideHydrationPlan {
+	plan := ideHydrationPlan{project: project, keymap: string(editor.KeymapStandard)}
+	if m != nil && m.orch != nil {
+		plan.keymap = m.orch.SettingsSnapshot().EditorMode
+		if sp := m.orch.ActiveSpec(); sp != nil {
+			plan.specPath = m.orch.SpecPath(sp.ID)
+		}
+	}
+	if home, err := userHome(); err == nil {
+		plan.sessionDir = filepath.Join(home, ".maestro", "editor", sanitize(project))
+	}
+	return plan
+}
+
+func configureIDEEditor(m *Model, ed *editor.Editor, g *git.Client) {
+	if ed == nil {
+		return
+	}
+	ed.DeferExternalIO()
+	ed.OpenFile = func(path string) error {
+		if err := ed.Open(path); err != nil {
+			return err
+		}
+		return nil
+	}
+	ed.SaveBuffer = func(b *editor.Buffer) error {
+		if err := b.WriteFile(); err != nil {
+			return err
+		}
+		return nil
+	}
+	ed.StageHunks = func(b *editor.Buffer) error {
+		return editor.StageHunks(context.Background(), g, b.Path)
+	}
+	ed.ProposalSrc = func() []editor.ReviewProposal {
+		if m == nil || m.proposals == nil {
+			return nil
+		}
+		ids, err := m.proposals.Pending()
+		if err != nil {
+			return nil
+		}
+		var out []editor.ReviewProposal
+		for _, id := range ids {
+			p, err := m.proposals.Load(id)
+			if err != nil {
+				continue
+			}
+			out = append(out, editor.ReviewProposal{Prop: p, Store: m.proposals})
+		}
+		return out
+	}
+}
+
+func hydrateIDEEditor(ctx context.Context, plan ideHydrationPlan) (*editor.Editor, string, bool, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, "", false, err
+	}
+	ed := editor.NewEditor(plan.project)
+	ed.SetKeymap(plan.keymap)
+	ed.Sessions.SetDir(plan.sessionDir)
+	ed.Crash.SetDir(plan.sessionDir)
+	warning := ""
+	if _, err := ed.Sessions.Load(ed); err != nil {
+		warning = "Editor session recovery was skipped because its state was unsafe or unreadable."
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, warning, false, err
+	}
+	states, crashPresent, crashErr := ed.Crash.PreviewRestore()
+	if crashErr == nil && len(states) > 0 {
+		ed.RestoreBuffers(states)
+	} else if crashErr != nil {
+		warning = "Editor crash recovery was skipped because its state was unsafe or unreadable."
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, warning, false, err
+	}
+	if len(ed.Buffers) == 0 && plan.specPath != "" {
+		if b, err := editor.LoadContext(ctx, plan.specPath); err == nil {
+			ed.InstallLoadedBuffer(plan.specPath, b, nil)
+		}
+	}
+	if len(ed.Buffers) == 0 || (len(ed.Buffers) == 1 && ed.Buffers[0].Path == "untitled" && !ed.Buffers[0].Dirty) {
+		if starter := starterFileContext(ctx, plan.project); starter != "" {
+			if b, err := editor.LoadContext(ctx, starter); err == nil {
+				ed.Buffers = nil
+				ed.CurBuf = 0
+				ed.InstallLoadedBuffer(starter, b, nil)
+			}
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, warning, false, err
+	}
+	if len(ed.Buffers) == 0 {
+		ed.Buffers = append(ed.Buffers, editor.NewBuffer("untitled", nil))
+	}
+	return ed, warning, crashPresent && crashErr == nil, nil
+}
+
+func starterFileContext(ctx context.Context, project string) string {
 	for _, name := range []string{"README.md", "MAESTRO.md", filepath.Join("docs", "ARCHITECTURE.md"), "CHANGELOG.md"} {
+		if ctx != nil && ctx.Err() != nil {
+			return ""
+		}
 		path := filepath.Join(project, name)
 		if info, err := os.Stat(path); err == nil && !info.IsDir() {
 			return path
@@ -248,14 +381,264 @@ func (s *IDEState) OpenFileAt(path string) bool {
 		}
 		return false
 	}
-	if s.gutterDeferred {
-		s.clearGutter(full)
-	} else {
-		s.UI.Gutter.Refresh(context.Background(), full)
-	}
+	s.clearGutter(full)
 	s.UI.SetScroll(0)
 	s.Focus = ideEditor
 	return true
+}
+
+func (s *IDEState) cancelOperation() {
+	if s == nil {
+		return
+	}
+	if s.operationCancel != nil {
+		s.operationCancel()
+		s.operationCancel = nil
+	}
+	s.operation++
+	s.hydrating = false
+}
+
+func (s *IDEState) beginOperation() (uint64, context.Context) {
+	s.cancelOperation()
+	ctx, cancel := context.WithCancel(context.Background())
+	s.operationCancel = cancel
+	return s.operation, ctx
+}
+
+func (s *IDEState) queueOpen(path string, line, column int, manual bool) {
+	if s == nil || strings.TrimSpace(path) == "" {
+		return
+	}
+	s.queuedOpen = &ideOpenRequest{path: path, line: line, column: column, manual: manual}
+}
+
+func (s *IDEState) takeQueuedOpen() *ideOpenRequest {
+	if s == nil {
+		return nil
+	}
+	request := s.queuedOpen
+	s.queuedOpen = nil
+	return request
+}
+
+func (m *Model) beginIDEHydration(target *IDEState) tea.Cmd {
+	if m == nil || m.orch == nil || target == nil || m.quitting {
+		return nil
+	}
+	operation, ctx := target.beginOperation()
+	target.hydrating = true
+	workspace := m.orch.SnapshotWorkspace()
+	plan := target.hydration
+	return func() tea.Msg {
+		bounded, stop := context.WithTimeout(ctx, ideHydrationTimeout)
+		defer stop()
+		ed, warning, ackCrash, err := ideEditorHydrator(bounded, plan)
+		return ideOperationMsg{
+			kind: ideOperationHydrate, operation: operation, target: target,
+			workspace: workspace, editor: ed, ackCrash: ackCrash, warning: warning, err: err,
+		}
+	}
+}
+
+func (m *Model) beginIDEOpen(target *IDEState, request ideOpenRequest) tea.Cmd {
+	if m == nil || m.orch == nil || target == nil || target.Ed == nil || m.quitting {
+		return nil
+	}
+	path := request.path
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(target.project, filepath.FromSlash(path))
+	}
+	path = filepath.Clean(path)
+	for i, b := range target.Ed.Buffers {
+		if b == nil || filepath.Clean(b.Path) != path {
+			continue
+		}
+		target.cancelOperation()
+		target.Ed.CurBuf = i
+		target.Ed.Status = "opened " + safeIDEPlainText(path)
+		target.clearGutter(path)
+		target.UI.SetScroll(0)
+		target.Focus = ideEditor
+		applyIDEOpenPosition(target, request.line, request.column)
+		if request.manual {
+			m.followAgent = false
+		}
+		return m.withPendingIDEWorkspaceRefresh(m.refreshIDEGutter())
+	}
+	operation, ctx := target.beginOperation()
+	target.Ed.Status = "opening " + safeIDEPlainText(path) + "…"
+	workspace := m.orch.SnapshotWorkspace()
+	return func() tea.Msg {
+		bounded, stop := context.WithTimeout(ctx, ideFileOpenTimeout)
+		defer stop()
+		buffer, err := ideFileLoader(bounded, path)
+		return ideOperationMsg{
+			kind: ideOperationOpen, operation: operation, target: target,
+			workspace: workspace, buffer: buffer, path: path,
+			line: request.line, column: request.column, manual: request.manual, err: err,
+		}
+	}
+}
+
+func (m *Model) beginQueuedIDEOpen(target *IDEState) tea.Cmd {
+	if target == nil {
+		return nil
+	}
+	request := target.takeQueuedOpen()
+	if request == nil {
+		return nil
+	}
+	return m.beginIDEOpen(target, *request)
+}
+
+func (m *Model) beginIDEHunkStage(target *IDEState, path string) tea.Cmd {
+	if m == nil || m.orch == nil || target == nil || target.git == nil || path == "" || m.quitting {
+		return nil
+	}
+	operation, ctx := target.beginOperation()
+	target.Ed.Status = "staging hunks…"
+	workspace := m.orch.SnapshotWorkspace()
+	client := target.git
+	return func() tea.Msg {
+		bounded, stop := context.WithTimeout(ctx, ideHunkStageTimeout)
+		defer stop()
+		err := ideHunkStager(bounded, client, path)
+		return ideOperationMsg{
+			kind: ideOperationStage, operation: operation, target: target,
+			workspace: workspace, path: path, err: err,
+		}
+	}
+}
+
+// finishIDEOperation is the event-loop half of every IDE effect. Model.Update
+// routes ideOperationMsg here. Late completions cannot mutate a closed/replaced
+// IDE or workspace.
+func (m *Model) finishIDEOperation(msg ideOperationMsg) tea.Cmd {
+	if m == nil || m.orch == nil || msg.target == nil || msg.operation != msg.target.operation {
+		return nil
+	}
+	target := msg.target
+	if target.operationCancel != nil {
+		target.operationCancel()
+		target.operationCancel = nil
+	}
+	// Consume this generation before applying it so a duplicated delivery is
+	// stale as well as older/superseded completions.
+	target.operation++
+	target.hydrating = false
+	if target != m.ide || !m.orch.WorkspaceIsCurrent(msg.workspace) {
+		return nil
+	}
+	switch msg.kind {
+	case ideOperationHydrate:
+		if msg.err != nil {
+			if !errors.Is(msg.err, context.Canceled) {
+				target.Ed.Status = "Editor recovery was unavailable. The empty editor remains usable."
+				if target.notify != nil {
+					target.notify("warn", target.Ed.Status)
+				}
+			}
+			return m.refreshModifiedFiles()
+		}
+		applied := false
+		if msg.editor != nil && editorShellUnmodified(target.Ed) {
+			configureIDEEditor(m, msg.editor, target.git)
+			target.Ed = msg.editor
+			applied = true
+			width, height := target.UI.Width, target.UI.Height
+			target.UI = editor.NewUI(msg.editor, m.styles.T.EditorPalette())
+			target.UI.Width, target.UI.Height = width, height
+			target.UI.Gutter = editor.NewGutter(target.git)
+			if b := msg.editor.Buffer(); b != nil {
+				target.clearGutter(b.Path)
+			}
+		}
+		if msg.warning != "" {
+			target.Ed.Status = msg.warning
+			if target.notify != nil {
+				target.notify("warn", msg.warning)
+			}
+		}
+		var acknowledgeCrash tea.Cmd
+		if applied && msg.ackCrash {
+			crash := target.Ed.Crash
+			acknowledgeCrash = func() tea.Msg {
+				crash.AcknowledgeRestore()
+				return nil
+			}
+		}
+		return tea.Batch(m.refreshModifiedFiles(), acknowledgeCrash)
+	case ideOperationOpen:
+		if !target.Ed.InstallLoadedBuffer(msg.path, msg.buffer, msg.err) {
+			target.Ed.CancelSelection()
+			if target.onOpenRejected != nil {
+				target.onOpenRejected()
+			}
+			if !errors.Is(msg.err, context.Canceled) {
+				target.Ed.Status = editor.SafeOpenError(msg.err)
+				if target.notify != nil {
+					target.notify("warn", target.Ed.Status)
+				}
+			}
+			return m.withPendingIDEWorkspaceRefresh(nil)
+		}
+		target.Ed.Status = "opened " + safeIDEPlainText(msg.path)
+		target.clearGutter(msg.path)
+		target.UI.SetScroll(0)
+		target.Focus = ideEditor
+		applyIDEOpenPosition(target, msg.line, msg.column)
+		if msg.manual {
+			m.followAgent = false
+		}
+		return m.withPendingIDEWorkspaceRefresh(m.refreshIDEGutter())
+	case ideOperationStage:
+		if msg.err != nil {
+			if !errors.Is(msg.err, context.Canceled) {
+				target.Ed.Status = "error: " + safeIDEPlainText(msg.err.Error())
+				if target.notify != nil {
+					target.notify("error", target.Ed.Status)
+				}
+			}
+			return m.withPendingIDEWorkspaceRefresh(nil)
+		}
+		target.Ed.Status = "hunks staged"
+		target.clearGutter(msg.path)
+		if target.notify != nil {
+			target.notify("success", "hunks staged")
+		}
+		return tea.Batch(m.refreshModifiedFiles(), m.refreshIDEGutter())
+	}
+	return nil
+}
+
+// withPendingIDEWorkspaceRefresh preserves the initial file-tree refresh when
+// a user file-open or stage request supersedes hydration before it completes.
+// The latest operation still owns publication, while the independent workspace
+// scan fills the tree/sidebar through its own generation gate.
+func (m *Model) withPendingIDEWorkspaceRefresh(cmd tea.Cmd) tea.Cmd {
+	if m == nil || m.ide == nil || !m.ide.filesLoading || m.modFilesInFlight {
+		return cmd
+	}
+	return tea.Batch(cmd, m.refreshModifiedFiles())
+}
+
+func editorShellUnmodified(ed *editor.Editor) bool {
+	if ed == nil || len(ed.Buffers) != 1 || ed.Buffers[0] == nil {
+		return false
+	}
+	b := ed.Buffers[0]
+	return (b.Path == "untitled" || b.Path == "") && !b.Dirty && b.Revision() == 0
+}
+
+func applyIDEOpenPosition(target *IDEState, line, column int) {
+	if target == nil || target.Ed == nil || target.Ed.Buffer() == nil || line <= 0 {
+		return
+	}
+	b := target.Ed.Buffer()
+	b.Cur.Line = clamp(line-1, 0, max(len(b.Lines)-1, 0))
+	b.Cur.Col = clamp(max(column-1, 0), 0, len([]rune(b.LineText(b.Cur.Line))))
+	target.UI.SetScroll(max(b.Cur.Line-max(target.UI.Height/3, 1), 0))
 }
 
 // Save persists the editor session + crash state.
@@ -538,8 +921,8 @@ func (s *IDEState) Update(m *Model, msg tea.KeyMsg) (tea.Cmd, bool) {
 				if entry.Dir {
 					s.toggleTree(entry.Path)
 				} else {
-					s.OpenFileAt(entry.Path)
 					m.followAgent = false
+					return m.beginIDEOpen(s, ideOpenRequest{path: entry.Path, manual: true}), true
 				}
 			}
 		case tea.KeySpace:
@@ -612,31 +995,28 @@ func (s *IDEState) scrollProposal(delta int) {
 
 // handleAction maps editor actions to TUI behavior.
 func (s *IDEState) handleAction(m *Model, action editor.EditAction) tea.Cmd {
+	if queued := s.takeQueuedOpen(); queued != nil {
+		return m.beginIDEOpen(s, *queued)
+	}
 	switch action {
 	case editor.ActQuitIDE:
 		m.closeIDE()
 	case editor.ActQuitApp:
-		return tea.Quit
+		return m.quitCmd()
 	case editor.ActSave:
-		s.UI.Gutter.Refresh(context.Background(), s.Ed.Buffer().Path)
+		if b := s.Ed.Buffer(); b != nil {
+			s.clearGutter(b.Path)
+		}
 		return m.refreshModifiedFiles()
 	case editor.ActOpenFile:
 		m.followAgent = false
-		if err := s.Ed.LastOpenError(); err != nil {
-			s.Ed.CancelSelection()
-			m.pendingSelection = nil
-			m.selectionMenu = nil
-			s.Ed.Status = editor.SafeOpenError(err)
-			if s.notify != nil {
-				s.notify("warn", s.Ed.Status)
-			}
-			return nil
-		}
-		if b := s.Ed.Buffer(); b != nil {
-			s.UI.Gutter.Refresh(context.Background(), b.Path)
+		if path, ok := s.Ed.TakeOpenRequest(); ok {
+			return m.beginIDEOpen(s, ideOpenRequest{path: path, manual: true})
 		}
 	case editor.ActHunkStage:
-		s.UI.Gutter.Refresh(context.Background(), s.Ed.Buffer().Path)
+		if path, ok := s.Ed.TakeHunkStageRequest(); ok {
+			return m.beginIDEHunkStage(s, path)
+		}
 	case editor.ActAgentReview:
 		// overlay renders from editor state
 	case editor.ActAskAgent:
@@ -650,36 +1030,26 @@ func (s *IDEState) handleAction(m *Model, action editor.EditAction) tea.Cmd {
 	case editor.ActGitWorkspace:
 		// overlay renders from editor state
 	case editor.ActPicker:
-		// The latest completed workspace scan already owns the cache. Starting a
-		// fresh git ls-files here used to block the event loop for up to five
-		// seconds while an agent was streaming.
-		if !s.filesLoading && !m.streaming() {
-			s.refreshFiles()
+		// Open immediately from the last immutable snapshot. Refreshing the
+		// workspace is a background effect and updates the next picker/tree
+		// frame without holding keyboard input behind git ls-files.
+		refresh := tea.Cmd(nil)
+		if !s.filesLoading {
+			s.filesLoading = true
+			refresh = m.refreshModifiedFiles()
 		}
 		s.Ed.Picker.Start("Files", s.files(), func(path string) {
-			s.OpenFileAt(path)
+			s.queueOpen(path, 0, 0, true)
 			m.followAgent = false
 		})
+		return refresh
 	}
 	return nil
 }
 
 // files lists the project tree for the file panel.
 func (s *IDEState) files() []string {
-	if !s.fileCacheValid {
-		s.fileCache = editor.ListFiles(s.project, 500)
-		s.fileCacheValid = true
-		s.treeCacheValid = false
-	}
 	return s.fileCache
-}
-
-// refreshFiles invalidates the cached file tree after an explicit refresh
-// action (opening the picker or returning to the project after a write).
-func (s *IDEState) refreshFiles() {
-	s.fileCache = editor.ListFiles(s.project, 500)
-	s.fileCacheValid = true
-	s.treeCacheValid = false
 }
 
 // applyFileRefresh installs a file list produced off the Bubble Tea event
@@ -689,7 +1059,6 @@ func (s *IDEState) applyFileRefresh(project string, files []string) {
 		return
 	}
 	s.fileCache = append(s.fileCache[:0], files...)
-	s.fileCacheValid = true
 	s.filesLoading = false
 	s.treeCacheValid = false
 	if s.treeSel >= len(s.fileCache) {
@@ -708,6 +1077,7 @@ func (s *IDEState) applyGutterRefresh(project, path string, gutter *editor.Gutte
 	}
 	s.UI.Gutter = gutter
 	s.gutterDeferred = false
+	s.gutterError = ""
 }
 
 func (s *IDEState) clearGutter(path string) {
@@ -717,4 +1087,6 @@ func (s *IDEState) clearGutter(path string) {
 	s.UI.Gutter.Path = path
 	s.UI.Gutter.Signs = map[int]editor.Sign{}
 	s.UI.Gutter.Hunks = nil
+	s.gutterDeferred = true
+	s.gutterError = ""
 }

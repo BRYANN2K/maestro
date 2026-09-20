@@ -28,7 +28,11 @@ the archive against the release SHA-256 checksum manifest, and caches that exact
 binary under `~/.maestro/bin/v1.0.0/<platform>-<architecture>/`. The cached
 binary is checked against private integrity metadata before every launch.
 
-Supported targets are macOS, Linux, and Windows on x64 or arm64. Windows uses
+Complete harness bundles target macOS and Linux on x64/arm64, and Windows x64.
+Windows ARM64 is not currently packaged. Python 3.11+ (`python3`) is required
+for Stipulate and RLM. The launcher verifies the frontend, runtime and native
+library before launch. These harness changes are pending release; use the
+source build until a matching bundle is published. Windows uses
 `maestro.exe` and a ZIP archive; macOS and Linux use TAR.GZ archives. Downloads
 use HTTPS with bounded redirects, size, and time. Installation is atomic, so
 concurrent `npx` calls cannot observe a partial binary.
@@ -40,11 +44,14 @@ telemetry. Updating the npm package selects a separate versioned cache entry.
 
 Prebuilt archives and `checksums.txt` are available from the
 [Maestro 1.0.0 release](https://github.com/BRYANN2K/maestro/releases/tag/v1.0.0).
-Developers with Go 1.26.5 or newer can build the tagged source directly:
+Developers need Go 1.26.5+, Bun 1.3.14 and Python 3.11+. From the source checkout:
 
 ```sh
-go install github.com/bryann2k/maestro/cmd/maestro@v1.0.0
+make build
+./bin/maestro
 ```
+
+Keep all three generated executables/libraries in `bin/` together.
 
 ## License
 

@@ -37,7 +37,7 @@ type statusSeg struct {
 	Right bool
 }
 
-// statusBar is the single-row footer. The full keymap lives behind `? help`
+// statusBar is the single-row footer. The full keymap lives behind `Space ?`.
 // so the composer and the current state no longer compete with a permanent
 // wall of shortcuts.
 type statusBar struct {
@@ -110,10 +110,12 @@ func (sb *statusBar) View(styles Styles, width int, m *Model) string {
 			}
 		}
 	}
-	help := lipgloss.NewStyle().Foreground(styles.T.Color(TokenSmoke)).Render("? help")
+	help := lipgloss.NewStyle().Foreground(styles.T.Color(TokenSmoke)).Render("space ? help")
 	rightParts = append(rightParts, help)
 	line := strings.Join(parts, lipgloss.NewStyle().Foreground(styles.T.Color(TokenIron)).Render("  ·  "))
 	if right := strings.Join(rightParts, "  "); right != "" {
+		right = ansi.Truncate(right, max(width-1, 0), "")
+		line = ansi.Truncate(line, max(width-lipgloss.Width(right)-2, 0), "…")
 		gap := max(width-lipgloss.Width(line)-lipgloss.Width(right)-1, 1)
 		line += strings.Repeat(" ", gap) + right
 	}

@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "extension": "design-system",
+  "purpose": "Editorial cases for human or agent evaluation; structural tests do not establish these decisions.",
+  "cases": [
+    {
+      "id": "relevant",
+      "prompt": "unify a form component reused across journeys while preserving consumers.",
+      "expected": "select",
+      "reason": "Evolve shared primitives and components with their usage guidance, contracts, and migrations."
+    },
+    {
+      "id": "irrelevant",
+      "prompt": "produce a one-off sketch without demonstrated reuse needs.",
+      "expected": "do-not-select",
+      "reason": "No responsibility of this domain is affected."
+    },
+    {
+      "id": "existing",
+      "prompt": "unify a form component reused across journeys while preserving consumers. The project already has an implementation and evidence of this capability, but no dedicated document.",
+      "expected": "inspect-and-reuse",
+      "reason": "Inspect evidence, classify coverage, and address only gaps; missing documentation does not mean the domain practice is absent."
+    },
+    {
+      "id": "insufficient",
+      "prompt": "The isolated component passes its tests, but an existing consumer breaks with the new API.",
+      "expected": "failed-or-unverified",
+      "reason": "Compare against the approved criterion outcome; producing a file does not establish that the outcome was achieved."
+    }
+  ]
+}

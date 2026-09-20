@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "extension": "backend-engineering",
+  "purpose": "Editorial cases for human or agent evaluation; structural tests do not establish these decisions.",
+  "cases": [
+    {
+      "id": "relevant",
+      "prompt": "add a worker that applies a business rule without duplicate effects after a retry.",
+      "expected": "select",
+      "reason": "Ensure consistent server behavior across success, failure, concurrency, and recovery."
+    },
+    {
+      "id": "irrelevant",
+      "prompt": "change only a screen's typography with no service impact.",
+      "expected": "do-not-select",
+      "reason": "No responsibility of this domain is affected."
+    },
+    {
+      "id": "existing",
+      "prompt": "add a worker that applies a business rule without duplicate effects after a retry. The project already has an implementation and evidence of this capability, but no dedicated document.",
+      "expected": "inspect-and-reuse",
+      "reason": "Inspect evidence, classify coverage, and address only gaps; missing documentation does not mean the domain practice is absent."
+    },
+    {
+      "id": "insufficient",
+      "prompt": "The happy path succeeds, but a retry credits the same account twice in the fixture.",
+      "expected": "failed-or-unverified",
+      "reason": "Compare against the approved criterion outcome; producing a file does not establish that the outcome was achieved."
+    }
+  ]
+}

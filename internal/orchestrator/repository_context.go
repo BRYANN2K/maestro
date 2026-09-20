@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -13,6 +14,7 @@ const (
 	maxContextFiles     = 240
 	maxContextFileBytes = 12 << 10
 	maxContextBytes     = 48 << 10
+	maxContextWalkItems = 4096
 )
 
 var repositoryContextFiles = []string{
@@ -42,12 +44,17 @@ func buildRepositoryContext(root string) string {
 			continue
 		}
 		limit := min(maxContextFileBytes, remaining)
-		data, err := os.ReadFile(path)
+		file, err := openReadOnly(path)
 		if err != nil {
 			continue
 		}
+		data, readErr := io.ReadAll(io.LimitReader(file, int64(limit)+1))
+		_ = file.Close()
+		if readErr != nil {
+			continue
+		}
 		if len(data) > limit {
-			data = append(data[:limit], []byte("\n[truncated]")...)
+			data = append(data[:limit:limit], []byte("\n[truncated]")...)
 		}
 		if strings.IndexByte(string(data), 0) >= 0 {
 			continue
@@ -57,6 +64,7 @@ func buildRepositoryContext(root string) string {
 	}
 
 	var inventory []string
+	walkItems := 0
 	_ = filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return nil
@@ -65,13 +73,17 @@ func buildRepositoryContext(root string) string {
 		if err != nil || relative == "." {
 			return nil
 		}
+		walkItems++
+		if len(inventory) >= maxContextFiles || walkItems > maxContextWalkItems {
+			return fs.SkipAll
+		}
 		if entry.IsDir() {
 			if skippedContextDir(relative) {
 				return filepath.SkipDir
 			}
 			return nil
 		}
-		if len(inventory) >= maxContextFiles || sensitiveContextPath(relative) {
+		if sensitiveContextPath(relative) {
 			return nil
 		}
 		inventory = append(inventory, filepath.ToSlash(relative))

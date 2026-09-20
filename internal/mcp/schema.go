@@ -11,16 +11,19 @@ import (
 )
 
 const (
-	maxSchemaBytes = 128 << 10
+	// maxSchemaBytes bounds each input or output schema independently. The
+	// complete tools/list catalog has a separate aggregate bound in mcp.go.
+	maxSchemaBytes = 32 << 10
 	maxSchemaDepth = 24
 	maxSchemaNodes = 2048
 )
 
-// compiledSchema keeps the untrusted wire schema separate from the compiled
-// validator. The validator is never exposed to providers or frontends.
+// compiledSchema retains only validation state and the measured wire size.
+// The decoded map is owned by Tool; keeping another deep copy doubled the
+// largest long-lived allocation without making exported Tool maps immutable.
 type compiledSchema struct {
-	wire      map[string]any
-	validator *jsonschema.Schema
+	validator    *jsonschema.Schema
+	encodedBytes int
 }
 
 type denySchemaLoader struct{}
@@ -72,7 +75,7 @@ func compileToolSchema(kind string, wire map[string]any) (compiled *compiledSche
 	if err != nil {
 		return nil, fmt.Errorf("%s schema cannot be compiled: %s", kind, safeSchemaError(err))
 	}
-	return &compiledSchema{wire: cloneMap(wire), validator: validator}, nil
+	return &compiledSchema{validator: validator, encodedBytes: len(raw)}, nil
 }
 
 func inspectSchemaValue(value any, depth int, nodes *int) error {
@@ -148,18 +151,4 @@ func safeSchemaError(err error) string {
 		text = text[:idx] + " does not satisfy the declared schema"
 	}
 	return text
-}
-
-func cloneMap(in map[string]any) map[string]any {
-	raw, err := json.Marshal(in)
-	if err != nil {
-		return nil
-	}
-	var out map[string]any
-	decoder := json.NewDecoder(bytes.NewReader(raw))
-	decoder.UseNumber()
-	if decoder.Decode(&out) != nil {
-		return nil
-	}
-	return out
 }

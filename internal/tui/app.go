@@ -30,6 +30,8 @@ import (
 const (
 	pulseSpan            = 20
 	activityTickInterval = time.Second
+	ideFileListStatus    = "File list unavailable:"
+	ideFileListLoading   = "Refreshing project files…"
 )
 
 // Message is one conversation line in the left pane.
@@ -60,6 +62,12 @@ type Message struct {
 	// Turn thinking summary (Phase 3): the current sub-agent working line.
 	think     *thinkingState
 	toolCount int
+
+	// Provider streams arrive as many small deltas. Keep an append-only builder
+	// behind the public Text snapshot so each delta is O(delta) instead of
+	// copying the complete answer on every event.
+	streamText     *strings.Builder
+	streamSnapshot string
 }
 
 // thinkingState is the collapsible working summary of a turn.
@@ -72,6 +80,36 @@ type thinkingState struct {
 	Done      time.Time
 	Expanded  bool
 	Reasoning bool // provider reasoning rather than a generic sub-agent status
+	detailBuf *strings.Builder
+	detailRef string
+}
+
+func (m *Message) appendText(delta string) {
+	if m == nil || delta == "" {
+		return
+	}
+	if m.streamText == nil || m.Text != m.streamSnapshot {
+		m.streamText = &strings.Builder{}
+		m.streamText.Grow(len(m.Text) + len(delta))
+		m.streamText.WriteString(m.Text)
+	}
+	m.streamText.WriteString(delta)
+	m.Text = m.streamText.String()
+	m.streamSnapshot = m.Text
+}
+
+func (t *thinkingState) appendDetail(delta string) {
+	if t == nil || delta == "" {
+		return
+	}
+	if t.detailBuf == nil || t.Detail != t.detailRef {
+		t.detailBuf = &strings.Builder{}
+		t.detailBuf.Grow(len(t.Detail) + len(delta))
+		t.detailBuf.WriteString(t.Detail)
+	}
+	t.detailBuf.WriteString(delta)
+	t.Detail = t.detailBuf.String()
+	t.detailRef = t.Detail
 }
 
 // overlayKind enumerates the overlay states.
@@ -91,6 +129,7 @@ const (
 	overlayAsk
 	overlayAuth
 	overlayDiff
+	overlayProposalConfirm
 	overlayWhichKey
 	overlayAtFile
 	overlayTimeline
@@ -100,6 +139,7 @@ const (
 	overlayCoachMode
 	overlayCoach
 	overlayGit
+	overlayWorkflow
 )
 
 // FocusTarget is the focus ring position.
@@ -143,19 +183,34 @@ type Model struct {
 	toolCards  map[string]*Card
 	commandOut interface{ Drain() string }
 
-	modFilesRequested  uint64
-	modFilesApplied    uint64
-	modFilesRunning    uint64
-	modFilesInFlight   bool
-	modFilesCompletion uint8
-	workspaceRequest   uint64
-	sessionRequest     uint64
-	coachRequest       uint64
-	projectRequest     uint64
-	interactionRequest uint64
-	workspaceListStop  context.CancelFunc
-	sessionListStop    context.CancelFunc
-	coachStop          context.CancelFunc
+	modFilesRequested   uint64
+	modFilesApplied     uint64
+	modFilesRunning     uint64
+	modFilesInFlight    bool
+	modFilesCompletion  uint8
+	modFilesStop        context.CancelFunc
+	workspaceRequest    uint64
+	sessionRequest      uint64
+	coachRequest        uint64
+	providersRequest    uint64
+	modelPickerRequest  uint64
+	modelRefreshRequest uint64
+	atFileRequest       uint64
+	ideGutterRequest    uint64
+	projectRequest      uint64
+	interactionRequest  uint64
+	workspaceListStop   context.CancelFunc
+	sessionListStop     context.CancelFunc
+	coachStop           context.CancelFunc
+	providersStop       context.CancelFunc
+	modelPickerStop     context.CancelFunc
+	modelRefreshStop    context.CancelFunc
+	atFileStop          context.CancelFunc
+	ideGutterStop       context.CancelFunc
+	atFileLoading       bool
+	atFileError         string
+	ideFilesError       string
+	quitting            bool
 
 	pulse             int
 	lastStreamPulse   time.Time // event-driven polish; never schedules a repaint
@@ -354,6 +409,7 @@ type modFilesMsg struct {
 	files         []git.NumStat
 	ideFiles      []string
 	ideFilesReady bool
+	ideFilesErr   error
 	ideGutter     *editor.Gutter
 	ideGutterPath string
 	revision      uint64
@@ -369,7 +425,14 @@ type permRequestMsg struct{ req *permissionRequest }
 type askRequestMsg struct{ req *tools.AskRequest }
 type toastTickMsg struct{}
 type activityTickMsg struct{ at time.Time }
-type modelsRefreshedMsg struct{ err error }
+type modelsRefreshedMsg struct {
+	request   uint64
+	target    overlayModel
+	overlay   overlayKind
+	workspace orchestrator.WorkspaceSnapshot
+	sessionID string
+	err       error
+}
 type projectConversationState struct {
 	mode      projectprofile.Mode
 	intent    string
@@ -409,6 +472,46 @@ type subscriptionActionDoneMsg struct {
 	provider string
 	action   string
 	err      error
+}
+type providersLoadedMsg struct {
+	request   uint64
+	target    *providersOverlay
+	workspace orchestrator.WorkspaceSnapshot
+	sessionID string
+	cards     []providerCard
+	err       error
+}
+type taskModelsLoadedMsg struct {
+	request   uint64
+	target    *taskModelOverlay
+	workspace orchestrator.WorkspaceSnapshot
+	sessionID string
+	ctx       context.Context
+	loaded    *taskModelOverlay
+	err       error
+}
+type taskModelsDiscoveredMsg struct {
+	request   uint64
+	target    *taskModelOverlay
+	workspace orchestrator.WorkspaceSnapshot
+	sessionID string
+	loaded    *taskModelOverlay
+	err       error
+}
+type atFileListLoadedMsg struct {
+	request   uint64
+	target    *listOverlay
+	workspace orchestrator.WorkspaceSnapshot
+	items     []string
+	err       error
+}
+type ideGutterLoadedMsg struct {
+	request   uint64
+	target    *IDEState
+	workspace orchestrator.WorkspaceSnapshot
+	path      string
+	gutter    *editor.Gutter
+	err       error
 }
 type branchDisplayMsg struct{}
 
@@ -518,6 +621,23 @@ func (m *Model) arm(cmds ...tea.Cmd) tea.Cmd {
 
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case workflowArtifactMsg:
+		if m.overlayM == msg.target {
+			msg.target.artifact = msg.text
+			if msg.err != nil {
+				msg.target.artifact = "Artifact unavailable: " + msg.err.Error()
+			}
+		}
+		return m, nil
+	case workflowLoadedMsg:
+		if m.overlayM == msg.target && m.overlay == overlayWorkflow {
+			msg.target.loading = false
+			msg.target.snapshot = msg.snapshot
+			if msg.err != nil {
+				msg.target.err = msg.err.Error()
+			}
+		}
+		return m, nil
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		m.layout()
@@ -544,6 +664,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return updated, cmd
 	case editorFinishedMsg:
 		return m, m.handleExecFinished(msg.err)
+	case ideOperationMsg:
+		return m, m.arm(m.finishIDEOperation(msg))
 	case tea.MouseMsg:
 		if msg.Action == tea.MouseActionPress {
 			m.interactionRequest++
@@ -564,17 +686,20 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			events = []agentcore.StreamEvent{msg.ev}
 		}
 		done := false
+		var eventCmds []tea.Cmd
 		for _, ev := range events {
-			m.handleEvent(ev)
+			if cmd := m.handleEvent(ev); cmd != nil {
+				eventCmds = append(eventCmds, cmd)
+			}
 			done = done || ev.Type == agentcore.EvDone
 		}
 		if done {
 			// End of a turn: re-diff the working tree for the sidebar
 			// "Changed" panel, off the event loop, and force a full
 			// terminal repaint so no streaming diff residue survives.
-			return m, tea.Batch(m.arm(), m.eventPump(), m.refreshAfterCompletion(modFilesCompletionEvent), clearScreenCmd())
+			return m, tea.Batch(m.arm(eventCmds...), m.eventPump(), m.refreshAfterCompletion(modFilesCompletionEvent), clearScreenCmd())
 		}
-		return m, tea.Batch(m.arm(), m.eventPump())
+		return m, tea.Batch(m.arm(eventCmds...), m.eventPump())
 	case chatDoneMsg:
 		cancelled := errors.Is(msg.err, context.Canceled)
 		m.busy = false
@@ -582,8 +707,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.cancelling = false
 		m.runStart = time.Time{}
 		m.sessionTitle = safeIDEPlainText(m.orch.Session().Title)
+		var sessionHydration tea.Cmd
 		if msg.err == nil && msg.sessionID != "" {
-			m.applyLoadedSession(msg.sessionID, msg.sessionWorkDir)
+			sessionHydration = m.applyLoadedSession(msg.sessionID, msg.sessionWorkDir)
 		}
 		// Commands run in Bubble Tea worker goroutines. Apply their UI payload
 		// here, on the event loop, instead of mutating the model in the worker.
@@ -625,7 +751,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err == nil {
 			coach = m.coachBreakpointCmd()
 		}
-		return m, tea.Batch(m.arm(), clearScreenCmd(), m.refreshAfterCompletion(modFilesCompletionWorker), m.refreshBranchDisplay(), coach)
+		return m, tea.Batch(m.arm(), clearScreenCmd(), sessionHydration, m.refreshAfterCompletion(modFilesCompletionWorker), m.refreshBranchDisplay(), coach)
 	case uiOperationDoneMsg:
 		m.busy = false
 		m.cancelRun = nil
@@ -634,8 +760,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.sessionTitle != "" {
 			m.sessionTitle = safeIDEPlainText(msg.sessionTitle)
 		}
+		var sessionHydration tea.Cmd
 		if msg.err == nil && msg.sessionID != "" {
-			m.applyLoadedSession(msg.sessionID, msg.workDir)
+			sessionHydration = m.applyLoadedSession(msg.sessionID, msg.workDir)
 		}
 		if msg.card != nil {
 			m.pending = append(m.pending, msg.card)
@@ -662,7 +789,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.finishProjectFlow || msg.resumeCmd != nil {
 			resume = m.resumeProjectCommand(msg.resumeCmd)
 		}
-		return m, tea.Batch(m.arm(), clearScreenCmd(), refresh, m.refreshBranchDisplay(), resume)
+		return m, tea.Batch(m.arm(), clearScreenCmd(), sessionHydration, refresh, m.refreshBranchDisplay(), resume)
 	case permRequestMsg:
 		// A cancelled run can leave its already-delivered Bubble Tea message
 		// behind after the gate has returned through ctx.Done. Never resurrect
@@ -710,16 +837,96 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.arm()
 	case modFilesMsg:
 		return m, m.arm(m.finishModifiedFilesRefresh(msg))
+	case ideGutterLoadedMsg:
+		return m, m.arm(m.finishIDEGutterRefresh(msg))
+	case providersLoadedMsg:
+		if msg.request != m.providersRequest || m.overlay != overlayProviders || m.overlayM != msg.target {
+			return m, m.arm()
+		}
+		m.finishProvidersRequest()
+		if msg.sessionID != m.orch.Session().ID || !m.orch.WorkspaceIsCurrent(msg.workspace) {
+			return m, m.arm()
+		}
+		msg.target.applyLoad(msg.cards, msg.err)
+		return m, m.arm()
+	case taskModelsLoadedMsg:
+		if msg.request != m.modelPickerRequest || m.overlay != overlayModelPicker || m.overlayM != msg.target {
+			return m, m.arm()
+		}
+		if msg.sessionID != m.orch.Session().ID || !m.orch.WorkspaceIsCurrent(msg.workspace) {
+			m.finishModelPickerRequest()
+			return m, m.arm()
+		}
+		msg.target.loading = false
+		if msg.err != nil || msg.loaded == nil {
+			m.finishModelPickerRequest()
+			if msg.err == nil {
+				msg.err = errors.New("model catalog returned no routes")
+			}
+			msg.target.loadErr = safeIDEPlainText(msg.err.Error())
+			return m, m.arm()
+		}
+		*msg.target = *msg.loaded
+		if msg.loaded.discoveryPending {
+			return m, m.arm(waitForTaskModelDiscovery(msg.ctx, msg.request, msg.target, msg.workspace, msg.sessionID, msg.loaded.discoveryBaseline, m.orch))
+		}
+		m.finishModelPickerRequest()
+		return m, m.arm()
+	case taskModelsDiscoveredMsg:
+		if msg.request != m.modelPickerRequest || m.overlay != overlayModelPicker || m.overlayM != msg.target {
+			return m, m.arm()
+		}
+		m.finishModelPickerRequest()
+		if msg.sessionID != m.orch.Session().ID || !m.orch.WorkspaceIsCurrent(msg.workspace) {
+			return m, m.arm()
+		}
+		if msg.err != nil {
+			msg.target.loadErr = safeIDEPlainText(msg.err.Error())
+			return m, m.arm()
+		}
+		msg.target.applyDiscovery(msg.loaded)
+		return m, m.arm()
+	case atFileListLoadedMsg:
+		if msg.request != m.atFileRequest || m.overlay != overlayAtFile || m.overlayM != msg.target {
+			return m, m.arm()
+		}
+		m.finishAtFileRequest()
+		if !m.orch.WorkspaceIsCurrent(msg.workspace) {
+			m.closeAtFilePicker()
+			return m, m.arm()
+		}
+		m.atFileLoading = false
+		m.atFileError = ""
+		if msg.err != nil {
+			m.atFileError = safeIDEPlainText(msg.err.Error())
+			return m, m.arm()
+		}
+		msg.target.items = append(msg.target.items[:0], msg.items...)
+		msg.target.selected = 0
+		msg.target.ensureSelectable()
+		return m, m.arm()
 	case modelsRefreshedMsg:
+		if msg.request != m.modelRefreshRequest || m.overlay != msg.overlay || m.overlayM != msg.target {
+			return m, m.arm()
+		}
+		m.finishModelRefreshRequest()
+		if msg.sessionID != m.orch.Session().ID || !m.orch.WorkspaceIsCurrent(msg.workspace) {
+			return m, m.arm()
+		}
 		if msg.err != nil {
 			m.status.pushToast("error", msg.err.Error(), 4*time.Second)
 		} else {
-			if m.overlay == overlayProviders {
-				m.overlayM = newProvidersOverlay(m.orch, "")
-			} else {
-				m.overlayM = newTaskModelOverlay(m.orch)
-			}
 			m.status.pushToast("success", "model catalog refreshed", 2*time.Second)
+			if msg.overlay == overlayProviders {
+				selectID := ""
+				if providers, ok := m.overlayM.(*providersOverlay); ok {
+					if current := providers.current(); current != nil {
+						selectID = current.id
+					}
+				}
+				return m, m.arm(m.openProviders(selectID))
+			}
+			return m, m.arm(m.openModelPicker())
 		}
 		return m, m.arm()
 	case settingsProvidersLoadedMsg:
@@ -890,9 +1097,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.status.pushToast("success", msg.provider+" "+verb, 3*time.Second)
 		}
-		m.overlay = overlayProviders
-		m.overlayM = newProvidersOverlay(m.orch, msg.provider)
-		return m, m.arm()
+		return m, m.arm(m.openProviders(msg.provider))
 	case branchDisplayMsg:
 		return m, m.arm()
 	default:
@@ -912,8 +1117,9 @@ func (m *Model) advanceStreamPulse(now time.Time) {
 	}
 }
 
-// handleEvent routes a stream event into the UI.
-func (m *Model) handleEvent(ev agentcore.StreamEvent) {
+// handleEvent routes a stream event into the UI and returns any asynchronous
+// follow-up requested by that event.
+func (m *Model) handleEvent(ev agentcore.StreamEvent) tea.Cmd {
 	switch ev.Type {
 	case agentcore.EvReasoningDelta:
 		if rd, ok := ev.Content.(agentcore.ReasoningDelta); ok && rd.Text != "" {
@@ -940,7 +1146,7 @@ func (m *Model) handleEvent(ev agentcore.StreamEvent) {
 			}
 			last.think.Reasoning = true
 			last.think.Status = "running"
-			last.think.Detail += rd.Text
+			last.think.appendDetail(rd.Text)
 			last.cachedValid = false
 			// Closed reasoning is intentionally cheap: accumulate deltas without
 			// rebuilding the transcript. Paint the shell once, then only stream
@@ -961,13 +1167,13 @@ func (m *Model) handleEvent(ev agentcore.StreamEvent) {
 				last.think.Status = "done"
 				last.think.Done = time.Now()
 			}
-			last.Text += td.Text
+			last.appendText(td.Text)
 			m.scrollToBottomIfAttached()
 		}
 	case agentcore.EvToolResult:
 		m.addToolCard(ev)
 	case agentcore.EvToolCall:
-		m.addToolCallCard(ev)
+		return m.addToolCallCard(ev)
 	case agentcore.EvSubAgent:
 		if sa, ok := ev.Content.(agentcore.SubAgentStatus); ok {
 			m.sidebar.setAgent(sa)
@@ -979,7 +1185,7 @@ func (m *Model) handleEvent(ev agentcore.StreamEvent) {
 				// must never mint an empty duplicate ("worked 0s" ghost).
 				if sa.Status != "running" {
 					m.renderMessages()
-					return
+					return nil
 				}
 				last = &Message{Role: "assistant", State: m.chatState, busy: true, ts: time.Now()}
 				m.messages = append(m.messages, last)
@@ -1009,6 +1215,9 @@ func (m *Model) handleEvent(ev agentcore.StreamEvent) {
 	case agentcore.EvHITL:
 		if it, ok := ev.Content.(agentcore.HITLItem); ok {
 			m.sidebar.setItem(it)
+			if it.ID == "resume" {
+				m.appendSystem(safeIDEPlainText(it.Item))
+			}
 		}
 	case agentcore.EvAdvisorNote:
 		if n, ok := ev.Content.(agentcore.AdvisorNote); ok {
@@ -1024,6 +1233,7 @@ func (m *Model) handleEvent(ev agentcore.StreamEvent) {
 			m.status.pushToast("error", truncateRunes(safeIDEPlainText(se.Message), 60), 5*time.Second)
 		}
 	}
+	return nil
 }
 
 // addToolCard renders a tool result as a card; writes become proposals.
@@ -1087,14 +1297,14 @@ func (m *Model) addToolCard(ev agentcore.StreamEvent) {
 	m.scrollToBottomIfAttached()
 }
 
-func (m *Model) addToolCallCard(ev agentcore.StreamEvent) {
+func (m *Model) addToolCallCard(ev agentcore.StreamEvent) tea.Cmd {
 	tc, ok := ev.Content.(agentcore.ToolCall)
 	if !ok {
-		return
+		return nil
 	}
 	if tc.ID != "" {
 		if _, exists := m.toolCards[tc.ID]; exists {
-			return
+			return nil
 		}
 	}
 	// A provider may call a tool before emitting answer text. Keep that
@@ -1118,12 +1328,14 @@ func (m *Model) addToolCallCard(ev agentcore.StreamEvent) {
 		m.toolCards[tc.ID] = card
 	}
 	m.attachToolCard(card)
+	var follow tea.Cmd
 	if m.activeTab == TabIDE && m.followAgent {
 		if path, line, column := toolCallLocation(tc.Args); path != "" {
-			m.openWorkspaceLocation(path, line, column, false)
+			follow = m.openWorkspaceLocation(path, line, column, false)
 		}
 	}
 	m.scrollToBottomIfAttached()
+	return follow
 }
 
 func toolCallLocation(args string) (path string, line, column int) {
@@ -1624,14 +1836,24 @@ func (m *Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	} else {
 		m.escapeArmed = false
 	}
+	// Ctrl+C and Ctrl+Q are terminal-global, including while a modal async
+	// surface owns focus. Cancelling workers here prevents an overlay from
+	// swallowing cancel/quit and leaving provider/file/git commands alive after
+	// Bubble Tea exits.
+	if msg.Type == tea.KeyCtrlC {
+		if m.busy && m.cancelRun != nil {
+			return m.cancelActiveTask(), nil
+		}
+		return m, m.quitCmd()
+	}
+	if msg.Type == tea.KeyCtrlQ {
+		return m, m.quitCmd()
+	}
 	// Below the minimum usable canvas the regular Agent/IDE widgets are
 	// intentionally hidden. Keep only the controls that remain safe without a
 	// visible focus target: quit, the compact help card, workspace switching,
 	// and the existing Esc-Esc cancellation gesture above.
 	if m.terminalTooSmall() {
-		if msg.Type == tea.KeyCtrlQ {
-			return m, tea.Quit
-		}
 		if msg.Type == tea.KeyEsc {
 			if settings, ok := m.overlayM.(*settingsOverlay); ok && m.overlay == overlaySettings {
 				// Settings owns a transactional theme preview. Even when the
@@ -1692,8 +1914,7 @@ func (m *Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if msg.Type == tea.KeyRunes && m.proposalShortcutAvailable() {
 		switch msg.String() {
 		case "a":
-			model := m.acceptLatestPending()
-			return model, tea.Batch(m.refreshModifiedFiles(), m.takePostAcceptCommand())
+			return m.requestProposalConfirmation(m.pendingDecisionCard()), nil
 		case "d":
 			return m.discardLatestPending(), nil
 		case "[":
@@ -1707,9 +1928,15 @@ func (m *Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 	if m.activeTab == TabIDE && msg.Type == tea.KeyCtrlL {
-		m.overlay = overlayModelPicker
-		m.overlayM = newTaskModelOverlay(m.orch)
-		return m, nil
+		return m, m.openModelPicker()
+	}
+	if m.activeTab == TabIDE && m.ide != nil && msg.Type == tea.KeyCtrlR && m.ideFilesError != "" {
+		m.ideFilesError = ""
+		m.ide.filesLoading = true
+		if m.ide.Ed != nil {
+			m.ide.Ed.Status = ideFileListLoading
+		}
+		return m, m.refreshModifiedFiles()
 	}
 	if m.activeTab == TabIDE && m.ide != nil {
 		cmd, consumed := m.ide.Update(m, msg)
@@ -1717,6 +1944,12 @@ func (m *Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		}
 		if m.ide.Focus == ideChat {
+			if action, ok := ActionFor(msg); ok && action == ActionNewline {
+				m.input.insertNewline()
+				m.inputChanged()
+				m.syncSlashPreview()
+				return m, nil
+			}
 			if msg.Type == tea.KeyEnter && m.input.Value() != "" {
 				return m, m.send()
 			}
@@ -1802,7 +2035,7 @@ func (m *Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.inputChanged()
 			m.syncSlashPreview()
 			if m.activeTab == TabHarness {
-				m.maybeOpenAtFile()
+				return m, m.maybeOpenAtFile()
 			}
 		}
 		return m, nil
@@ -1863,9 +2096,7 @@ func (m *Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.overlayM = newPaletteOverlay(m.orch)
 		return m, nil
 	case ActionModelPicker:
-		m.overlay = overlayModelPicker
-		m.overlayM = newTaskModelOverlay(m.orch)
-		return m, nil
+		return m, m.openModelPicker()
 	case ActionTimeline:
 		return m.openTimeline(), nil
 	case ActionEditExternal:
@@ -1876,9 +2107,9 @@ func (m *Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.busy && m.cancelRun != nil {
 			return m.cancelActiveTask(), nil
 		}
-		return m, tea.Quit
+		return m, m.quitCmd()
 	case ActionQuit:
-		return m, tea.Quit
+		return m, m.quitCmd()
 	case ActionKeymap:
 		m.overlay = overlayKeymap
 		return m, nil
@@ -2054,6 +2285,59 @@ func (m *Model) renderAskDialog(body string) string {
 
 func (m *Model) updateOverlayKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch m.overlay {
+	case overlayWorkflow:
+		w, ok := m.overlayM.(*workflowOverlay)
+		if !ok {
+			return m, nil
+		}
+		switch msg.String() {
+		case "esc":
+			if w.artifactOpen {
+				w.artifactOpen = false
+				return m, nil
+			}
+			m.overlay = overlayNone
+			m.overlayM = nil
+		case "left", "h":
+			w.phase = max(w.phase-1, 0)
+			w.artifactOpen = false
+		case "right", "l":
+			w.phase = min(w.phase+1, 6)
+			w.artifactOpen = false
+		case "enter":
+			return m, m.inspectWorkflow(w)
+		case "c":
+			if len(w.snapshot.Changes) > 0 {
+				next := 0
+				for i, c := range w.snapshot.Changes {
+					if c.ID == w.snapshot.ChangeID {
+						next = (i + 1) % len(w.snapshot.Changes)
+						break
+					}
+				}
+				return m, m.openWorkflowChange(w.snapshot.Changes[next].ID)
+			}
+		case "r":
+			return m, m.openWorkflowChange(w.snapshot.ChangeID)
+		case "up", "k":
+			if w.artifactOpen {
+				w.scroll = max(w.scroll-1, 0)
+			} else {
+				w.selected = max(w.selected-1, 0)
+			}
+		case "down", "j":
+			if w.artifactOpen {
+				w.scroll++
+			} else {
+				count := len(w.snapshot.Jobs)
+				if count == 0 {
+					count = len(w.snapshot.Tasks)
+				}
+				w.selected = min(w.selected+1, max(count-1, 0))
+			}
+		}
+		return m, nil
+
 	case overlayForm:
 		form, ok := m.overlayM.(*formOverlay)
 		if !ok {
@@ -2151,15 +2435,54 @@ func (m *Model) updateOverlayKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			case tea.KeyRunes:
 				switch msg.String() {
 				case "i":
-					m.openProposalInIDE(diff.prop)
-					return m, nil
+					return m, m.openProposalInIDE(diff.prop)
 				case "a":
-					m.overlay = overlayNone
-					return m.acceptPendingProposal(diff.prop), m.refreshModifiedFiles()
+					return m.requestProposalConfirmation(m.pendingProposalCard(diff.prop)), nil
 				case "d":
 					m.overlay = overlayNone
 					return m.discardPendingProposal(diff.prop), nil
 				}
+			}
+		}
+		return m, nil
+	case overlayProposalConfirm:
+		confirm, ok := m.overlayM.(*proposalConfirmationOverlay)
+		if !ok {
+			m.overlay = overlayNone
+			m.overlayM = nil
+			return m, nil
+		}
+		switch msg.Type {
+		case tea.KeyEsc:
+			m.overlay = overlayNone
+			m.overlayM = nil
+		case tea.KeyLeft, tea.KeyShiftTab:
+			confirm.move(-1)
+		case tea.KeyRight, tea.KeyTab:
+			confirm.move(1)
+		case tea.KeyEnter:
+			switch confirm.selected {
+			case proposalConfirmationApply:
+				prop := confirm.prop
+				m.overlay = overlayNone
+				m.overlayM = nil
+				model := m.acceptPendingProposal(prop)
+				return model, tea.Batch(m.refreshModifiedFiles(), m.takePostAcceptCommand())
+			case proposalConfirmationDiff:
+				m.overlay = overlayDiff
+				m.overlayM = newDiffOverlay(m.styles, confirm.prop, min(max(m.width-10, 60), 100))
+			default:
+				m.overlay = overlayNone
+				m.overlayM = nil
+			}
+		case tea.KeyRunes:
+			switch msg.String() {
+			case "c":
+				confirm.selected = proposalConfirmationCancel
+			case "a":
+				confirm.selected = proposalConfirmationApply
+			case "v", "i":
+				confirm.selected = proposalConfirmationDiff
 			}
 		}
 		return m, nil
@@ -2182,8 +2505,7 @@ func (m *Model) updateOverlayKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case msg.Type == tea.KeyRunes && msg.String() == "v":
 			return m.toggleNextConcealed(), nil
 		case msg.Type == tea.KeyRunes && msg.String() == "a" && m.proposalShortcutAvailable():
-			model := m.acceptLatestPending()
-			return model, tea.Batch(m.refreshModifiedFiles(), m.takePostAcceptCommand())
+			return m.requestProposalConfirmation(m.pendingDecisionCard()), nil
 		case msg.Type == tea.KeyRunes && msg.String() == "d" && m.proposalShortcutAvailable():
 			return m.discardLatestPending(), nil
 		}
@@ -2196,31 +2518,47 @@ func (m *Model) updateOverlayKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if list, ok := m.overlayM.(*listOverlay); ok {
 			before, query, ok := atQuery(m.input.Value())
 			if !ok {
-				m.overlay = overlayNone
+				m.closeAtFilePicker()
 				return m, nil
 			}
 			list.query = query
 			list.selected = 0
-			list.ensureSelectable()
+			if !m.atFileLoading && m.atFileError == "" {
+				list.ensureSelectable()
+			}
 			switch msg.Type {
 			case tea.KeyEsc:
-				m.overlay = overlayNone
+				m.closeAtFilePicker()
 			case tea.KeyUp:
-				list.up()
+				if !m.atFileLoading && m.atFileError == "" {
+					list.up()
+				}
 			case tea.KeyDown:
-				list.down()
+				if !m.atFileLoading && m.atFileError == "" {
+					list.down()
+				}
+			case tea.KeyCtrlR:
+				if m.atFileError != "" {
+					m.closeAtFilePicker()
+					return m, m.maybeOpenAtFile()
+				}
 			case tea.KeyEnter:
-				if sel := list.selectedValue(); sel != "" {
-					m.input.Set(before + sel)
-					m.inputChanged()
-					m.overlay = overlayNone
-					m.focus = FocusInput
+				if !m.atFileLoading && m.atFileError == "" {
+					if sel := list.selectedValue(); sel != "" {
+						m.input.Set(before + sel)
+						m.inputChanged()
+						m.closeAtFilePicker()
+						m.focus = FocusInput
+					}
 				}
 			default:
 				m.input.update(msg)
 				m.inputChanged()
 				if _, q, ok := atQuery(m.input.Value()); !ok || strings.Contains(q, " ") {
-					m.overlay = overlayNone
+					m.closeAtFilePicker()
+				} else {
+					list.query = q
+					list.selected = 0
 				}
 			}
 		}
@@ -2278,9 +2616,7 @@ func (m *Model) updateOverlayKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				list.backspace()
 			}
 			if m.overlay == overlayModelPicker && msg.Type == tea.KeyRunes && msg.String() == "r" && list.query == "" {
-				return m, func() tea.Msg {
-					return modelsRefreshedMsg{err: m.orch.RefreshModels(context.Background())}
-				}
+				return m, m.refreshModelsForOverlay()
 			}
 			if m.overlay == overlayModelPicker && list.groupPageable() && list.query == "" && msg.Type == tea.KeyRunes {
 				switch msg.String() {
@@ -2482,12 +2818,24 @@ func (m *Model) refreshAfterCompletion(source uint8) tea.Cmd {
 // exactly one scan for the newest revision.
 var ideListFiles = editor.ListFiles
 
+var ideGutterLoader = func(ctx context.Context, workspace orchestrator.WorkspaceSnapshot, path string) (*editor.Gutter, error) {
+	gutter := editor.NewGutter(git.New(workspace.WorkDir()))
+	gutter.Refresh(ctx, path)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return gutter, nil
+}
+
 func (m *Model) beginModifiedFilesRefresh() tea.Cmd {
-	if m.modFilesInFlight || m.orch == nil {
+	if m.modFilesInFlight || m.orch == nil || m.quitting {
 		return nil
 	}
 	revision := m.modFilesRequested
 	workspace := m.orch.SnapshotWorkspace()
+	orch := m.orch
+	ctx, cancel := context.WithCancel(context.Background())
+	m.modFilesStop = cancel
 	ideGutterPath := ""
 	if m.ide != nil && m.ide.Ed != nil && m.ide.Ed.Buffer() != nil {
 		ideGutterPath = m.ide.Ed.Buffer().Path
@@ -2497,15 +2845,21 @@ func (m *Model) beginModifiedFilesRefresh() tea.Cmd {
 	return func() tea.Msg {
 		var gutter *editor.Gutter
 		if ideGutterPath != "" {
-			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			gutterCtx, stopGutter := context.WithTimeout(ctx, 3*time.Second)
 			gutter = editor.NewGutter(git.New(workspace.WorkDir()))
-			gutter.Refresh(ctx, ideGutterPath)
-			cancel()
+			gutter.Refresh(gutterCtx, ideGutterPath)
+			stopGutter()
+		}
+		files := orch.ModifiedFilesFor(ctx, workspace)
+		ideFiles, ideFilesErr := ideListFiles(ctx, workspace.WorkDir(), 500)
+		if ideFilesErr == nil {
+			ideFilesErr = ctx.Err()
 		}
 		return modFilesMsg{
-			files:         m.orch.ModifiedFilesFor(context.Background(), workspace),
-			ideFiles:      ideListFiles(workspace.WorkDir(), 500),
-			ideFilesReady: true,
+			files:         files,
+			ideFiles:      ideFiles,
+			ideFilesReady: ideFilesErr == nil && ctx.Err() == nil,
+			ideFilesErr:   ideFilesErr,
 			ideGutter:     gutter,
 			ideGutterPath: ideGutterPath,
 			revision:      revision,
@@ -2515,17 +2869,21 @@ func (m *Model) beginModifiedFilesRefresh() tea.Cmd {
 }
 
 func (m *Model) finishModifiedFilesRefresh(msg modFilesMsg) tea.Cmd {
-	// A result from an already-settled scan can be delivered late by a test
-	// harness or terminal shutdown. It must not disturb the active scan.
-	if msg.revision != 0 && msg.revision <= m.modFilesApplied {
-		return nil
-	}
 	if m.modFilesInFlight && msg.revision != m.modFilesRunning {
 		return nil
 	}
 	if m.modFilesInFlight {
+		if m.modFilesStop != nil {
+			m.modFilesStop()
+			m.modFilesStop = nil
+		}
 		m.modFilesInFlight = false
 		m.modFilesRunning = 0
+	}
+	// A result from an already-settled scan can be delivered late by a test
+	// harness or terminal shutdown. It must not disturb the active scan.
+	if msg.revision != 0 && msg.revision <= m.modFilesApplied {
+		return nil
 	}
 
 	workspaceCurrent := !msg.workspace.Valid() || m.orch.WorkspaceIsCurrent(msg.workspace)
@@ -2533,9 +2891,26 @@ func (m *Model) finishModifiedFilesRefresh(msg modFilesMsg) tea.Cmd {
 	if latest && workspaceCurrent {
 		m.modFilesApplied = max(m.modFilesApplied, msg.revision)
 		m.sidebar.setFiles(msg.files)
-		if msg.ideFilesReady && m.ide != nil {
-			m.ide.applyFileRefresh(msg.workspace.WorkDir(), msg.ideFiles)
+		if m.ide != nil {
 			m.ide.applyGutterRefresh(msg.workspace.WorkDir(), msg.ideGutterPath, msg.ideGutter)
+			if msg.ideFilesReady {
+				m.ideFilesError = ""
+				if m.ide.Ed != nil && (strings.HasPrefix(m.ide.Ed.Status, ideFileListStatus) || m.ide.Ed.Status == ideFileListLoading) {
+					m.ide.Ed.Status = ""
+				}
+				m.ide.applyFileRefresh(msg.workspace.WorkDir(), msg.ideFiles)
+			} else if msg.ideFilesErr != nil {
+				cause := strings.TrimSpace(safeIDEPlainText(msg.ideFilesErr.Error()))
+				if cause == "" {
+					cause = "unknown error"
+				}
+				m.ideFilesError = cause
+				m.ide.filesLoading = false
+				if m.ide.Ed != nil {
+					m.ide.Ed.Status = ideFileListStatus + " " + truncateRunes(cause, 72) + " · ctrl+r retry"
+				}
+				m.status.pushToast("error", "file list unavailable · ctrl+r retry", 5*time.Second)
+			}
 		}
 		return nil
 	}
@@ -2546,6 +2921,63 @@ func (m *Model) finishModifiedFilesRefresh(msg modFilesMsg) tea.Cmd {
 		m.modFilesRequested = msg.revision + 1
 	}
 	return m.beginModifiedFilesRefresh()
+}
+
+func (m *Model) refreshIDEGutter() tea.Cmd {
+	if m.orch == nil || m.ide == nil || m.ide.Ed == nil || m.ide.Ed.Buffer() == nil {
+		return nil
+	}
+	if m.ideGutterStop != nil {
+		m.ideGutterStop()
+	}
+	m.ideGutterRequest++
+	request := m.ideGutterRequest
+	ctx, cancel := context.WithCancel(context.Background())
+	m.ideGutterStop = cancel
+	workspace := m.orch.SnapshotWorkspace()
+	target := m.ide
+	path := target.Ed.Buffer().Path
+	target.clearGutter(path)
+	return func() tea.Msg {
+		bounded, stop := context.WithTimeout(ctx, 3*time.Second)
+		defer stop()
+		gutter, err := ideGutterLoader(bounded, workspace, path)
+		return ideGutterLoadedMsg{
+			request: request, target: target, workspace: workspace,
+			path: path, gutter: gutter, err: err,
+		}
+	}
+}
+
+func (m *Model) finishIDEGutterRefresh(msg ideGutterLoadedMsg) tea.Cmd {
+	if msg.request != m.ideGutterRequest || msg.target != m.ide {
+		return nil
+	}
+	if m.ideGutterStop != nil {
+		m.ideGutterStop()
+		m.ideGutterStop = nil
+	}
+	if m.orch == nil || !m.orch.WorkspaceIsCurrent(msg.workspace) || m.ide.Ed == nil || m.ide.Ed.Buffer() == nil {
+		return nil
+	}
+	if filepath.Clean(msg.path) != filepath.Clean(m.ide.Ed.Buffer().Path) {
+		return nil
+	}
+	if msg.err != nil {
+		m.ide.gutterDeferred = false
+		m.ide.gutterError = safeIDEPlainText(msg.err.Error())
+		return nil
+	}
+	m.ide.applyGutterRefresh(msg.workspace.WorkDir(), msg.path, msg.gutter)
+	return nil
+}
+
+func (m *Model) invalidateIDEGutterRequest() {
+	if m.ideGutterStop != nil {
+		m.ideGutterStop()
+		m.ideGutterStop = nil
+	}
+	m.ideGutterRequest++
 }
 
 // openEditor suspends the TUI, opens the current prompt in $EDITOR (vi when
@@ -2623,6 +3055,11 @@ func (m *Model) send() tea.Cmd {
 			return nil
 		}
 		switch cmd.Cmd {
+		case "workflow":
+			if len(cmd.Args) == 0 || cmd.Args[0] == "panel" {
+				return m.openWorkflow()
+			}
+
 		case "ide":
 			return m.ToggleIDE()
 		case "follow":
@@ -2709,13 +3146,9 @@ func (m *Model) send() tea.Cmd {
 				m.status.pushToast("info", "model: "+id, 2*time.Second)
 				return nil
 			}
-			m.overlay = overlayModelPicker
-			m.overlayM = newTaskModelOverlay(m.orch)
-			return nil
+			return m.openModelPicker()
 		case "providers":
-			m.overlay = overlayProviders
-			m.overlayM = newProvidersOverlay(m.orch, "")
-			return nil
+			return m.openProviders("")
 		case "help":
 			m.appendSystem(slashHelpText())
 			return nil
@@ -2747,7 +3180,7 @@ func (m *Model) send() tea.Cmd {
 				return nil
 			}
 		case "quit", "exit":
-			return tea.Quit
+			return m.quitCmd()
 		}
 		if cmd.Cmd == "learn" {
 			path, explicitPath := cmd.Flags["path"]
@@ -2768,12 +3201,6 @@ func (m *Model) send() tea.Cmd {
 		}
 		if cmd.Cmd == "docs" {
 			return m.runDocs()
-		}
-		if cmd.Cmd == "build" && cmd.Flags["engine"] == "" && cmd.Flags["agent"] == "" {
-			m.pendingCmd = &cmd
-			m.overlay = overlayEngine
-			m.overlayM = newEngineOverlay(m.orch, "dev")
-			return nil
 		}
 		if cmd.Cmd == "propose" {
 			present, err := m.orch.ProjectManifestPresent(context.Background())
@@ -3124,6 +3551,262 @@ func (m *Model) invalidateWorkspaceListRequest() {
 	m.workspaceRequest++
 }
 
+func (m *Model) beginProvidersRequest() (uint64, context.Context) {
+	if m.providersStop != nil {
+		m.providersStop()
+	}
+	m.providersRequest++
+	ctx, cancel := context.WithCancel(context.Background())
+	m.providersStop = cancel
+	return m.providersRequest, ctx
+}
+
+func (m *Model) finishProvidersRequest() {
+	if m.providersStop != nil {
+		m.providersStop()
+		m.providersStop = nil
+	}
+}
+
+func (m *Model) invalidateProvidersRequest() {
+	m.finishProvidersRequest()
+	m.providersRequest++
+}
+
+func (m *Model) openProviders(selectID string) tea.Cmd {
+	if m.orch == nil {
+		return nil
+	}
+	if m.overlay != overlayNone && m.overlay != overlayProviders {
+		m.cancelOverlayRequest(m.overlay)
+	}
+	m.invalidateModelRefreshRequest()
+	request, ctx := m.beginProvidersRequest()
+	target := newLoadingProvidersOverlay(selectID)
+	workspace := m.orch.SnapshotWorkspace()
+	sessionID := m.orch.Session().ID
+	orch := m.orch
+	m.overlay = overlayProviders
+	m.overlayM = target
+	return func() tea.Msg {
+		cards, err := providerCardsLoader(ctx, orch)
+		return providersLoadedMsg{
+			request: request, target: target, workspace: workspace,
+			sessionID: sessionID, cards: cards, err: err,
+		}
+	}
+}
+
+func (m *Model) closeProvidersOverlay() {
+	m.invalidateProvidersRequest()
+	m.invalidateModelRefreshRequest()
+	m.overlay = overlayNone
+	m.overlayM = nil
+}
+
+func (m *Model) beginModelPickerRequest() (uint64, context.Context) {
+	if m.modelPickerStop != nil {
+		m.modelPickerStop()
+	}
+	m.modelPickerRequest++
+	ctx, cancel := context.WithCancel(context.Background())
+	m.modelPickerStop = cancel
+	return m.modelPickerRequest, ctx
+}
+
+func (m *Model) finishModelPickerRequest() {
+	if m.modelPickerStop != nil {
+		m.modelPickerStop()
+		m.modelPickerStop = nil
+	}
+}
+
+func (m *Model) invalidateModelPickerRequest() {
+	m.finishModelPickerRequest()
+	m.modelPickerRequest++
+}
+
+func (m *Model) openModelPicker() tea.Cmd {
+	if m.orch == nil {
+		return nil
+	}
+	if m.overlay != overlayNone && m.overlay != overlayModelPicker {
+		m.cancelOverlayRequest(m.overlay)
+	}
+	m.invalidateModelRefreshRequest()
+	request, ctx := m.beginModelPickerRequest()
+	target := newLoadingTaskModelOverlay()
+	workspace := m.orch.SnapshotWorkspace()
+	sessionID := m.orch.Session().ID
+	orch := m.orch
+	m.overlay = overlayModelPicker
+	m.overlayM = target
+	return func() tea.Msg {
+		loaded, err := taskModelOverlayLoader(ctx, orch)
+		return taskModelsLoadedMsg{
+			request: request, target: target, workspace: workspace,
+			sessionID: sessionID, ctx: ctx, loaded: loaded, err: err,
+		}
+	}
+}
+
+const (
+	taskModelDiscoveryTimeout = 5 * time.Second
+	taskModelDiscoveryPollMin = 20 * time.Millisecond
+	taskModelDiscoveryPollMax = 250 * time.Millisecond
+)
+
+func waitForTaskModelDiscovery(
+	ctx context.Context,
+	request uint64,
+	target *taskModelOverlay,
+	workspace orchestrator.WorkspaceSnapshot,
+	sessionID, baseline string,
+	orch *orchestrator.Orchestrator,
+) tea.Cmd {
+	return func() tea.Msg {
+		loaded, err := taskModelDiscoveryLoader(ctx, orch, baseline)
+		return taskModelsDiscoveredMsg{
+			request: request, target: target, workspace: workspace,
+			sessionID: sessionID, loaded: loaded, err: err,
+		}
+	}
+}
+
+var taskModelDiscoveryLoader = func(ctx context.Context, orch *orchestrator.Orchestrator, baseline string) (*taskModelOverlay, error) {
+	timer := time.NewTimer(taskModelDiscoveryTimeout)
+	defer timer.Stop()
+	delay := taskModelDiscoveryPollMin
+	poll := time.NewTimer(delay)
+	defer poll.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-timer.C:
+			return nil, nil
+		case <-poll.C:
+			if modelListFingerprint(orch.ModelList(ctx)) == baseline {
+				delay = min(delay*2, taskModelDiscoveryPollMax)
+				poll.Reset(delay)
+				continue
+			}
+			loaded, err := loadTaskModelOverlay(ctx, orch)
+			if loaded != nil {
+				loaded.discoveryPending = false
+			}
+			return loaded, err
+		}
+	}
+}
+
+func (m *Model) closeModelPicker() {
+	m.invalidateModelPickerRequest()
+	m.invalidateModelRefreshRequest()
+	m.overlay = overlayNone
+	m.overlayM = nil
+}
+
+func (m *Model) refreshModelsForOverlay() tea.Cmd {
+	if m.orch == nil || (m.overlay != overlayModelPicker && m.overlay != overlayProviders) || m.overlayM == nil {
+		return nil
+	}
+	if m.modelRefreshStop != nil {
+		m.modelRefreshStop()
+	}
+	m.modelRefreshRequest++
+	request := m.modelRefreshRequest
+	ctx, cancel := context.WithCancel(context.Background())
+	m.modelRefreshStop = cancel
+	target := m.overlayM
+	overlay := m.overlay
+	workspace := m.orch.SnapshotWorkspace()
+	sessionID := m.orch.Session().ID
+	orch := m.orch
+	m.status.pushToast("info", "refreshing model catalog…", 2*time.Second)
+	return func() tea.Msg {
+		return modelsRefreshedMsg{
+			request: request, target: target, overlay: overlay,
+			workspace: workspace, sessionID: sessionID,
+			err: modelCatalogRefresher(ctx, orch),
+		}
+	}
+}
+
+var modelCatalogRefresher = func(ctx context.Context, orch *orchestrator.Orchestrator) error {
+	return orch.RefreshModels(ctx)
+}
+
+func (m *Model) finishModelRefreshRequest() {
+	if m.modelRefreshStop != nil {
+		m.modelRefreshStop()
+		m.modelRefreshStop = nil
+	}
+}
+
+func (m *Model) invalidateModelRefreshRequest() {
+	m.finishModelRefreshRequest()
+	m.modelRefreshRequest++
+}
+
+func (m *Model) beginAtFileRequest() (uint64, context.Context) {
+	if m.atFileStop != nil {
+		m.atFileStop()
+	}
+	m.atFileRequest++
+	ctx, cancel := context.WithCancel(context.Background())
+	m.atFileStop = cancel
+	return m.atFileRequest, ctx
+}
+
+func (m *Model) finishAtFileRequest() {
+	if m.atFileStop != nil {
+		m.atFileStop()
+		m.atFileStop = nil
+	}
+}
+
+func (m *Model) invalidateAtFileRequest() {
+	m.finishAtFileRequest()
+	m.atFileRequest++
+	m.atFileLoading = false
+	m.atFileError = ""
+}
+
+func (m *Model) closeAtFilePicker() {
+	m.invalidateAtFileRequest()
+	m.overlay = overlayNone
+	m.overlayM = nil
+}
+
+func (m *Model) quitCmd() tea.Cmd {
+	m.quitting = true
+	if m.cancelRun != nil {
+		m.cancelRun()
+	}
+	if settings, ok := m.overlayM.(*settingsOverlay); ok && m.overlay == overlaySettings {
+		settings.cancelAction()
+	}
+	if m.ide != nil {
+		m.ide.cancelOperation()
+	}
+	if m.modFilesStop != nil {
+		m.modFilesStop()
+		m.modFilesStop = nil
+	}
+	m.modFilesInFlight = false
+	m.modFilesRunning = 0
+	m.invalidateProvidersRequest()
+	m.invalidateModelPickerRequest()
+	m.invalidateModelRefreshRequest()
+	m.invalidateAtFileRequest()
+	m.invalidateIDEGutterRequest()
+	m.invalidateSessionListRequest()
+	m.invalidateWorkspaceListRequest()
+	m.invalidateCoachRequest()
+	return tea.Quit
+}
+
 func (m *Model) cancelOverlayRequest(kind overlayKind) {
 	switch kind {
 	case overlaySettings:
@@ -3136,6 +3819,14 @@ func (m *Model) cancelOverlayRequest(kind overlayKind) {
 		m.invalidateWorkspaceListRequest()
 	case overlayCoachMode:
 		m.invalidateCoachRequest()
+	case overlayProviders:
+		m.invalidateProvidersRequest()
+		m.invalidateModelRefreshRequest()
+	case overlayModelPicker:
+		m.invalidateModelPickerRequest()
+		m.invalidateModelRefreshRequest()
+	case overlayAtFile:
+		m.invalidateAtFileRequest()
 	}
 }
 
@@ -3148,6 +3839,14 @@ func (m *Model) cancelClosedPickerRequest(before overlayKind) {
 		m.invalidateSessionListRequest()
 	case overlayGit:
 		m.invalidateWorkspaceListRequest()
+	case overlayProviders:
+		m.invalidateProvidersRequest()
+		m.invalidateModelRefreshRequest()
+	case overlayModelPicker:
+		m.invalidateModelPickerRequest()
+		m.invalidateModelRefreshRequest()
+	case overlayAtFile:
+		m.invalidateAtFileRequest()
 	}
 }
 
@@ -3541,9 +4240,9 @@ func (m *Model) loadSession(id string) tea.Cmd {
 	})
 }
 
-func (m *Model) applyLoadedSession(id, workDir string) {
+func (m *Model) applyLoadedSession(id, workDir string) tea.Cmd {
 	if workDir == "" {
-		return
+		return nil
 	}
 	if settings, ok := m.overlayM.(*settingsOverlay); ok {
 		settings.cancelAction()
@@ -3552,13 +4251,21 @@ func (m *Model) applyLoadedSession(id, workDir string) {
 	}
 	m.invalidateSessionListRequest()
 	m.invalidateWorkspaceListRequest()
+	m.invalidateProvidersRequest()
+	m.invalidateModelPickerRequest()
+	m.invalidateAtFileRequest()
 	m.invalidateCoachRequest()
+	m.invalidateIDEGutterRequest()
 	m.projectRequest++
 	m.projectActive = false
 	m.coachOffer = nil
+	m.ideFilesError = ""
+	var hydration tea.Cmd
 	if m.ide != nil {
+		m.ide.cancelOperation()
 		m.ide.Save()
-		m.ide = NewIDE(m, workDir, git.New(workDir))
+		m.ide = newDeferredIDE(m, workDir, git.New(workDir))
+		hydration = m.beginIDEHydration(m.ide)
 	}
 	m.proposals = nil
 	if home, err := userHome(); err == nil {
@@ -3588,6 +4295,7 @@ func (m *Model) applyLoadedSession(id, workDir string) {
 	m.sidebar.refresh(m.orch)
 	m.layout()
 	m.renderMessages()
+	return hydration
 }
 
 func joinOutput(parts ...string) string {
@@ -3606,6 +4314,66 @@ func joinOutput(parts ...string) string {
 func (m *Model) startRun(run tea.Cmd) tea.Cmd {
 	m.modFilesCompletion = 0
 	return tea.Batch(run, m.frameTicks())
+}
+
+const (
+	proposalConfirmationCancel = iota
+	proposalConfirmationApply
+	proposalConfirmationDiff
+)
+
+// proposalConfirmationOverlay is the final, cancel-first gate before a
+// staged proposal may write to the workspace. It snapshots the exact proposal
+// selected by the originating card/diff/HITL action.
+type proposalConfirmationOverlay struct {
+	prop     *proposals.Proposal
+	selected int
+}
+
+func newProposalConfirmationOverlay(prop *proposals.Proposal) *proposalConfirmationOverlay {
+	return &proposalConfirmationOverlay{prop: prop, selected: proposalConfirmationCancel}
+}
+
+func (o *proposalConfirmationOverlay) move(delta int) {
+	o.selected = (o.selected + delta + 3) % 3
+}
+
+func (o *proposalConfirmationOverlay) View(styles Styles, width int) string {
+	width = max(width, 12)
+	innerWidth := max(width-4, 8)
+	path := "unavailable"
+	hunks := 0
+	if o.prop != nil {
+		path = safeIDEPlainText(o.prop.Path)
+		hunks = len(o.prop.Hunks)
+	}
+	path = ansi.Hardwrap(path, innerWidth, false)
+	effect := fmt.Sprintf("Writes %d reviewed hunk(s) to this file.", hunks)
+
+	buttons := []string{
+		styles.Button("Cancel", 'c', o.selected == proposalConfirmationCancel),
+		styles.Button("Apply", 'a', o.selected == proposalConfirmationApply),
+		styles.Button("Review diff", 'v', o.selected == proposalConfirmationDiff),
+	}
+	buttonRow := lipgloss.JoinHorizontal(lipgloss.Top, buttons[0], "  ", buttons[1], "  ", buttons[2])
+	if lipgloss.Width(buttonRow) > innerWidth {
+		buttonRow = lipgloss.JoinVertical(lipgloss.Left, buttons...)
+	}
+
+	return styles.DialogTitle("Apply staged proposal?") + "\n\n" +
+		styles.Hint.Render("Target") + "\n" + path + "\n\n" +
+		styles.Hint.Render(effect) + "\n\n" + buttonRow + "\n\n" +
+		styles.Hint.Render("tab/shift+tab or ←/→ choose · enter activate · esc cancel")
+}
+
+func (m *Model) requestProposalConfirmation(c *Card) tea.Model {
+	if c == nil || c.Status != "proposed" || c.Proposal == nil {
+		m.status.pushToast("info", "proposal is no longer pending", 2*time.Second)
+		return m
+	}
+	m.overlay = overlayProposalConfirm
+	m.overlayM = newProposalConfirmationOverlay(c.Proposal)
+	return m
 }
 
 // acceptLatestPending / discardLatestPending act on the newest proposal card.
@@ -3780,17 +4548,18 @@ func (m *Model) persistHITLToggle(id string, done bool) {
 	}
 }
 
-func (m *Model) openProposalInIDE(prop *proposals.Proposal) {
+func (m *Model) openProposalInIDE(prop *proposals.Proposal) tea.Cmd {
 	if prop == nil {
 		m.status.pushToast("error", "proposal preview unavailable", 3*time.Second)
-		return
+		return nil
 	}
 	m.overlay = overlayNone
-	m.switchTab(TabIDE)
+	cmd := m.switchTab(TabIDE)
 	m.ide.proposalPreview = prop
 	m.ide.proposalScroll = 0
 	m.ide.proposalHunk = 0
 	m.ide.Focus = ideEditor
+	return cmd
 }
 
 func (m *Model) cycleProposal(delta int) tea.Model {
@@ -3961,39 +4730,40 @@ func atQuery(value string) (before, query string, ok bool) {
 	return value[:i], value[i+1:], true
 }
 
-// maybeOpenAtFile opens the file-mention picker when the prompt contains an
-// active "@" query (opencode-style @file frecency, simplified to the
-// project file list with the existing fuzzy matcher).
-func (m *Model) maybeOpenAtFile() {
+// maybeOpenAtFile opens an immediately usable loading picker and moves the
+// repository scan to a cancellable Bubble Tea effect. Query edits continue to
+// update the same target while the immutable workspace snapshot is loading.
+func (m *Model) maybeOpenAtFile() tea.Cmd {
 	if m.overlay != overlayNone {
-		return
+		return nil
 	}
 	_, query, ok := atQuery(m.input.Value())
 	if !ok {
-		return
-	}
-	project := m.orch.WorkDirDisplay()
-	items := editorListFiles(project)
-	if items == nil {
-		m.status.pushToast("error", "directory listing timed out", 3*time.Second)
-		return
-	}
-	m.overlay = overlayAtFile
-	m.overlayM = &listOverlay{title: "Files · @mention", items: items, query: query}
-}
-
-// editorListFiles wraps the editor's file walker with a 5s timeout so a
-// hung mount can never freeze the picker (kept separate for tests).
-var editorListFiles = func(project string) []string {
-	ch := make(chan []string, 1)
-	go func() { ch <- editor.ListFiles(project, 500) }()
-	select {
-	case items := <-ch:
-		return items
-	case <-time.After(5 * time.Second):
 		return nil
 	}
+	request, ctx := m.beginAtFileRequest()
+	workspace := m.orch.SnapshotWorkspace()
+	target := &listOverlay{title: "Files · @mention", query: query}
+	m.atFileLoading = true
+	m.atFileError = ""
+	m.overlay = overlayAtFile
+	m.overlayM = target
+	return func() tea.Msg {
+		bounded, stop := context.WithTimeout(ctx, 5*time.Second)
+		defer stop()
+		items, err := atFileListLoader(bounded, workspace.WorkDir(), 500)
+		return atFileListLoadedMsg{
+			request: request, target: target, workspace: workspace,
+			items: items, err: err,
+		}
+	}
 }
+
+// atFileListLoader adapts the editor's bounded walker to cancellation without
+// mutating the UI from its worker. ListFiles has its own five-second process
+// and traversal ceiling; the buffered handoff lets a cancelled tea.Cmd return
+// immediately while that bounded cleanup completes.
+var atFileListLoader = editor.ListFiles
 
 // modelKnown reports whether the qualified model ID is served by the
 // registry (model picker validation).
@@ -4040,6 +4810,9 @@ func (m *Model) removePending(c *Card) {
 // layout splits the screen: header + messages + input + status/help.
 func (m *Model) layout() {
 	m.compact = m.width < 120 || m.height < 30
+	if m.compact && m.focus == FocusSidebar {
+		m.focus = FocusInput
+	}
 	// The final surface painter owns the terminal background. Keeping the
 	// viewport transparent prevents nested SGR resets from producing black
 	// rectangles after styled content on terminals with a non-black default.
@@ -4401,7 +5174,7 @@ func (m *Model) composerPlaceholder(ide bool) string {
 	if ide {
 		return "Ask Maestro about this code…"
 	}
-	return "Discuss the change, then use /propose…"
+	return "Describe the change. Maestro shapes the contract…"
 }
 
 // renderComposerActions creates the quiet, mouse-complete action row. It
@@ -4520,6 +5293,11 @@ func (m *Model) renderOverlay(out string) string {
 	var content string
 	dialogW := min(max(m.width-6, 8), 100)
 	switch m.overlay {
+	case overlayWorkflow:
+		if w, ok := m.overlayM.(*workflowOverlay); ok {
+			w.height = max(m.bodyHeight()-4, 8)
+			content = w.View(m.styles, min(max(m.width-6, 18), 112))
+		}
 	case overlayKeymap:
 		content = KeymapView(m.styles, min(dialogW, 60))
 	case overlayPalette, overlayModelPicker, overlaySessionPicker, overlayEngine, overlayAsk, overlayCheckpoints, overlayGit, overlayCoachMode:
@@ -4549,7 +5327,19 @@ func (m *Model) renderOverlay(out string) string {
 		}
 	case overlayAtFile:
 		if list, ok := overlayList(m.overlayM); ok {
-			content = list.View(m.styles, min(dialogW, 72))
+			if m.atFileLoading || m.atFileError != "" {
+				state := "Loading files for @" + safeIDEPlainText(list.query) + "…"
+				footer := "keep typing · esc close"
+				if m.atFileError != "" {
+					state = "Files unavailable: " + m.atFileError
+					footer = "ctrl+r retry · esc close"
+				}
+				content = m.styles.DialogTitle("Files · @mention") + "\n\n" +
+					m.styles.Hint.Render(truncateRunes(state, max(min(dialogW, 72)-4, 1))) + "\n\n" +
+					m.styles.Hint.Render(footer)
+			} else {
+				content = list.View(m.styles, min(dialogW, 72))
+			}
 		}
 	case overlayDiff:
 		if diff, ok := m.overlayM.(*diffOverlay); ok {
@@ -4566,6 +5356,10 @@ func (m *Model) renderOverlay(out string) string {
 			}
 			content = diff.View(m.styles, w)
 		}
+	case overlayProposalConfirm:
+		if confirm, ok := m.overlayM.(*proposalConfirmationOverlay); ok {
+			content = confirm.View(m.styles, min(dialogW, 72))
+		}
 	case overlayForm:
 		if m.overlayM != nil {
 			content = m.overlayM.View(m.styles, min(dialogW, 72))
@@ -4577,6 +5371,9 @@ func (m *Model) renderOverlay(out string) string {
 		}
 	}
 	box := m.styles.Dialog.Render(content)
+	if m.overlay == overlayWorkflow {
+		box = content
+	}
 	if diff, ok := m.overlayM.(*diffOverlay); ok && m.overlay == overlayDiff {
 		m.registerDiffOverlayRegions(diff, content, box)
 	}

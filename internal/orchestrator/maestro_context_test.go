@@ -262,7 +262,10 @@ func TestSubscriptionPromptReceivesSameHumanAndMaestroTaskEnvelope(t *testing.T)
 	}
 	orch := &Orchestrator{dir: dir}
 	capture := &captureMaestroLegacyAgent{}
-	runner := &legacyRunner{agent: capture, model: "test-model", o: orch, silent: true}
+	runner := runnerFunc(func(ctx context.Context, role agentcore.Role, prompt string) (agentcore.AgentResult, error) {
+		capture.prompt = prompt
+		return agentcore.AgentResult{OK: true}, nil
+	})
 	task := orch.chatTaskPrompt("Discuss the project.")
 	if _, err := runner.Run(t.Context(), agentcore.RoleOrchestrator, task); err != nil {
 		t.Fatal(err)

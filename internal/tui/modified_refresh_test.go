@@ -91,8 +91,13 @@ func TestKeyboardProposalAcceptSchedulesModifiedFilesRefresh(t *testing.T) {
 	m.appendSystemCard(card)
 	before := m.modFilesRequested
 	_, cmd := m.updateKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	if cmd != nil || m.overlay != overlayProposalConfirm {
+		t.Fatalf("proposal accept did not stop at confirmation: cmd=%v overlay=%v", cmd != nil, m.overlay)
+	}
+	_, _ = m.updateKey(tea.KeyMsg{Type: tea.KeyTab})
+	_, cmd = m.updateKey(tea.KeyMsg{Type: tea.KeyEnter})
 	if cmd == nil {
-		t.Fatal("proposal accept returned no modified-files refresh command")
+		t.Fatal("confirmed proposal accept returned no modified-files refresh command")
 	}
 	if got := m.modFilesRequested; got != before+1 {
 		t.Fatalf("modified-files refresh generation = %d, want %d", got, before+1)
@@ -105,10 +110,15 @@ func TestKeyboardProposalAcceptSchedulesModifiedFilesRefresh(t *testing.T) {
 
 func TestIDESaveSchedulesModifiedFilesRefresh(t *testing.T) {
 	m, _ := newTestModel(t)
-	m.ToggleIDE()
+	initial := m.ToggleIDE()
 	if m.ide == nil || m.ide.Ed.Buffer() == nil {
 		t.Fatal("IDE did not open an editor buffer")
 	}
+	if initial == nil {
+		t.Fatal("IDE did not schedule its initial workspace snapshot")
+	}
+	_, follow := m.Update(initial())
+	feed(m, primaryBatchMessage(t, follow))
 	before := m.modFilesRequested
 	cmd := m.ide.handleAction(m, editor.ActSave)
 	if cmd == nil {
@@ -165,10 +175,15 @@ func TestModifiedFilesBurstCoalescesToExactlyOneLatestRerun(t *testing.T) {
 
 func TestAcceptedNewFileAppearsInIDEFilesAfterLatestRefresh(t *testing.T) {
 	m, dir := newTestModel(t)
-	m.ToggleIDE()
+	initial := m.ToggleIDE()
 	if m.ide == nil {
 		t.Fatal("IDE did not open")
 	}
+	if initial == nil {
+		t.Fatal("IDE did not schedule its initial workspace snapshot")
+	}
+	_, follow := m.Update(initial())
+	feed(m, primaryBatchMessage(t, follow))
 	_ = m.ide.files() // Prime the cache before the new file exists.
 	m.switchTab(TabHarness)
 
@@ -182,8 +197,13 @@ func TestAcceptedNewFileAppearsInIDEFilesAfterLatestRefresh(t *testing.T) {
 	m.appendSystemCard(card)
 
 	_, cmd := m.updateKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	if cmd != nil || m.overlay != overlayProposalConfirm {
+		t.Fatalf("proposal accept did not stop at confirmation: cmd=%v overlay=%v", cmd != nil, m.overlay)
+	}
+	_, _ = m.updateKey(tea.KeyMsg{Type: tea.KeyTab})
+	_, cmd = m.updateKey(tea.KeyMsg{Type: tea.KeyEnter})
 	if cmd == nil {
-		t.Fatal("proposal accept returned no refresh command")
+		t.Fatal("confirmed proposal accept returned no refresh command")
 	}
 	resultRaw := cmd()
 	result, ok := resultRaw.(modFilesMsg)

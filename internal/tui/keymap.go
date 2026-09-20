@@ -79,14 +79,15 @@ var keymap = []struct {
 	Desc    string
 }{
 	{ActionSend, tea.KeyEnter, "enter", false, "Send message"},
-	{ActionNewline, tea.KeyEnter, "shift+enter", true, "Newline"},
+	{ActionNewline, tea.KeyCtrlJ, "ctrl+j", false, "Newline"},
+	{ActionNewline, tea.KeyEnter, "alt+enter", true, "Newline (alias)"},
 	{ActionScrollUp, tea.KeyPgUp, "pgup", false, "Scroll up"},
 	{ActionScrollDown, tea.KeyPgDown, "pgdn", false, "Scroll down"},
 	{ActionFocusNext, tea.KeyTab, "tab", false, "Cycle focus"},
 	{ActionPalette, tea.KeyCtrlP, "ctrl+p", false, "Command palette"},
 	{ActionModelPicker, tea.KeyCtrlL, "ctrl+l", false, "Model picker"},
 	{ActionSessionPicker, tea.KeyCtrlR, "ctrl+r", false, "Session picker"},
-	{ActionCancelTour, tea.KeyCtrlC, "ctrl+c", false, "Cancel tour / quit (2×)"},
+	{ActionCancelTour, tea.KeyCtrlC, "ctrl+c", false, "Cancel active task; quit if idle"},
 	{ActionQuit, tea.KeyCtrlQ, "ctrl+q", false, "Quit"},
 	{ActionKeymap, 0, "space ?", false, "Keymap viewer"},
 	{ActionEscape, tea.KeyEsc, "esc esc", false, "Close / cancel active task"},
@@ -112,9 +113,6 @@ func KeyFor(a ActionID) string {
 
 // ActionFor maps a key message to an action.
 func ActionFor(msg tea.KeyMsg) (ActionID, bool) {
-	if msg.Type == tea.KeyEnter && msg.Alt {
-		return ActionNewline, true
-	}
 	if msg.Type == tea.KeyRunes {
 		if msg.String() == "?" && msg.Alt {
 			return ActionKeymap, true
@@ -122,7 +120,7 @@ func ActionFor(msg tea.KeyMsg) (ActionID, bool) {
 		return "", false
 	}
 	for _, b := range keymap {
-		if b.KeyType == msg.Type {
+		if b.KeyType != 0 && b.KeyType == msg.Type && b.Alt == msg.Alt {
 			return b.Action, true
 		}
 	}

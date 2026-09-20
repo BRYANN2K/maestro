@@ -1,0 +1,16 @@
+{
+  "name": "@maestro/harness",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "bun test test",
+    "build": "bun build src/main.ts --target=bun --outfile=dist/maestro-runtime.js"
+  },
+  "dependencies": {
+    "@oh-my-pi/pi-ai": "18.2.6",
+    "@oh-my-pi/pi-catalog": "18.2.6",
+    "@oh-my-pi/pi-utils": "18.2.6",
+    "@oh-my-pi/pi-natives": "18.2.6"
+  }
+}

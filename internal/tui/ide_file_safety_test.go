@@ -25,7 +25,11 @@ func TestIDEBinaryOpenIsRejectedAcrossEveryNavigationRoute(t *testing.T) {
 	if err := os.WriteFile(binaryPath, binary, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	m.ToggleIDE()
+	initial := m.ToggleIDE()
+	if initial == nil {
+		t.Fatal("IDE did not schedule its initial workspace snapshot")
+	}
+	runIDEEffect(t, m, initial)
 	if !m.ide.OpenFileAt("safe.txt") {
 		t.Fatal("failed to open text fixture")
 	}
@@ -78,10 +82,17 @@ func TestIDEBinaryOpenIsRejectedAcrossEveryNavigationRoute(t *testing.T) {
 		t.Fatalf("binary disappeared from picker instead of being refused: %v", m.ide.Ed.Picker.Items)
 	}
 	m.ide.Ed.Picker.Query = "tui.test"
-	assertRejected("picker", func() { m.ide.Ed.Update(editor.Key{Kind: editor.KeyEnter}) })
+	assertRejected("picker", func() {
+		_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		runIDEEffect(t, m, cmd)
+	})
 
 	// File tree mouse/keyboard dispatch.
-	m.ide.refreshFiles()
+	files, err := editor.ListFiles(t.Context(), project, 500)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.ide.applyFileRefresh(project, files)
 	entries := m.ide.treeEntries()
 	treeIndex := -1
 	for i, entry := range entries {
@@ -93,11 +104,17 @@ func TestIDEBinaryOpenIsRejectedAcrossEveryNavigationRoute(t *testing.T) {
 	if treeIndex < 0 {
 		t.Fatalf("binary missing from file tree: %#v", entries)
 	}
-	assertRejected("tree", func() { m.dispatchRegion(Region{Action: ActionOpenFile, Index: treeIndex}) })
+	assertRejected("tree", func() {
+		_, cmd := m.dispatchRegionWithCmd(Region{Action: ActionOpenFile, Index: treeIndex})
+		runIDEEffect(t, m, cmd)
+	})
 
 	// CHANGES rail dispatch.
 	m.sidebar.modFiles = []git.NumStat{{Path: "tui.test", Untracked: true}}
-	assertRejected("changes", func() { m.dispatchRegion(Region{Action: ActionOpenChanged, Index: 0}) })
+	assertRejected("changes", func() {
+		_, cmd := m.dispatchRegionWithCmd(Region{Action: ActionOpenChanged, Index: 0})
+		runIDEEffect(t, m, cmd)
+	})
 
 	// Vim :e command reports through handleAction without exposing the error's
 	// path or ever switching the active buffer.
@@ -112,7 +129,8 @@ func TestIDEBinaryOpenIsRejectedAcrossEveryNavigationRoute(t *testing.T) {
 			}
 			feed(m, msg)
 		}
-		feed(m, tea.KeyMsg{Type: tea.KeyEnter})
+		_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		runIDEEffect(t, m, cmd)
 	})
 
 	view := m.View()
@@ -136,7 +154,7 @@ func TestWorkspaceLocationStopsAfterRejectedBinaryOpen(t *testing.T) {
 	}
 	active := m.ide.Ed.Buffer()
 	active.Cur = editor.Cursor{Line: 1, Col: 2}
-	m.openWorkspaceLocation("tui.test", 1, 1, true)
+	runIDEEffect(t, m, m.openWorkspaceLocation("tui.test", 1, 1, true))
 	if m.ide.Ed.Buffer() != active || active.Cur != (editor.Cursor{Line: 1, Col: 2}) {
 		t.Fatalf("rejected transcript path moved active editor: buffer=%p cursor=%+v", m.ide.Ed.Buffer(), active.Cur)
 	}

@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "id": "sre-operations",
+  "description": "Connect user-perceived reliability, indicators, objectives, alerts, and responses to degradation.",
+  "explore": "explore.md",
+  "apply": "apply.md",
+  "check": "check.md",
+  "docs": "docs.md"
+}

@@ -37,11 +37,13 @@ func TestSpawnSeedsContext(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 	loop, err := Spawn(context.Background(), SpawnOptions{
-		Role:      RoleDev,
-		Provider:  &fakeProvider{},
-		Model:     "m",
-		Sampling:  Sampling{ReasoningEffort: "high"},
-		SpecFiles: []string{specFile, designFile},
+		Role:             RoleDev,
+		Provider:         &fakeProvider{},
+		Model:            "m",
+		ContextWindow:    32_000,
+		DefaultMaxTokens: 2_048,
+		Sampling:         Sampling{ReasoningEffort: "high"},
+		SpecFiles:        []string{specFile, designFile},
 	})
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
@@ -61,6 +63,9 @@ func TestSpawnSeedsContext(t *testing.T) {
 	}
 	if loop.Sampling.ReasoningEffort != "high" {
 		t.Errorf("loop reasoning effort = %q", loop.Sampling.ReasoningEffort)
+	}
+	if loop.ContextWindow != 32_000 || loop.DefaultMaxTokens != 2_048 {
+		t.Errorf("loop model limits = context %d output %d", loop.ContextWindow, loop.DefaultMaxTokens)
 	}
 }
 
@@ -184,6 +189,30 @@ func TestRunResultCapturesYield(t *testing.T) {
 	}
 	if res.Role != "dev" {
 		t.Errorf("role = %q", res.Role)
+	}
+}
+
+func TestRunResultAccumulatesEveryProviderTurnCost(t *testing.T) {
+	p := &fakeProvider{turns: []fakeTurn{
+		{calls: []ToolCall{{ID: "c1", Name: "echo", Args: `{}`}}, cost: &Cost{InputUSD: 1, OutputUSD: 0.25}},
+		{deltas: []string{"done"}, cost: &Cost{InputUSD: 0.5, OutputUSD: 0.25}},
+	}}
+	loop, err := Spawn(context.Background(), SpawnOptions{
+		Role:     RoleDev,
+		Provider: p,
+		Model:    "m",
+		Tools:    map[string]Tool{"echo": &echoTool{}},
+		Gate:     GateFunc(AllowAll),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := RunResult(context.Background(), loop, "do it")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.CostUSD != 2 {
+		t.Fatalf("run cost = %v, want 2", res.CostUSD)
 	}
 }
 

@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -46,16 +47,22 @@ func TestAtFileMentionPicker(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The file list is injected for hermetic tests.
-	restore := editorListFiles
-	editorListFiles = func(string) []string { return []string{"main.go", "target.txt"} }
-	defer func() { editorListFiles = restore }()
+	restore := atFileListLoader
+	atFileListLoader = func(context.Context, string, int) ([]string, error) {
+		return []string{"main.go", "target.txt"}, nil
+	}
+	defer func() { atFileListLoader = restore }()
 
 	m.input.Set("edit @main")
 	m.input.update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'.'}})
-	m.maybeOpenAtFile()
+	cmd := m.maybeOpenAtFile()
 	if m.overlay != overlayAtFile {
 		t.Fatalf("typing @ should open the file picker, got %v", m.overlay)
 	}
+	if cmd == nil || !m.atFileLoading {
+		t.Fatal("typing @ did not schedule a cancellable file snapshot")
+	}
+	m.Update(cmd())
 	list, _ := m.overlayM.(*listOverlay)
 	if list.query != "main." {
 		t.Errorf("picker query = %q, want main.", list.query)

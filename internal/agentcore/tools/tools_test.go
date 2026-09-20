@@ -2,10 +2,13 @@ package tools
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/bryann2k/maestro/internal/agentcore"
 )
@@ -89,6 +92,72 @@ func TestGrepTool(t *testing.T) {
 	}
 }
 
+func TestGrepSearchesExplicitHiddenRoot(t *testing.T) {
+	root := filepath.Join(t.TempDir(), ".project")
+	if err := os.Mkdir(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, "visible.txt")
+	if err := os.WriteFile(path, []byte("needle\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, err := grepDir(t.Context(), root, regexp.MustCompile("needle"), 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(out, "\n"); !strings.Contains(got, "visible.txt:1") {
+		t.Fatalf("explicit hidden root was skipped: %q", got)
+	}
+}
+
+func TestGrepBoundsFilesLinesAndOutput(t *testing.T) {
+	dir := t.TempDir()
+	tooLarge := filepath.Join(dir, "too-large.txt")
+	if err := os.WriteFile(tooLarge, []byte("MATCH\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Truncate(tooLarge, maxGrepFileBytes+1); err != nil {
+		t.Fatal(err)
+	}
+	longLine := filepath.Join(dir, "long.txt")
+	if err := os.WriteFile(longLine, []byte("MATCH "+strings.Repeat("界", maxGrepLineBytes)+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := NewGrep().Run(t.Context(), map[string]any{"pattern": "MATCH", "path": dir})
+	if err != nil {
+		t.Fatalf("grep: %v", err)
+	}
+	if strings.Contains(out, "too-large.txt") {
+		t.Fatalf("oversized file was searched: %q", out)
+	}
+	if !strings.Contains(out, grepLineTruncated) || len(out) > maxGrepOutputBytes {
+		t.Fatalf("bounded grep output = %d bytes, %q", len(out), out)
+	}
+}
+
+func TestGrepBoundsAggregateScanWithoutMatches(t *testing.T) {
+	dir := t.TempDir()
+	for i := 0; i < 4; i++ {
+		path := filepath.Join(dir, fmt.Sprintf("file-%d.txt", i))
+		if err := os.WriteFile(path, []byte("nothing here\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	out, err := grepDirLimited(t.Context(), dir, regexp.MustCompile("MATCH"), grepLimits{
+		matches: 100,
+		files:   2,
+		bytes:   1 << 20,
+		output:  1 << 10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(out, "\n"); got != grepScanLimit {
+		t.Fatalf("bounded no-match scan = %q", got)
+	}
+}
+
 func TestWriteTool(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "nested", "file.go")
@@ -109,6 +178,8 @@ func TestWriteTool(t *testing.T) {
 }
 
 func TestBashTool(t *testing.T) {
+	t.Setenv("MAESTRO_SHELL", "")
+	t.Setenv("COMSPEC", "cmd.exe")
 	out, err := NewBash().Run(context.Background(), map[string]any{"command": "echo hello"})
 	if err != nil || !strings.Contains(out, "hello") {
 		t.Errorf("bash = %q, %v", out, err)
@@ -118,6 +189,88 @@ func TestBashTool(t *testing.T) {
 	}
 	if _, err := NewBash().Run(context.Background(), map[string]any{"command": "exit 3"}); err == nil {
 		t.Error("bash failing command should return an error")
+	}
+}
+
+func TestBashCancellationStopsDescendants(t *testing.T) {
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "survived")
+	started := filepath.Join(dir, "started")
+	t.Setenv("MAESTRO_SHELL", "")
+	t.Setenv("COMSPEC", "cmd.exe")
+	t.Setenv("MAESTRO_BASH_TEST_MARKER", marker)
+	t.Setenv("MAESTRO_BASH_TEST_STARTED", started)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, err := NewBash().Run(ctx, map[string]any{
+			"command": bashCancellationCommand(os.Args[0]),
+		})
+		done <- err
+	}()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if _, err := os.Stat(started); err == nil {
+			break
+		} else if !os.IsNotExist(err) {
+			t.Fatal(err)
+		}
+		if time.Now().After(deadline) {
+			cancel()
+			<-done
+			t.Fatal("descendant did not start")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	canceledAt := time.Now()
+	cancel()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("canceled command returned no error")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("canceled command did not return")
+	}
+	if elapsed := time.Since(canceledAt); elapsed > 3*time.Second {
+		t.Fatalf("canceled command waited on descendant for %s", elapsed)
+	}
+	time.Sleep(1200 * time.Millisecond)
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("descendant survived cancellation: stat error %v", err)
+	}
+}
+
+func TestBashCancellationHelper(t *testing.T) {
+	started := os.Getenv("MAESTRO_BASH_TEST_STARTED")
+	marker := os.Getenv("MAESTRO_BASH_TEST_MARKER")
+	if started == "" || marker == "" {
+		return
+	}
+	if err := os.WriteFile(started, []byte("started"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(time.Second)
+	if err := os.WriteFile(marker, []byte("survived"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCappedOutputRetainsPrefixAndDiscardsTheRest(t *testing.T) {
+	var out cappedOutput
+	out.limit = 5
+	if n, err := out.Write([]byte("abc")); err != nil || n != 3 {
+		t.Fatalf("first write = %d, %v", n, err)
+	}
+	if n, err := out.Write([]byte("defgh")); err != nil || n != 5 {
+		t.Fatalf("second write = %d, %v", n, err)
+	}
+	if got := out.String(); got != "abcde"+bashOutputLimit {
+		t.Fatalf("capped output = %q", got)
 	}
 }
 
@@ -234,6 +387,44 @@ func TestReadBeforeEditWriteRefreshesStamp(t *testing.T) {
 	}
 	if _, err := NewWrite().Run(context.Background(), map[string]any{"path": path, "content": "v4"}); err == nil {
 		t.Fatal("write after external modification should fail")
+	}
+}
+
+func TestDefaultRegistryScopesReadBeforeEditState(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "scoped.txt")
+	if err := os.WriteFile(path, []byte("v1"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	first := Default()
+	read, _ := first.Get("read")
+	if _, err := read.Run(t.Context(), map[string]any{"path": path}); err != nil {
+		t.Fatal(err)
+	}
+	second := Default()
+	write, _ := second.Get("write")
+	if _, err := write.Run(t.Context(), map[string]any{"path": path, "content": "v2"}); err == nil || !strings.Contains(err.Error(), "never read") {
+		t.Fatalf("fresh registry reused another run's read stamp: %v", err)
+	}
+}
+
+func TestFileGuardEvictsOldEntries(t *testing.T) {
+	guard := newFileGuard()
+	for i := 0; i < maxFileGuardEntries+10; i++ {
+		guard.recordRead(filepath.Join("root", fmt.Sprintf("file-%d", i)), time.Unix(int64(i), 0))
+	}
+	if len(guard.stamps) != maxFileGuardEntries || len(guard.order) != maxFileGuardEntries {
+		t.Fatalf("guard retained stamps=%d order=%d, want %d", len(guard.stamps), len(guard.order), maxFileGuardEntries)
+	}
+}
+
+func TestFileGuardCanonicalizesWriteRefresh(t *testing.T) {
+	guard := newFileGuard()
+	first, second := time.Unix(1, 0), time.Unix(2, 0)
+	guard.recordRead(filepath.Join("relative", "file.txt"), first)
+	guard.recordWrite(filepath.Join("relative", "file.txt"), second)
+	if len(guard.stamps) != 1 || !guard.stamps[canonicalGuardPath(filepath.Join("relative", "file.txt"))].Equal(second) {
+		t.Fatalf("canonical write refresh = %+v", guard.stamps)
 	}
 }
 

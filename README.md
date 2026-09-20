@@ -1,367 +1,235 @@
-<h1 align="center">
-  <img src="docs/brand/exports/maestro-logo-horizontal.svg" alt="Maestro" width="720">
-</h1>
+<p align="center">
+  <img src="docs/assets/maestro-cover.png" alt="Maestro's ivory and lavender logo over a softly blurred view of its terminal workspace" width="100%">
+</p>
 
-<p align="center"><strong>Code in Concert.</strong></p>
-
-<p align="center">Turn an idea into a reviewed, documented change—without giving up control of your code.</p>
+<h1 align="center">Code in Concert.</h1>
 
 <p align="center">
-  <a href="https://x.com/bryann2k_dev"><img src="https://img.shields.io/badge/Follow-%40bryann2k__dev-000000?logo=x&amp;logoColor=white" alt="Follow @bryann2k_dev on X"></a>
+  <strong>A clear contract. A considered change.</strong><br>
+  Spec-driven development, from the first idea to reviewed code, in your terminal.
 </p>
 
 <p align="center">
-  <img src="docs/assets/maestro-hero.png" alt="Maestro's terminal interface, ready to turn an idea into a reviewed change" width="100%">
+  <a href="#get-started">Get started</a> ·
+  <a href="#the-workspace">The workspace</a> ·
+  <a href="docs/MAESTRO_HARNESS.md">Harness guide</a> ·
+  <a href="docs/TUI.md">Terminal guide</a> ·
+  <a href="LICENSE">MIT license</a>
 </p>
 
-Maestro is an open-source, terminal-native AI development environment built
-around reviewable specs and explicit user control. It turns a conversation
-into a structured plan, coordinates focused agents to implement it, checks the
-result, drafts the documentation, and archives the finished work. You decide
-when each phase begins.
+---
 
-```text
-idea → spec → build → review → docs → archive
-```
+**Maestro brings the conversation, specification, execution plan and review into
+one workspace.** Shape a change with your model, inspect its acceptance criteria,
+approve the exact contract, and follow the implementation through verification
+and documentation.
 
-## Why Maestro
+The built-in **Maestro harness** runs the work. Connect your account, bring an API
+key, or use an OpenAI-compatible endpoint. Model choice stays independent of the
+workflow.
 
-- **Review the plan before the code.** Maestro turns your intent into a
-  structured spec that you can inspect and accept before implementation starts.
-- **Stay in control at every boundary.** Proposing, accepting, building,
-  reviewing, documenting, and archiving are separate, explicit actions.
-- **Use the right model for each job.** Route Chat, Build, Review, and Docs to
-  different models and reasoning levels.
-- **Keep changes isolated and reviewable.** Builds run in managed Git worktrees,
-  with deterministic checks and read-only review built into the lifecycle.
-- **Work interactively or automate the flow.** Use the responsive TUI for daily
-  development or the same lifecycle through headless commands in scripts and
-  CI.
+## The workspace
 
-## Inside Maestro
+An English terminal interface built with **OpenTUI, React, TypeScript and Bun**.
+Ink backgrounds, ivory text and lavender accents keep the active contract in
+focus. The Go host owns sessions, tools, credentials and workflow decisions.
 
-<table>
-  <tr>
-    <td width="50%"><img src="docs/assets/model-routing.png" alt="Independent model and reasoning settings for Chat, Build, Review, and Docs"></td>
-    <td width="50%"><img src="docs/assets/maestro-ide.png" alt="Maestro's integrated code workspace with project context and lifecycle status"></td>
-  </tr>
-  <tr>
-    <td align="center"><strong>Independent model routing</strong><br>Choose the model and reasoning effort for each task.</td>
-    <td align="center"><strong>One integrated workspace</strong><br>Keep the project, spec, lifecycle, and implementation together.</td>
-  </tr>
-</table>
+<p align="center">
+  <a href="docs/assets/tui-contract.png">
+    <img src="docs/assets/tui-contract.png" alt="Maestro's three-pane workspace: changes on the left, acceptance criteria and contract approval in the center, conversation on the right" width="100%">
+  </a>
+</p>
 
-## Install
+<p align="center"><sub>Contract review in the compiled TUI, captured from an isolated example project.</sub></p>
 
-### npm (recommended)
+- **Review before execution.** Read the specification and plan together.
+  Approval is bound to the contract version you inspected.
+- **Follow each contribution.** Tasks carry acceptance criteria, dependencies
+  and file ownership. A completed worker still needs a contribution review.
+- **Keep the evidence close.** Inspect source files, Git changes, recorded
+  checks and delivery documents without losing the conversation.
+- **Use the whole terminal.** Navigate with the keyboard or mouse, paste
+  multiline prompts, follow clickable links, and work down to 80×24.
+- **Pick up where you left off.** Restore saved sessions with their project
+  and Git workspace identity.
 
-The npm package is a small launcher for Maestro's prebuilt release
-binary. It requires Node.js 18 or newer; it does **not** require a Go toolchain.
+<details>
+<summary><strong>Connections: accounts, API keys and compatible endpoints</strong></summary>
 
-```sh
-npx @bryann2k/maestro
-```
+<p align="center">
+  <a href="docs/assets/tui-connections.png">
+    <img src="docs/assets/tui-connections.png" alt="Maestro Connections with account providers and an OpenAI-compatible endpoint form" width="100%">
+  </a>
+</p>
 
-The launcher selects the matching macOS, Linux, or Windows binary for the
-current architecture and caches the exact Maestro version selected by the npm
-package. Pin `@1.0.0` when reproducibility matters. Arguments are forwarded
-unchanged:
+Connect an account or enter a provider name, base URL and API key. Compatible
+endpoints discover their models automatically; the open model selector updates
+as discovery completes. Keys are masked and stored in the private credential
+vault, rather than project configuration.
 
-```sh
-npx @bryann2k/maestro --dir ./my-project
-npx @bryann2k/maestro version
-```
+</details>
 
-### GitHub release binary
+<details>
+<summary><strong>A smaller terminal, the same contract</strong></summary>
 
-Download the archive for your operating system and architecture from the
-[Maestro 1.0.0 release](https://github.com/BRYANN2K/maestro/releases/tag/v1.0.0),
-verify it against `checksums.txt`, and place `maestro` (or `maestro.exe`) on
-your `PATH`.
+<p align="center">
+  <a href="docs/assets/tui-compact.png">
+    <img src="docs/assets/tui-compact.png" alt="The contract review interface in an 80-column, 24-row terminal with monochrome output" width="620">
+  </a>
+</p>
 
-Release assets follow this pattern:
+At smaller sizes, **Ctrl+G** switches to the conversation and **Ctrl+K** keeps
+changes and actions within reach. `NO_COLOR` selects a monochrome palette.
 
-```text
-maestro_1.0.0_darwin_arm64.tar.gz
-maestro_1.0.0_darwin_amd64.tar.gz
-maestro_1.0.0_linux_arm64.tar.gz
-maestro_1.0.0_linux_amd64.tar.gz
-maestro_1.0.0_windows_arm64.zip
-maestro_1.0.0_windows_amd64.zip
-```
+</details>
 
-### Build with Go
+## Get started
 
-With Go 1.26.5 or newer:
+This README describes the current source checkout. Build from source to use the
+new harness and OpenTUI workspace; a previously published package may contain
+an earlier interface. Packaged versions are listed on the
+[releases page](https://github.com/BRYANN2K/maestro/releases).
+
+**Build requirements:** Go 1.26.5+, Bun 1.3.14 and Python 3.11+ (`python3` on PATH).
 
 ```sh
-go install github.com/bryann2k/maestro/cmd/maestro@v1.0.0
+git clone https://github.com/BRYANN2K/maestro.git
+cd maestro
+make build
+./bin/maestro --dir /path/to/your/project
 ```
 
-### Update notifications
+The build produces `maestro`, `maestro-ui`, `maestro-runtime` and the matching
+`pi_natives.*.node` library in `bin/`. Keep the bundle together. Go and Bun are
+build dependencies; Python is also required at runtime for Stipulate and RLM.
+A standalone `go install` does not install the complete bundle.
 
-The TUI checks the public npm stable release metadata in the background at
-most once every 24 hours. When a newer version exists, Maestro shows a quiet,
-persistent `UPDATE v…` status and points `/update` to the exact npm install
-command. The check does not delay startup, send telemetry, contact GitHub
-Actions, or install anything automatically.
+**Your first change:**
+
+1. Press **Ctrl+P** to connect an account, an API key or a compatible endpoint.
+2. Press **Ctrl+L** and choose a model.
+3. Open **Ctrl+K → New change**. Give it a title; Maestro creates the workflow
+   files and initializes Stipulate if needed.
+4. Discuss the goal and shape the proposal, specification and execution plan.
+   Review the contract and its acceptance criteria before approving it.
+5. Start the approved work. Review contributions, record verification evidence,
+   update the documentation and archive the checked change.
+
+The [harness guide](docs/MAESTRO_HARNESS.md) includes the complete command flow,
+execution-plan format, provider setup and configuration examples.
+
+## From intent to evidence
 
 ```text
-/update          force a fresh check
-/update status   show the current update-check policy
-/update off      disable automatic checks
-/update on       enable automatic checks
+Explore  →  Specify  →  Build  →  Verify  →  Deliver
+  idea      contract    tasks    evidence    docs
 ```
 
-The same preference is available under `Settings → General → Update checks`.
-Set `MAESTRO_NO_UPDATE_CHECK=1` for a process-level opt-out. Network and
-registry failures remain silent during automatic checks; an explicit
-`/update` reports the failure without exposing response bodies.
+| Workspace phase | What you review |
+| --- | --- |
+| **Explore** | The problem, proposal, scope and boundaries |
+| **Specify** | Acceptance criteria, execution plan and version-bound approval |
+| **Build** | Approved tasks, dependencies, owned paths and worker contributions |
+| **Verify** | Fresh evidence against the acceptance criteria |
+| **Deliver** | Documentation and the archive decision |
 
-## Quick start
+Opening a phase only changes the view. Approval, starting work and accepting a
+contribution are explicit actions.
 
-Run Maestro from the repository you want it to understand:
+The underlying Stipulate lifecycle is
+`bootstrap → explore → validate → apply → check → docs → archive`. Maestro adapts
+the workflow engine and coordinator from
+[Stipulate Skills](https://github.com/BRYANN2K/stipulate-skills), including its
+29 domain extension bundles. Contracts and evidence live with the project.
 
-```sh
-cd my-project
-maestro
-```
+## One harness. Your models.
 
-On first use:
+Maestro runs its own built-in harness, with a forked **oh-my-pi** scheduler and
+provider adapters, a **Prime Agent** Python kernel for RLM, and **Stipulate** for
+contract-driven coordination.
 
-1. Open `/providers` and connect an API provider or an existing CLI
-   subscription.
-2. Discuss the project naturally. Use `/bootstrap` for a new project or
-   `/adopt` for an existing repository (`/onboard` remains an alias).
-3. Invoke `/propose` when the idea is ready to become a spec. If MAESTRO.md is
-   missing, Maestro completes project setup first and resumes the proposal only
-   after you accept the contract.
-4. Review and `/accept` the proposal. Maestro creates and selects an isolated
-   managed worktree automatically; then run `/build`.
-5. Complete `/review`, `/docs`, and `/archive` when the evidence is ready.
+| Connection | How it works |
+| --- | --- |
+| **Accounts** | Bundled adapters for OpenAI account access, Anthropic, Google Gemini and GitHub Copilot |
+| **API keys** | Direct provider access with credentials in Maestro's private vault |
+| **Compatible endpoints** | Custom base URL, optional key and automatic `/models` discovery |
 
-Maestro never treats an approximate chat message as permission to create a
-spec. Only `/propose` crosses that boundary.
+No external coding-agent CLI is required. Provider names such as `openai-codex`
+identify account transports; they do not select a different harness.
 
-## The development lifecycle
+The coordinator can delegate approved, scoped tasks and collect their
+contributions. Workers execute synchronously in the selected checkout;
+parallel writers are not enabled. The RLM kernel supports successive Python
+cells within a run and requires explicit code-execution permission.
 
-| Phase | What Maestro does | User control |
-| --- | --- | --- |
-| Chat | Explores the repository and clarifies intent | Read-only discovery |
-| Propose | Creates a structured `spec.md`, `design.md`, and `tasks.md` draft | Explicit `/propose` |
-| Accept | Validates the spec and creates an isolated managed worktree | Explicit acceptance; Git setup is automatic |
-| Build | Delegates implementation and tests to a development agent | Tool permissions and cancellation |
-| Review | Runs deterministic checks, security analysis, and a read-only review agent | Findings can return through `/fix` |
-| Docs | Proposes an architecture decision record | Preview before write |
-| Archive | Commits and archives an approved, reviewed change | Confirmation; merge is opt-in |
+See [provenance and execution boundaries](docs/MAESTRO_HARNESS.md#provenance-and-qualification)
+for pinned upstream revisions, licenses and qualification details.
 
-After a project contract exists, the equivalent headless lifecycle is:
+## Controls that stay out of the way
 
-```sh
-maestro propose -m "Add a PostgreSQL API"
-maestro accept
-maestro build
-maestro review
-maestro docs
-maestro archive --yes --merge
-```
+| Shortcut | Action |
+| --- | --- |
+| **Ctrl+K** | Commands and workflow actions |
+| **Ctrl+P** | Connections |
+| **Ctrl+L** | Model selection |
+| **Ctrl+G** | Conversation on smaller terminals |
+| **Tab / Shift+Tab** | Move focus |
+| **Enter** | Activate an action or send a message |
+| **Shift+Enter / Ctrl+J** | Newline |
+| **Escape** | Close a dialog; cancel a pending input prompt |
+| **Ctrl+C** | Cancel active work or clear the idle composer |
+| **Ctrl+Q** | Exit |
 
-## Start or adopt a project
+Click an underlined HTTP/HTTPS link to open it in your browser. Use the mouse
+wheel to scroll each panel. `/help`, `/providers`, `/model`, `/resume` and
+`/workflow` are also available from the composer.
 
-The transcript is the setup surface; project setup never opens a separate
-form. `/bootstrap` extracts confirmed decisions from the existing discussion
-and asks only for missing purpose, users, stack, boundaries, safety, and
-verification details. It first initializes a local Git repository on `main`
-when the selected greenfield directory does not already contain one, without
-staging files or creating a commit. `/adopt` first performs a bounded static
-analysis of an existing repository, then asks only for decisions the repository
-cannot prove. `/onboard` remains a compatibility alias for `/adopt`.
+## Project context and integrations
 
-Both flows preview the same root-level `MAESTRO.md` contract. Apart from the
-explicit `/bootstrap` Git initialization, no project file is written until the
-proposal is accepted. Repository discovery does not run installers, builds,
-tests, hooks, generators, MCP servers, or network requests. Starting `/propose`
-without a contract selects the appropriate flow, preserves the original
-proposal request, and resumes it after explicit contract acceptance. See
-[`docs/PROJECT_BOOTSTRAP.md`](docs/PROJECT_BOOTSTRAP.md).
-
-## Sessions and Git workspaces
-
-Each project has durable sessions with a concise generated title, lifecycle
-phase, selected spec, pending approvals, review evidence, and exact Git
-workspace identity.
-
-```text
-/rename API security review     rename the current session
-/resume                        browse and restore saved sessions
-/git                           select or create a worktree
-```
-
-Headless equivalents include `maestro rename <title>`, `maestro resume [id]`,
-`maestro git list`, `maestro git create <branch>`, and
-`maestro git select <path>`.
-
-## Models, providers, and reasoning
-
-Maestro routes Chat, Build, Review, and Docs independently. Each task can use a
-different model and reasoning effort from the model workspace (`Ctrl+L`) or
-Settings.
-
-- **Native engine:** Maestro runs its own agent loop and in-process sub-agents.
-  This is the default and the only engine that can expose Maestro-managed MCP
-  tools.
-- **Subscription engine:** Maestro reuses an authenticated vendor CLI such as
-  Codex, Claude, Cursor, OpenCode, Grok, or Kimi. The vendor process is still
-  constrained by Maestro's role and workspace envelope, but its capabilities
-  depend on that installed CLI.
-- **Local and compatible providers:** OpenAI-compatible endpoints and local
-  services such as Ollama, LM Studio, llama.cpp, and LiteLLM run through the
-  native engine.
-
-Use `/model` for a quick model choice, `/providers` to configure connections,
-and `/settings` for routes, reasoning, permissions, integrations, skills,
-appearance, and editor behavior. Provider credentials are stored in Maestro's
-private vault, not in `maestrorc`.
-
-## MCP integrations
-
-Maestro supports configured MCP servers over stdio, Streamable HTTP, and SSE.
-`/mcp` shows connection state and exposed tools. Every MCP tool is namespaced,
-treated as untrusted, and approval-gated. Name collisions fail closed.
-
-MCP tools are available only to eligible roles on the native engine; Review
-remains read-only and Skills/Learn do not inherit MCP authority. Switching
-workspaces closes and recreates MCP clients with the new working directory.
-
-```text
-/mcp list
-/mcp tools all
-/mcp reconnect github
-```
-
-## Agent Skills
-
-Maestro discovers standard `SKILL.md` metadata from project and user skill
-roots. Skills are never selected automatically: the user must inspect or run a
-qualified skill ID explicitly.
-
-```text
-/skills list
-/skills show project:security-review
-/skills disable project:security-review --scope=project
-/skills run project:security-review
-```
-
-Running a Skill is a read-only task. Skill instructions and `allowed-tools`
-metadata cannot grant additional file authority, writes, shell, Git, network,
-MCP, or secret access. See
-[`docs/SKILLS.md`](docs/SKILLS.md) for discovery limits and collision rules.
-
-## Learn and Coach
-
-Coach is an optional, project-local learning layer for developers who want to
-move from approximate prompting to evidence-based AI development. It offers one
-short exercise at natural lifecycle breakpoints and never blocks delivery.
-
-```text
-/learn guided
-/learn challenge
-/learn next
-/learn done
-/learn later
-/learn status
-/learn off
-```
-
-`/learn <path> [--deep]` explains a bounded source snapshot and stages a
-reviewable learning note. Source explanation uses a native/API route with zero
-tools and no MCP; subscription routes fail closed because Maestro cannot prove
-their filesystem confinement. The teaching model is documented in
-[`docs/COACH_DESIGN.md`](docs/COACH_DESIGN.md).
-
-## Integrated code workspace
-
-Use `/ide` to move between conversation and code without leaving the terminal.
-The workspace includes a file tree, multiple buffers, syntax highlighting, Git
-gutter, Markdown preview, selection actions, and proposal review. Select code
-and choose **Ask Maestro**, **Explain**, **Modify with Maestro**, or **Comment**;
-the selected source is added as bounded context.
-
-The editor opens in standard mode. Vim behavior is opt-in under
-`Settings → Editor mode`. `/follow` controls live navigation when an agent reads
-or changes a source location.
-
-## Focus-first output
-
-Chat, Coach, and Learn put the result or next action first, keep instructions
-bounded, and make `Done`, `State`, `Blocked`, `Cause`, `Fix`, and `Next`
-explicit. This presentation is a readability feature, not a diagnosis, and it
-never rewrites code or machine-readable output. See
-[`docs/ADHD_OUTPUT.md`](docs/ADHD_OUTPUT.md).
-
-## Security model
-
-- Chat and Review receive read-only built-in repository tools; any external MCP
-  action still passes through the configured permission gate.
-- File proposals are staged and previewed before they are applied.
-- Git operations validate repository and workspace identity and fail closed on
-  ambiguous or dirty state.
-- Sessions, checkpoints, Skill state, and credentials use private, atomic
-  local storage.
-- Provider and MCP output, repository instructions, Skill bodies, paths, and
-  terminal text are treated as untrusted input.
-- Cancellation propagates through active agents and subprocesses.
-- Review evidence is persisted and bound to the exact Git state it evaluated.
-
-Read the full boundary and known limitations in
-[`docs/PRODUCTION_READINESS.md`](docs/PRODUCTION_READINESS.md).
-
-## Configuration
-
-Maestro merges a user `maestrorc` with `./maestrorc` and `./.maestrorc`; the
-hidden project file has the highest priority. Use the CLI or Settings for
-credentials rather than writing API keys into configuration files.
-
-```text
-provider add local --type ollama --base-url "http://localhost:11434"
-model add local/qwen3-coder --name "Qwen 3 Coder" --context-window 32768 --can-reason
-
-modelRoles:
-  default: local/qwen3-coder --reasoning-effort medium
-
-mcp add docs --type stdio --command "my-docs-mcp"
-permissions deny bash
-```
-
-Run `maestro help` for the complete CLI surface and use `/help` for the
-canonical TUI command list.
+- **Sessions and worktrees:** saved sessions retain their workspace identity;
+  approvals are not transferred to a different branch.
+- **MCP:** stdio, Streamable HTTP and SSE integrations with namespaced,
+  approval-gated tools.
+- **Agent Skills:** discover and explicitly select project or user `SKILL.md`
+  instructions. Skill text cannot grant extra tool authority.
+- **Configuration:** user and project `maestrorc` files configure providers,
+  models, routes, budgets and integrations. Credentials belong in the vault.
+- **Classic interface:** `maestro tui --classic` retains the earlier Bubble Tea
+  interface and editor, using the same Maestro harness. The default Files view
+  is a read-only source preview.
 
 ## Documentation
 
-- [Architecture](docs/ARCHITECTURE.md)
-- [Project bootstrap and adoption](docs/PROJECT_BOOTSTRAP.md)
-- [Coach design](docs/COACH_DESIGN.md)
-- [Agent Skills](docs/SKILLS.md)
-- [Focus-first output](docs/ADHD_OUTPUT.md)
-- [Production readiness](docs/PRODUCTION_READINESS.md)
-- [Changelog](CHANGELOG.md)
+| Guide | Contents |
+| --- | --- |
+| [Terminal workspace](docs/TUI.md) | Layout, controls, links and connection flow |
+| [Maestro harness](docs/MAESTRO_HARNESS.md) | Providers, Stipulate, RLM, commands and provenance |
+| [Architecture](docs/ARCHITECTURE.md) | Components and ownership boundaries |
+| [Agent Skills](docs/SKILLS.md) | Discovery, selection and tool limits |
+| [Production readiness](docs/PRODUCTION_READINESS.md) | Release gates and known limits |
+| [Changelog](CHANGELOG.md) | Project changes |
 
 ## Development
 
 ```sh
-make test           # unit and integration tests
-make lint           # gofmt, goimports, vet, and staticcheck
-make check          # lint plus race-enabled tests
-make release-check  # complete local release gate
-make build          # bin/maestro
+make build          # build the complete local bundle
+make test           # Go tests with the race detector
+make runtime-test   # compiled harness and workflow integration
+make ui-test        # renderer, TypeScript, host and production PTY tests
+make check          # Go, launcher, runtime and UI checks
+make release-check  # release checks, vulnerabilities and npm package inspection
 ```
 
-## Support the project
+Local HTTP fixtures verify routing and streaming without claiming live account
+or billing qualification. Native OAuth and foreign-platform execution require
+separate testing. See the [terminal guide](docs/TUI.md) and
+[readiness notes](docs/PRODUCTION_READINESS.md) for details.
 
-Maestro is free, open source, and released under the [MIT License](LICENSE). If
-it earns a place in your workflow,
-[follow **@bryann2k_dev** on X](https://x.com/bryann2k_dev). That's all I ask in
-return.
+---
 
-Found a bug or have an idea?
-[Open an issue](https://github.com/BRYANN2K/maestro/issues).
+<p align="center">
+  Built by <a href="https://github.com/BRYANN2K">BRYANN2K</a> ·
+  <a href="https://x.com/bryann2k_dev">Follow the project</a> ·
+  <a href="https://github.com/BRYANN2K/maestro/issues">Report an issue</a><br>
+  Open source under the <a href="LICENSE">MIT License</a>.
+</p>

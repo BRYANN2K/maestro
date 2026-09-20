@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "extension": "quality-engineering",
+  "purpose": "Editorial cases for human or agent evaluation; structural tests do not establish these decisions.",
+  "cases": [
+    {
+      "id": "relevant",
+      "prompt": "define a test strategy for a migration with multiple failure modes.",
+      "expected": "select",
+      "reason": "Choose checks that reduce actual risks and link their results to acceptance criteria."
+    },
+    {
+      "id": "irrelevant",
+      "prompt": "add an implementation-mirroring check for an already inspected trivial text edit without a distinct risk.",
+      "expected": "do-not-select",
+      "reason": "No responsibility of this domain is affected."
+    },
+    {
+      "id": "existing",
+      "prompt": "define a test strategy for a migration with multiple failure modes. The project already has an implementation and evidence of this capability, but no dedicated document.",
+      "expected": "inspect-and-reuse",
+      "reason": "Inspect evidence, classify coverage, and address only gaps; missing documentation does not mean the domain practice is absent."
+    },
+    {
+      "id": "insufficient",
+      "prompt": "All executed tests pass, but the only test covering the critical risk was disabled.",
+      "expected": "failed-or-unverified",
+      "reason": "Compare against the approved criterion outcome; producing a file does not establish that the outcome was achieved."
+    }
+  ]
+}

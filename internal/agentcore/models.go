@@ -5,6 +5,7 @@ import "strings"
 // Model metadata and sampling are shared by the registry, provider loop,
 // role router, and TUI usage display.
 type Model struct {
+	Efforts          []string `json:",omitempty"`
 	ID               string
 	Name             string
 	ContextWindow    int

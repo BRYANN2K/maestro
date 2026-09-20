@@ -1,12 +1,14 @@
 package tui
 
 import (
+	"context"
 	"strings"
 	"testing"
 
 	"charm.land/lipgloss/v2"
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/bryann2k/maestro/internal/orchestrator"
 	"github.com/bryann2k/maestro/internal/settings"
 )
 
@@ -27,32 +29,21 @@ func TestTaskModelOverlayPersistsNativeRoute(t *testing.T) {
 	}
 }
 
-func TestTaskModelOverlayPersistsSubscriptionRoute(t *testing.T) {
+func TestTaskModelOverlayRejectsRetiredRoute(t *testing.T) {
 	m, _ := newTestModel(t)
-	o := &taskModelOverlay{
-		tasks: taskRoutes,
-		task:  2,
-		sources: []modelSource{{
-			id: "codex", label: "Codex", kind: "subscription", agent: "codex",
-			ready: true, installed: true, models: []routeModel{{id: "gpt-test", name: "GPT Test", efforts: []string{"auto", "high"}}},
-		}},
-		reasoning: 1,
-	}
-	o.apply(m)
-	route := m.orch.SettingsSnapshot().RoleDefaults[settings.RoleReviewer]
-	if route.Engine != "legacy" || route.Agent != "codex" || route.Model != "gpt-test" || route.ReasoningEffort != "high" {
-		t.Fatalf("review route = %+v", route)
+	if err := m.orch.SetTaskModel(m.ctx(), settings.RoleReviewer, "legacy", "codex", "test"); err == nil {
+		t.Fatal("external harness accepted")
 	}
 }
 
 func TestBuildEnginePickerStartsOnPersistedTaskRoute(t *testing.T) {
 	m, _ := newTestModel(t)
-	if err := m.orch.SetTaskModel(m.ctx(), settings.RoleDev, "legacy", "claude", "sonnet"); err != nil {
+	if err := m.orch.SetTaskModel(m.ctx(), settings.RoleDev, "native", "", "anthropic/sonnet"); err != nil {
 		t.Fatalf("SetTaskModel: %v", err)
 	}
 	o := newEngineOverlay(m.orch, settings.RoleDev)
 	choice, ok := o.selectedChoice()
-	if !ok || choice.Engine != "legacy" || choice.Agent != "claude" {
+	if !ok || choice.Engine != "native" || choice.Agent != "" {
 		t.Fatalf("selected engine = %+v, ok=%v", choice, ok)
 	}
 }
@@ -76,13 +67,22 @@ func TestModelWorkspaceMouseChangesTask(t *testing.T) {
 }
 
 func TestProvidersSlashOpensWorkspace(t *testing.T) {
+	original := providerCardsLoader
+	providerCardsLoader = func(context.Context, *orchestrator.Orchestrator) ([]providerCard, error) {
+		return []providerCard{{id: "codex", label: "Codex · ChatGPT plan", kind: "subscription", installed: true}}, nil
+	}
+	defer func() { providerCardsLoader = original }()
 	m, _ := newTestModel(t)
 	feed(m, tea.WindowSizeMsg{Width: 140, Height: 36})
 	m.input.Set("/providers")
-	feed(m, tea.KeyMsg{Type: tea.KeyEnter})
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	if m.overlay != overlayProviders {
 		t.Fatalf("overlay = %v, want providers", m.overlay)
 	}
+	if cmd == nil {
+		t.Fatal("provider workspace did not schedule its status snapshot")
+	}
+	m.Update(cmd())
 	view := stripANSI(m.View())
 	if !strings.Contains(view, "PROVIDER WORKSPACE") || !strings.Contains(view, "Codex · ChatGPT plan") {
 		t.Fatalf("provider workspace missing from view: %q", view[:min(len(view), 900)])

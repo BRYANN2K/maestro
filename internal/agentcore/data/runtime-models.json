@@ -1,0 +1,3678 @@
+{
+  "openai-codex": [
+    {
+      "ID": "gpt-5.5",
+      "Name": "GPT-5.5",
+      "ContextWindow": 272000,
+      "DefaultMaxTokens": 128000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 5,
+      "PriceOutput": 30,
+      "PriceCacheHit": 0.5,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ]
+    },
+    {
+      "ID": "gpt-5.6-luna",
+      "Name": "GPT-5.6 Luna",
+      "ContextWindow": 1000000,
+      "DefaultMaxTokens": 128000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 0.2,
+      "PriceOutput": 1.2,
+      "PriceCacheHit": 0.02,
+      "PriceCacheCreate": 0.25,
+      "Efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "ID": "gpt-5.6-sol",
+      "Name": "GPT-5.6 Sol",
+      "ContextWindow": 1000000,
+      "DefaultMaxTokens": 128000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 4,
+      "PriceOutput": 20,
+      "PriceCacheHit": 0.4,
+      "PriceCacheCreate": 5,
+      "Efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "ID": "gpt-5.6-terra",
+      "Name": "GPT-5.6 Terra",
+      "ContextWindow": 1000000,
+      "DefaultMaxTokens": 128000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 2,
+      "PriceOutput": 12,
+      "PriceCacheHit": 0.2,
+      "PriceCacheCreate": 2.5,
+      "Efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "ID": "gpt-6-astra",
+      "Name": "GPT-6 Astra",
+      "ContextWindow": 272000,
+      "DefaultMaxTokens": 128000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 10,
+      "PriceOutput": 50,
+      "PriceCacheHit": 1,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "ID": "gpt-daybreak-blue-latest",
+      "Name": "Daybreak Blue",
+      "ContextWindow": 272000,
+      "DefaultMaxTokens": 128000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 5,
+      "PriceOutput": 30,
+      "PriceCacheHit": 0.5,
+      "PriceCacheCreate": 6.25,
+      "Efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    }
+  ],
+  "google-gemini-cli": [
+    {
+      "ID": "gemini-2.0-flash",
+      "Name": "Gemini 2.0 Flash",
+      "ContextWindow": 1048576,
+      "DefaultMaxTokens": 8192,
+      "CanReason": false,
+      "SupportsImages": true,
+      "PriceInput": 0,
+      "PriceOutput": 0,
+      "PriceCacheHit": 0,
+      "PriceCacheCreate": 0,
+      "Efforts": []
+    },
+    {
+      "ID": "gemini-2.5-flash",
+      "Name": "Gemini 2.5 Flash",
+      "ContextWindow": 1048576,
+      "DefaultMaxTokens": 65536,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 0,
+      "PriceOutput": 0,
+      "PriceCacheHit": 0,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "ID": "gemini-2.5-pro",
+      "Name": "Gemini 2.5 Pro",
+      "ContextWindow": 1048576,
+      "DefaultMaxTokens": 65536,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 0,
+      "PriceOutput": 0,
+      "PriceCacheHit": 0,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "ID": "gemini-3-flash-preview",
+      "Name": "Gemini 3 Flash Preview",
+      "ContextWindow": 1048576,
+      "DefaultMaxTokens": 65536,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 0,
+      "PriceOutput": 0,
+      "PriceCacheHit": 0,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "ID": "gemini-3-pro-preview",
+      "Name": "Gemini 3 Pro Preview",
+      "ContextWindow": 1000000,
+      "DefaultMaxTokens": 64000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 0,
+      "PriceOutput": 0,
+      "PriceCacheHit": 0,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "low",
+        "high"
+      ]
+    },
+    {
+      "ID": "gemini-3.1-flash-lite-preview",
+      "Name": "Gemini 3.1 Flash Lite Preview",
+      "ContextWindow": 1048576,
+      "DefaultMaxTokens": 65536,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 0,
+      "PriceOutput": 0,
+      "PriceCacheHit": 0,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "ID": "gemini-3.1-pro-preview",
+      "Name": "Gemini 3.1 Pro Preview",
+      "ContextWindow": 1048576,
+      "DefaultMaxTokens": 65536,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 0,
+      "PriceOutput": 0,
+      "PriceCacheHit": 0,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "low",
+        "high"
+      ]
+    }
+  ],
+  "github-copilot": [
+    {
+      "ID": "claude-fable-5",
+      "Name": "Claude Fable 5",
+      "ContextWindow": 1000000,
+      "DefaultMaxTokens": 128000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 10,
+      "PriceOutput": 50,
+      "PriceCacheHit": 1,
+      "PriceCacheCreate": 12.5,
+      "Efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "ID": "claude-fable-5.1",
+      "Name": "Claude Fable 5.1",
+      "ContextWindow": 1000000,
+      "DefaultMaxTokens": 128000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 10,
+      "PriceOutput": 50,
+      "PriceCacheHit": 0.25,
+      "PriceCacheCreate": 12.5,
+      "Efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "ID": "claude-haiku-4.5",
+      "Name": "Claude Haiku 4.5",
+      "ContextWindow": 200000,
+      "DefaultMaxTokens": 64000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 1,
+      "PriceOutput": 5,
+      "PriceCacheHit": 0.1,
+      "PriceCacheCreate": 1.25,
+      "Efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ]
+    },
+    {
+      "ID": "claude-opus-4.5",
+      "Name": "Claude Opus 4.5",
+      "ContextWindow": 200000,
+      "DefaultMaxTokens": 32000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 5,
+      "PriceOutput": 25,
+      "PriceCacheHit": 0.5,
+      "PriceCacheCreate": 6.25,
+      "Efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ]
+    },
+    {
+      "ID": "claude-opus-4.6",
+      "Name": "Claude Opus 4.6",
+      "ContextWindow": 168000,
+      "DefaultMaxTokens": 32000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 5,
+      "PriceOutput": 25,
+      "PriceCacheHit": 0.5,
+      "PriceCacheCreate": 6.25,
+      "Efforts": [
+        "low",
+        "medium",
+        "high",
+        "max"
+      ]
+    },
+    {
+      "ID": "claude-opus-4.7",
+      "Name": "Claude Opus 4.7",
+      "ContextWindow": 200000,
+      "DefaultMaxTokens": 32000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 5,
+      "PriceOutput": 25,
+      "PriceCacheHit": 0.5,
+      "PriceCacheCreate": 6.25,
+      "Efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "ID": "claude-opus-4.8",
+      "Name": "Claude Opus 4.8",
+      "ContextWindow": 200000,
+      "DefaultMaxTokens": 64000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 5,
+      "PriceOutput": 25,
+      "PriceCacheHit": 0.5,
+      "PriceCacheCreate": 6.25,
+      "Efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "ID": "claude-opus-5",
+      "Name": "Claude Opus 5",
+      "ContextWindow": 1000000,
+      "DefaultMaxTokens": 64000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 5,
+      "PriceOutput": 25,
+      "PriceCacheHit": 0.5,
+      "PriceCacheCreate": 6.25,
+      "Efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "ID": "claude-sonnet-4",
+      "Name": "Claude Sonnet 4",
+      "ContextWindow": 216000,
+      "DefaultMaxTokens": 16000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 3,
+      "PriceOutput": 15,
+      "PriceCacheHit": 0.3,
+      "PriceCacheCreate": 3.75,
+      "Efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ]
+    },
+    {
+      "ID": "claude-sonnet-4.5",
+      "Name": "Claude Sonnet 4.5",
+      "ContextWindow": 200000,
+      "DefaultMaxTokens": 32000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 3,
+      "PriceOutput": 15,
+      "PriceCacheHit": 0.3,
+      "PriceCacheCreate": 3.75,
+      "Efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ]
+    },
+    {
+      "ID": "claude-sonnet-4.6",
+      "Name": "Claude Sonnet 4.6",
+      "ContextWindow": 200000,
+      "DefaultMaxTokens": 32000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 3,
+      "PriceOutput": 15,
+      "PriceCacheHit": 0.3,
+      "PriceCacheCreate": 3.75,
+      "Efforts": [
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "ID": "claude-sonnet-5",
+      "Name": "Claude Sonnet 5",
+      "ContextWindow": 1000000,
+      "DefaultMaxTokens": 128000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 2,
+      "PriceOutput": 10,
+      "PriceCacheHit": 0.2,
+      "PriceCacheCreate": 2.5,
+      "Efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "ID": "gemini-2.5-pro",
+      "Name": "Gemini 2.5 Pro",
+      "ContextWindow": 128000,
+      "DefaultMaxTokens": 64000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 1.25,
+      "PriceOutput": 10,
+      "PriceCacheHit": 0.125,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "ID": "gemini-3-flash-preview",
+      "Name": "Gemini 3 Flash Preview",
+      "ContextWindow": 128000,
+      "DefaultMaxTokens": 64000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 0.5,
+      "PriceOutput": 3,
+      "PriceCacheHit": 0.05,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "ID": "gemini-3-pro-preview",
+      "Name": "Gemini 3 Pro Preview",
+      "ContextWindow": 128000,
+      "DefaultMaxTokens": 64000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 0,
+      "PriceOutput": 0,
+      "PriceCacheHit": 0,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "low",
+        "high"
+      ]
+    },
+    {
+      "ID": "gemini-3.1-pro-preview",
+      "Name": "Gemini 3.1 Pro Preview",
+      "ContextWindow": 1000000,
+      "DefaultMaxTokens": 64000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 2,
+      "PriceOutput": 12,
+      "PriceCacheHit": 0.2,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "low",
+        "high"
+      ]
+    },
+    {
+      "ID": "gemini-3.5-flash",
+      "Name": "Gemini 3.5 Flash",
+      "ContextWindow": 200000,
+      "DefaultMaxTokens": 64000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 1.5,
+      "PriceOutput": 9,
+      "PriceCacheHit": 0.15,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "ID": "gemini-3.6-flash",
+      "Name": "Gemini 3.6 Flash",
+      "ContextWindow": 1000000,
+      "DefaultMaxTokens": 64000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 0.75,
+      "PriceOutput": 3.75,
+      "PriceCacheHit": 0.075,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "ID": "gemini-3.7-flash",
+      "Name": "Gemini 3.7 Flash",
+      "ContextWindow": 1000000,
+      "DefaultMaxTokens": 64000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 0.75,
+      "PriceOutput": 3.75,
+      "PriceCacheHit": 0.075,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "ID": "gemini-3.8-flash",
+      "Name": "Gemini 3.8 Flash",
+      "ContextWindow": 1000000,
+      "DefaultMaxTokens": 64000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 0.75,
+      "PriceOutput": 3.75,
+      "PriceCacheHit": 0.075,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "ID": "gpt-4.1",
+      "Name": "GPT-4.1",
+      "ContextWindow": 128000,
+      "DefaultMaxTokens": 16384,
+      "CanReason": false,
+      "SupportsImages": true,
+      "PriceInput": 2,
+      "PriceOutput": 8,
+      "PriceCacheHit": 0.5,
+      "PriceCacheCreate": 0,
+      "Efforts": []
+    },
+    {
+      "ID": "gpt-4o",
+      "Name": "GPT-4o",
+      "ContextWindow": 128000,
+      "DefaultMaxTokens": 4096,
+      "CanReason": false,
+      "SupportsImages": true,
+      "PriceInput": 0,
+      "PriceOutput": 0,
+      "PriceCacheHit": 0,
+      "PriceCacheCreate": 0,
+      "Efforts": []
+    },
+    {
+      "ID": "gpt-5",
+      "Name": "GPT-5",
+      "ContextWindow": 128000,
+      "DefaultMaxTokens": 128000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 0,
+      "PriceOutput": 0,
+      "PriceCacheHit": 0,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "ID": "gpt-5-mini",
+      "Name": "GPT-5 Mini",
+      "ContextWindow": 264000,
+      "DefaultMaxTokens": 64000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 0.25,
+      "PriceOutput": 2,
+      "PriceCacheHit": 0.025,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "ID": "gpt-5.1",
+      "Name": "GPT-5.1",
+      "ContextWindow": 264000,
+      "DefaultMaxTokens": 64000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 0,
+      "PriceOutput": 0,
+      "PriceCacheHit": 0,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "ID": "gpt-5.1-codex",
+      "Name": "GPT-5.1 Codex",
+      "ContextWindow": 272000,
+      "DefaultMaxTokens": 128000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 0,
+      "PriceOutput": 0,
+      "PriceCacheHit": 0,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "ID": "gpt-5.1-codex-max",
+      "Name": "GPT-5.1 Codex Max",
+      "ContextWindow": 272000,
+      "DefaultMaxTokens": 128000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 0,
+      "PriceOutput": 0,
+      "PriceCacheHit": 0,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "ID": "gpt-5.1-codex-mini",
+      "Name": "GPT-5.1 Codex Mini",
+      "ContextWindow": 272000,
+      "DefaultMaxTokens": 128000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 0,
+      "PriceOutput": 0,
+      "PriceCacheHit": 0,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "ID": "gpt-5.2",
+      "Name": "GPT-5.2",
+      "ContextWindow": 272000,
+      "DefaultMaxTokens": 128000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 1.75,
+      "PriceOutput": 14,
+      "PriceCacheHit": 0.175,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ]
+    },
+    {
+      "ID": "gpt-5.2-codex",
+      "Name": "GPT-5.2 Codex",
+      "ContextWindow": 272000,
+      "DefaultMaxTokens": 128000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 1.75,
+      "PriceOutput": 14,
+      "PriceCacheHit": 0.175,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ]
+    },
+    {
+      "ID": "gpt-5.3-codex",
+      "Name": "GPT-5.3 Codex",
+      "ContextWindow": 272000,
+      "DefaultMaxTokens": 128000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 1.75,
+      "PriceOutput": 14,
+      "PriceCacheHit": 0.175,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ]
+    },
+    {
+      "ID": "gpt-5.4",
+      "Name": "GPT-5.4",
+      "ContextWindow": 272000,
+      "DefaultMaxTokens": 128000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 2.5,
+      "PriceOutput": 15,
+      "PriceCacheHit": 0.25,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ]
+    },
+    {
+      "ID": "gpt-5.4-mini",
+      "Name": "GPT-5.4 mini",
+      "ContextWindow": 272000,
+      "DefaultMaxTokens": 128000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 0.75,
+      "PriceOutput": 4.5,
+      "PriceCacheHit": 0.075,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ]
+    },
+    {
+      "ID": "gpt-5.4-nano",
+      "Name": "GPT-5.4 nano",
+      "ContextWindow": 400000,
+      "DefaultMaxTokens": 128000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 0.2,
+      "PriceOutput": 1.25,
+      "PriceCacheHit": 0.02,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ]
+    },
+    {
+      "ID": "gpt-5.5",
+      "Name": "GPT-5.5",
+      "ContextWindow": 1050000,
+      "DefaultMaxTokens": 128000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 5,
+      "PriceOutput": 30,
+      "PriceCacheHit": 0.5,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ]
+    },
+    {
+      "ID": "gpt-5.6-luna",
+      "Name": "GPT-5.6 Luna",
+      "ContextWindow": 1050000,
+      "DefaultMaxTokens": 128000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 0.2,
+      "PriceOutput": 1.2,
+      "PriceCacheHit": 0.02,
+      "PriceCacheCreate": 0.25,
+      "Efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "ID": "gpt-5.6-sol",
+      "Name": "GPT-5.6 Sol",
+      "ContextWindow": 1050000,
+      "DefaultMaxTokens": 128000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 4,
+      "PriceOutput": 20,
+      "PriceCacheHit": 0.4,
+      "PriceCacheCreate": 5,
+      "Efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "ID": "gpt-5.6-terra",
+      "Name": "GPT-5.6 Terra",
+      "ContextWindow": 1050000,
+      "DefaultMaxTokens": 128000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 2,
+      "PriceOutput": 12,
+      "PriceCacheHit": 0.2,
+      "PriceCacheCreate": 2.5,
+      "Efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "ID": "gpt-6-astra",
+      "Name": "GPT-6 Astra",
+      "ContextWindow": 1050000,
+      "DefaultMaxTokens": 128000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 10,
+      "PriceOutput": 50,
+      "PriceCacheHit": 1,
+      "PriceCacheCreate": 12.5,
+      "Efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "ID": "grok-4.5",
+      "Name": "Grok 4.5",
+      "ContextWindow": 500000,
+      "DefaultMaxTokens": 128000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 2,
+      "PriceOutput": 6,
+      "PriceCacheHit": 0.5,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ]
+    },
+    {
+      "ID": "grok-4.6",
+      "Name": "Grok 4.6",
+      "ContextWindow": 500000,
+      "DefaultMaxTokens": 128000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 2,
+      "PriceOutput": 6,
+      "PriceCacheHit": 0.5,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ]
+    },
+    {
+      "ID": "grok-code-fast-1",
+      "Name": "Grok Code Fast 1",
+      "ContextWindow": 192000,
+      "DefaultMaxTokens": 64000,
+      "CanReason": true,
+      "SupportsImages": false,
+      "PriceInput": 0,
+      "PriceOutput": 0,
+      "PriceCacheHit": 0,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ]
+    },
+    {
+      "ID": "kimi-k2.7-code",
+      "Name": "Kimi K2.7 Code",
+      "ContextWindow": 256000,
+      "DefaultMaxTokens": 32000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 0.95,
+      "PriceOutput": 4,
+      "PriceCacheHit": 0.19,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "ID": "kimi-k3",
+      "Name": "Kimi K3",
+      "ContextWindow": 1048576,
+      "DefaultMaxTokens": 131072,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 3,
+      "PriceOutput": 15,
+      "PriceCacheHit": 0.3,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "low",
+        "high",
+        "max"
+      ]
+    },
+    {
+      "ID": "mai-code-1-flash-picker",
+      "Name": "MAI-Code-1-Flash",
+      "ContextWindow": 256000,
+      "DefaultMaxTokens": 128000,
+      "CanReason": true,
+      "SupportsImages": false,
+      "PriceInput": 0.75,
+      "PriceOutput": 4.5,
+      "PriceCacheHit": 0.075,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ]
+    },
+    {
+      "ID": "mai-code-1.1-flash",
+      "Name": "MAI-Code-1.1-Flash",
+      "ContextWindow": 256000,
+      "DefaultMaxTokens": 128000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 0.2,
+      "PriceOutput": 1.2,
+      "PriceCacheHit": 0.02,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ]
+    },
+    {
+      "ID": "raptor-mini",
+      "Name": "Raptor mini",
+      "ContextWindow": 400000,
+      "DefaultMaxTokens": 128000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 0.25,
+      "PriceOutput": 2,
+      "PriceCacheHit": 0.025,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ]
+    }
+  ],
+  "anthropic": [
+    {
+      "ID": "claude-3-5-sonnet-20240620",
+      "Name": "Claude Sonnet 3.5",
+      "ContextWindow": 200000,
+      "DefaultMaxTokens": 8192,
+      "CanReason": false,
+      "SupportsImages": true,
+      "PriceInput": 3,
+      "PriceOutput": 15,
+      "PriceCacheHit": 0.3,
+      "PriceCacheCreate": 3.75,
+      "Efforts": []
+    },
+    {
+      "ID": "claude-3-5-sonnet-20241022",
+      "Name": "Claude Sonnet 3.5 v2",
+      "ContextWindow": 200000,
+      "DefaultMaxTokens": 8192,
+      "CanReason": false,
+      "SupportsImages": true,
+      "PriceInput": 3,
+      "PriceOutput": 15,
+      "PriceCacheHit": 0.3,
+      "PriceCacheCreate": 3.75,
+      "Efforts": []
+    },
+    {
+      "ID": "claude-3-haiku-20240307",
+      "Name": "Claude Haiku 3",
+      "ContextWindow": 200000,
+      "DefaultMaxTokens": 4096,
+      "CanReason": false,
+      "SupportsImages": true,
+      "PriceInput": 0.25,
+      "PriceOutput": 1.25,
+      "PriceCacheHit": 0.03,
+      "PriceCacheCreate": 0.3,
+      "Efforts": []
+    },
+    {
+      "ID": "claude-fable-5",
+      "Name": "Claude Fable 5",
+      "ContextWindow": 1000000,
+      "DefaultMaxTokens": 128000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 10,
+      "PriceOutput": 50,
+      "PriceCacheHit": 1,
+      "PriceCacheCreate": 12.5,
+      "Efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "ID": "claude-fable-5-1",
+      "Name": "Claude Fable 5.1",
+      "ContextWindow": 1000000,
+      "DefaultMaxTokens": 128000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 10,
+      "PriceOutput": 50,
+      "PriceCacheHit": 0.25,
+      "PriceCacheCreate": 12.5,
+      "Efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "ID": "claude-haiku-4-5",
+      "Name": "Claude Haiku 4.5",
+      "ContextWindow": 200000,
+      "DefaultMaxTokens": 64000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 1,
+      "PriceOutput": 5,
+      "PriceCacheHit": 0.1,
+      "PriceCacheCreate": 1.25,
+      "Efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ]
+    },
+    {
+      "ID": "claude-haiku-4-5-20251001",
+      "Name": "Claude Haiku 4.5",
+      "ContextWindow": 200000,
+      "DefaultMaxTokens": 64000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 1,
+      "PriceOutput": 5,
+      "PriceCacheHit": 0.1,
+      "PriceCacheCreate": 1.25,
+      "Efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ]
+    },
+    {
+      "ID": "claude-mythos-5",
+      "Name": "Claude Mythos 5",
+      "ContextWindow": 1000000,
+      "DefaultMaxTokens": 128000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 10,
+      "PriceOutput": 50,
+      "PriceCacheHit": 1,
+      "PriceCacheCreate": 12.5,
+      "Efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "ID": "claude-mythos-5-1",
+      "Name": "Claude Mythos 5.1",
+      "ContextWindow": 1000000,
+      "DefaultMaxTokens": 128000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 10,
+      "PriceOutput": 50,
+      "PriceCacheHit": 0.25,
+      "PriceCacheCreate": 12.5,
+      "Efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "ID": "claude-opus-4-0",
+      "Name": "Claude Opus 4",
+      "ContextWindow": 200000,
+      "DefaultMaxTokens": 32000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 15,
+      "PriceOutput": 75,
+      "PriceCacheHit": 1.5,
+      "PriceCacheCreate": 18.75,
+      "Efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ]
+    },
+    {
+      "ID": "claude-opus-4-1",
+      "Name": "Claude Opus 4.1",
+      "ContextWindow": 200000,
+      "DefaultMaxTokens": 32000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 15,
+      "PriceOutput": 75,
+      "PriceCacheHit": 1.5,
+      "PriceCacheCreate": 18.75,
+      "Efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ]
+    },
+    {
+      "ID": "claude-opus-4-1-20250805",
+      "Name": "Claude 4.1 Opus",
+      "ContextWindow": 200000,
+      "DefaultMaxTokens": 32000,
+      "CanReason": false,
+      "SupportsImages": true,
+      "PriceInput": 15,
+      "PriceOutput": 75,
+      "PriceCacheHit": 1.5,
+      "PriceCacheCreate": 18.75,
+      "Efforts": []
+    },
+    {
+      "ID": "claude-opus-4-20250514",
+      "Name": "Claude 4 Opus",
+      "ContextWindow": 200000,
+      "DefaultMaxTokens": 32000,
+      "CanReason": false,
+      "SupportsImages": true,
+      "PriceInput": 15,
+      "PriceOutput": 75,
+      "PriceCacheHit": 1.5,
+      "PriceCacheCreate": 18.75,
+      "Efforts": []
+    },
+    {
+      "ID": "claude-opus-4-5",
+      "Name": "Claude Opus 4.5",
+      "ContextWindow": 200000,
+      "DefaultMaxTokens": 64000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 5,
+      "PriceOutput": 25,
+      "PriceCacheHit": 0.5,
+      "PriceCacheCreate": 6.25,
+      "Efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ]
+    },
+    {
+      "ID": "claude-opus-4-5-20251101",
+      "Name": "Claude Opus 4.5",
+      "ContextWindow": 200000,
+      "DefaultMaxTokens": 64000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 5,
+      "PriceOutput": 25,
+      "PriceCacheHit": 0.5,
+      "PriceCacheCreate": 6.25,
+      "Efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ]
+    },
+    {
+      "ID": "claude-opus-4-6",
+      "Name": "Claude Opus 4.6",
+      "ContextWindow": 1000000,
+      "DefaultMaxTokens": 128000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 5,
+      "PriceOutput": 25,
+      "PriceCacheHit": 0.5,
+      "PriceCacheCreate": 6.25,
+      "Efforts": [
+        "low",
+        "medium",
+        "high",
+        "max"
+      ]
+    },
+    {
+      "ID": "claude-opus-4-7",
+      "Name": "Claude Opus 4.7",
+      "ContextWindow": 1000000,
+      "DefaultMaxTokens": 128000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 5,
+      "PriceOutput": 25,
+      "PriceCacheHit": 0.5,
+      "PriceCacheCreate": 6.25,
+      "Efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "ID": "claude-opus-4-8",
+      "Name": "Claude Opus 4.8",
+      "ContextWindow": 1000000,
+      "DefaultMaxTokens": 128000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 5,
+      "PriceOutput": 25,
+      "PriceCacheHit": 0.5,
+      "PriceCacheCreate": 6.25,
+      "Efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "ID": "claude-opus-5",
+      "Name": "Claude Opus 5",
+      "ContextWindow": 1000000,
+      "DefaultMaxTokens": 128000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 5,
+      "PriceOutput": 25,
+      "PriceCacheHit": 0.5,
+      "PriceCacheCreate": 6.25,
+      "Efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "ID": "claude-sonnet-4-0",
+      "Name": "Claude Sonnet 4",
+      "ContextWindow": 200000,
+      "DefaultMaxTokens": 64000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 3,
+      "PriceOutput": 15,
+      "PriceCacheHit": 0.3,
+      "PriceCacheCreate": 3.75,
+      "Efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ]
+    },
+    {
+      "ID": "claude-sonnet-4-20250514",
+      "Name": "Claude 4 Sonnet",
+      "ContextWindow": 200000,
+      "DefaultMaxTokens": 64000,
+      "CanReason": false,
+      "SupportsImages": true,
+      "PriceInput": 3,
+      "PriceOutput": 15,
+      "PriceCacheHit": 0.3,
+      "PriceCacheCreate": 3.75,
+      "Efforts": []
+    },
+    {
+      "ID": "claude-sonnet-4-5",
+      "Name": "Claude Sonnet 4.5",
+      "ContextWindow": 1000000,
+      "DefaultMaxTokens": 64000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 3,
+      "PriceOutput": 15,
+      "PriceCacheHit": 0.3,
+      "PriceCacheCreate": 3.75,
+      "Efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ]
+    },
+    {
+      "ID": "claude-sonnet-4-5-20250929",
+      "Name": "Claude Sonnet 4.5",
+      "ContextWindow": 1000000,
+      "DefaultMaxTokens": 64000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 3,
+      "PriceOutput": 15,
+      "PriceCacheHit": 0.3,
+      "PriceCacheCreate": 3.75,
+      "Efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ]
+    },
+    {
+      "ID": "claude-sonnet-4-6",
+      "Name": "Claude Sonnet 4.6",
+      "ContextWindow": 1000000,
+      "DefaultMaxTokens": 128000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 3,
+      "PriceOutput": 15,
+      "PriceCacheHit": 0.3,
+      "PriceCacheCreate": 3.75,
+      "Efforts": [
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "ID": "claude-sonnet-5",
+      "Name": "Claude Sonnet 5",
+      "ContextWindow": 1000000,
+      "DefaultMaxTokens": 128000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 2,
+      "PriceOutput": 10,
+      "PriceCacheHit": 0.2,
+      "PriceCacheCreate": 2.5,
+      "Efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    }
+  ],
+  "google": [
+    {
+      "ID": "deep-research-max-preview-04-2026",
+      "Name": "Deep Research Max Preview (Apr-21-2026)",
+      "ContextWindow": 131072,
+      "DefaultMaxTokens": 65536,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 2,
+      "PriceOutput": 12,
+      "PriceCacheHit": 0.2,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "ID": "deep-research-preview-04-2026",
+      "Name": "Deep Research Preview (Apr-21-2026)",
+      "ContextWindow": 131072,
+      "DefaultMaxTokens": 65536,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 2,
+      "PriceOutput": 12,
+      "PriceCacheHit": 0.2,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "ID": "gemini-1.5-flash",
+      "Name": "Gemini 1.5 Flash",
+      "ContextWindow": 1000000,
+      "DefaultMaxTokens": 8192,
+      "CanReason": false,
+      "SupportsImages": true,
+      "PriceInput": 0.075,
+      "PriceOutput": 0.3,
+      "PriceCacheHit": 0.01875,
+      "PriceCacheCreate": 0,
+      "Efforts": []
+    },
+    {
+      "ID": "gemini-1.5-flash-8b",
+      "Name": "Gemini 1.5 Flash-8B",
+      "ContextWindow": 1000000,
+      "DefaultMaxTokens": 8192,
+      "CanReason": false,
+      "SupportsImages": true,
+      "PriceInput": 0.0375,
+      "PriceOutput": 0.15,
+      "PriceCacheHit": 0.01,
+      "PriceCacheCreate": 0,
+      "Efforts": []
+    },
+    {
+      "ID": "gemini-1.5-pro",
+      "Name": "Gemini 1.5 Pro",
+      "ContextWindow": 1000000,
+      "DefaultMaxTokens": 8192,
+      "CanReason": false,
+      "SupportsImages": true,
+      "PriceInput": 1.25,
+      "PriceOutput": 5,
+      "PriceCacheHit": 0.3125,
+      "PriceCacheCreate": 0,
+      "Efforts": []
+    },
+    {
+      "ID": "gemini-2.0-flash",
+      "Name": "Gemini 2.0 Flash",
+      "ContextWindow": 1048576,
+      "DefaultMaxTokens": 8192,
+      "CanReason": false,
+      "SupportsImages": true,
+      "PriceInput": 0.1,
+      "PriceOutput": 0.4,
+      "PriceCacheHit": 0.025,
+      "PriceCacheCreate": 0,
+      "Efforts": []
+    },
+    {
+      "ID": "gemini-2.0-flash-lite",
+      "Name": "Gemini 2.0 Flash-Lite",
+      "ContextWindow": 1048576,
+      "DefaultMaxTokens": 8192,
+      "CanReason": false,
+      "SupportsImages": true,
+      "PriceInput": 0.075,
+      "PriceOutput": 0.3,
+      "PriceCacheHit": 0,
+      "PriceCacheCreate": 0,
+      "Efforts": []
+    },
+    {
+      "ID": "gemini-2.5-computer-use-preview-10-2025",
+      "Name": "Gemini 2.5 Computer Use Preview 10-2025",
+      "ContextWindow": 131072,
+      "DefaultMaxTokens": 65536,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 1.25,
+      "PriceOutput": 10,
+      "PriceCacheHit": 0,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "ID": "gemini-2.5-flash",
+      "Name": "Gemini 2.5 Flash",
+      "ContextWindow": 1048576,
+      "DefaultMaxTokens": 65536,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 0.3,
+      "PriceOutput": 2.5,
+      "PriceCacheHit": 0.03,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "ID": "gemini-2.5-flash-lite",
+      "Name": "Gemini 2.5 Flash-Lite",
+      "ContextWindow": 1048576,
+      "DefaultMaxTokens": 65536,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 0.1,
+      "PriceOutput": 0.4,
+      "PriceCacheHit": 0.01,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "ID": "gemini-2.5-flash-lite-preview-06-17",
+      "Name": "Gemini 2.5 Flash Lite Preview 06-17",
+      "ContextWindow": 1048576,
+      "DefaultMaxTokens": 65536,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 0.1,
+      "PriceOutput": 0.4,
+      "PriceCacheHit": 0.025,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "ID": "gemini-2.5-flash-lite-preview-09-2025",
+      "Name": "Gemini 2.5 Flash Lite Preview (09/2025)",
+      "ContextWindow": 1048576,
+      "DefaultMaxTokens": 65536,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 0.1,
+      "PriceOutput": 0.4,
+      "PriceCacheHit": 0.025,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "ID": "gemini-2.5-flash-preview-04-17",
+      "Name": "Gemini 2.5 Flash Preview 04-17",
+      "ContextWindow": 1048576,
+      "DefaultMaxTokens": 65536,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 0.15,
+      "PriceOutput": 0.6,
+      "PriceCacheHit": 0.0375,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "ID": "gemini-2.5-flash-preview-05-20",
+      "Name": "Gemini 2.5 Flash Preview 05-20",
+      "ContextWindow": 1048576,
+      "DefaultMaxTokens": 65536,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 0.15,
+      "PriceOutput": 0.6,
+      "PriceCacheHit": 0.0375,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "ID": "gemini-2.5-flash-preview-09-2025",
+      "Name": "Gemini 2.5 Flash Preview (09/2025)",
+      "ContextWindow": 1048576,
+      "DefaultMaxTokens": 65536,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 0.3,
+      "PriceOutput": 2.5,
+      "PriceCacheHit": 0.075,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "ID": "gemini-2.5-pro",
+      "Name": "Gemini 2.5 Pro",
+      "ContextWindow": 1048576,
+      "DefaultMaxTokens": 65536,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 1.25,
+      "PriceOutput": 10,
+      "PriceCacheHit": 0.125,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "ID": "gemini-2.5-pro-preview-05-06",
+      "Name": "Gemini 2.5 Pro Preview 05-06",
+      "ContextWindow": 1048576,
+      "DefaultMaxTokens": 65536,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 1.25,
+      "PriceOutput": 10,
+      "PriceCacheHit": 0.31,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "ID": "gemini-2.5-pro-preview-06-05",
+      "Name": "Gemini 2.5 Pro Preview 06-05",
+      "ContextWindow": 1048576,
+      "DefaultMaxTokens": 65536,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 1.25,
+      "PriceOutput": 10,
+      "PriceCacheHit": 0.31,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "ID": "gemini-3-flash-preview",
+      "Name": "Gemini 3 Flash Preview",
+      "ContextWindow": 1048576,
+      "DefaultMaxTokens": 65536,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 0.5,
+      "PriceOutput": 3,
+      "PriceCacheHit": 0.05,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "ID": "gemini-3-pro-preview",
+      "Name": "Gemini 3 Pro Preview",
+      "ContextWindow": 1048576,
+      "DefaultMaxTokens": 65536,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 2,
+      "PriceOutput": 12,
+      "PriceCacheHit": 0.2,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "low",
+        "high"
+      ]
+    },
+    {
+      "ID": "gemini-3.1-flash-lite",
+      "Name": "Gemini 3.1 Flash Lite",
+      "ContextWindow": 1048576,
+      "DefaultMaxTokens": 65536,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 0.25,
+      "PriceOutput": 1.5,
+      "PriceCacheHit": 0.025,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "ID": "gemini-3.1-flash-lite-image",
+      "Name": "Nano Banana 2 Lite",
+      "ContextWindow": 65536,
+      "DefaultMaxTokens": 65536,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 0.25,
+      "PriceOutput": 30,
+      "PriceCacheHit": 0,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "ID": "gemini-3.1-flash-lite-preview",
+      "Name": "Gemini 3.1 Flash Lite Preview",
+      "ContextWindow": 1048576,
+      "DefaultMaxTokens": 65536,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 0.25,
+      "PriceOutput": 1.5,
+      "PriceCacheHit": 0.025,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "ID": "gemini-3.1-flash-live-preview",
+      "Name": "Gemini 3.1 Flash Live Preview",
+      "ContextWindow": 131072,
+      "DefaultMaxTokens": 65536,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 0.75,
+      "PriceOutput": 4.5,
+      "PriceCacheHit": 0,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "ID": "gemini-3.1-pro-preview",
+      "Name": "Gemini 3.1 Pro Preview",
+      "ContextWindow": 1048576,
+      "DefaultMaxTokens": 65536,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 2,
+      "PriceOutput": 12,
+      "PriceCacheHit": 0.2,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "low",
+        "high"
+      ]
+    },
+    {
+      "ID": "gemini-3.1-pro-preview-customtools",
+      "Name": "Gemini 3.1 Pro Preview Custom Tools",
+      "ContextWindow": 1048576,
+      "DefaultMaxTokens": 65536,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 2,
+      "PriceOutput": 12,
+      "PriceCacheHit": 0.2,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "low",
+        "high"
+      ]
+    },
+    {
+      "ID": "gemini-3.5-flash",
+      "Name": "Gemini 3.5 Flash",
+      "ContextWindow": 1048576,
+      "DefaultMaxTokens": 65536,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 1.5,
+      "PriceOutput": 9,
+      "PriceCacheHit": 0.15,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "ID": "gemini-3.5-flash-lite",
+      "Name": "Gemini 3.5 Flash Lite",
+      "ContextWindow": 1048576,
+      "DefaultMaxTokens": 65536,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 0.3,
+      "PriceOutput": 2.5,
+      "PriceCacheHit": 0.03,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "ID": "gemini-3.6-flash",
+      "Name": "Gemini 3.6 Flash",
+      "ContextWindow": 1048576,
+      "DefaultMaxTokens": 65536,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 0.75,
+      "PriceOutput": 3.75,
+      "PriceCacheHit": 0.075,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "ID": "gemini-3.7-flash",
+      "Name": "Gemini 3.7 Flash",
+      "ContextWindow": 1048576,
+      "DefaultMaxTokens": 65536,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 0.75,
+      "PriceOutput": 3.75,
+      "PriceCacheHit": 0.075,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "ID": "gemini-3.8-flash",
+      "Name": "Gemini 3.8 Flash",
+      "ContextWindow": 1048576,
+      "DefaultMaxTokens": 65536,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 0.75,
+      "PriceOutput": 3.75,
+      "PriceCacheHit": 0.075,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "ID": "gemini-flash-latest",
+      "Name": "Gemini Flash Latest",
+      "ContextWindow": 1048576,
+      "DefaultMaxTokens": 65536,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 0.75,
+      "PriceOutput": 3.75,
+      "PriceCacheHit": 0.075,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "ID": "gemini-flash-lite-latest",
+      "Name": "Gemini Flash-Lite Latest",
+      "ContextWindow": 1048576,
+      "DefaultMaxTokens": 65536,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 0.3,
+      "PriceOutput": 2.5,
+      "PriceCacheHit": 0.03,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "ID": "gemini-live-2.5-flash",
+      "Name": "Gemini Live 2.5 Flash",
+      "ContextWindow": 128000,
+      "DefaultMaxTokens": 8000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 0.5,
+      "PriceOutput": 2,
+      "PriceCacheHit": 0,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "ID": "gemini-live-2.5-flash-preview-native-audio",
+      "Name": "Gemini Live 2.5 Flash Preview Native Audio",
+      "ContextWindow": 131072,
+      "DefaultMaxTokens": 65536,
+      "CanReason": true,
+      "SupportsImages": false,
+      "PriceInput": 0.5,
+      "PriceOutput": 2,
+      "PriceCacheHit": 0,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "ID": "gemini-robotics-er-1.6-preview",
+      "Name": "Gemini Robotics-ER 1.6 Preview",
+      "ContextWindow": 131072,
+      "DefaultMaxTokens": 65536,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 1,
+      "PriceOutput": 5,
+      "PriceCacheHit": 0,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "ID": "gemma-3-27b-it",
+      "Name": "Gemma 3 27B",
+      "ContextWindow": 131072,
+      "DefaultMaxTokens": 8192,
+      "CanReason": false,
+      "SupportsImages": true,
+      "PriceInput": 0,
+      "PriceOutput": 0,
+      "PriceCacheHit": 0,
+      "PriceCacheCreate": 0,
+      "Efforts": []
+    },
+    {
+      "ID": "gemma-4-26b",
+      "Name": "Gemma 4 26B",
+      "ContextWindow": 256000,
+      "DefaultMaxTokens": 8192,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 0,
+      "PriceOutput": 0,
+      "PriceCacheHit": 0,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "ID": "gemma-4-26b-a4b-it",
+      "Name": "Gemma 4 26B A4B IT",
+      "ContextWindow": 262144,
+      "DefaultMaxTokens": 32768,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 0,
+      "PriceOutput": 0,
+      "PriceCacheHit": 0,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "ID": "gemma-4-26b-it",
+      "Name": "Gemma 4 26B",
+      "ContextWindow": 256000,
+      "DefaultMaxTokens": 8192,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 0,
+      "PriceOutput": 0,
+      "PriceCacheHit": 0,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "ID": "gemma-4-31b",
+      "Name": "Gemma 4 31B IT",
+      "ContextWindow": 256000,
+      "DefaultMaxTokens": 8192,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 0,
+      "PriceOutput": 0,
+      "PriceCacheHit": 0,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "ID": "gemma-4-31b-it",
+      "Name": "Gemma 4 31B IT",
+      "ContextWindow": 262144,
+      "DefaultMaxTokens": 32768,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 0,
+      "PriceOutput": 0,
+      "PriceCacheHit": 0,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "ID": "gemma-4-E2B-it",
+      "Name": "Gemma 4 E2B IT",
+      "ContextWindow": 131072,
+      "DefaultMaxTokens": 8192,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 0,
+      "PriceOutput": 0,
+      "PriceCacheHit": 0,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "ID": "gemma-4-E4B-it",
+      "Name": "Gemma 4 E4B IT",
+      "ContextWindow": 131072,
+      "DefaultMaxTokens": 8192,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 0,
+      "PriceOutput": 0,
+      "PriceCacheHit": 0,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ]
+    }
+  ],
+  "openai": [
+    {
+      "ID": "codex-mini-latest",
+      "Name": "Codex Mini",
+      "ContextWindow": 200000,
+      "DefaultMaxTokens": 100000,
+      "CanReason": true,
+      "SupportsImages": false,
+      "PriceInput": 1.5,
+      "PriceOutput": 6,
+      "PriceCacheHit": 0.375,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ]
+    },
+    {
+      "ID": "daybreak-blue-latest",
+      "Name": "Daybreak Blue",
+      "ContextWindow": 1050000,
+      "DefaultMaxTokens": 128000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 5,
+      "PriceOutput": 30,
+      "PriceCacheHit": 0.5,
+      "PriceCacheCreate": 6.25,
+      "Efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "ID": "daybreak-red-latest",
+      "Name": "Daybreak Red",
+      "ContextWindow": 400000,
+      "DefaultMaxTokens": 128000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 12.5,
+      "PriceOutput": 75,
+      "PriceCacheHit": 1.25,
+      "PriceCacheCreate": 15.625,
+      "Efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "ID": "gpt-4",
+      "Name": "GPT-4",
+      "ContextWindow": 8192,
+      "DefaultMaxTokens": 8192,
+      "CanReason": false,
+      "SupportsImages": false,
+      "PriceInput": 30,
+      "PriceOutput": 60,
+      "PriceCacheHit": 0,
+      "PriceCacheCreate": 0,
+      "Efforts": []
+    },
+    {
+      "ID": "gpt-4-turbo",
+      "Name": "GPT-4 Turbo",
+      "ContextWindow": 128000,
+      "DefaultMaxTokens": 4096,
+      "CanReason": false,
+      "SupportsImages": true,
+      "PriceInput": 10,
+      "PriceOutput": 30,
+      "PriceCacheHit": 0,
+      "PriceCacheCreate": 0,
+      "Efforts": []
+    },
+    {
+      "ID": "gpt-4.1",
+      "Name": "GPT-4.1",
+      "ContextWindow": 1047576,
+      "DefaultMaxTokens": 32768,
+      "CanReason": false,
+      "SupportsImages": true,
+      "PriceInput": 2,
+      "PriceOutput": 8,
+      "PriceCacheHit": 0.5,
+      "PriceCacheCreate": 0,
+      "Efforts": []
+    },
+    {
+      "ID": "gpt-4.1-mini",
+      "Name": "GPT-4.1 mini",
+      "ContextWindow": 1047576,
+      "DefaultMaxTokens": 32768,
+      "CanReason": false,
+      "SupportsImages": true,
+      "PriceInput": 0.4,
+      "PriceOutput": 1.6,
+      "PriceCacheHit": 0.1,
+      "PriceCacheCreate": 0,
+      "Efforts": []
+    },
+    {
+      "ID": "gpt-4.1-nano",
+      "Name": "GPT-4.1 nano",
+      "ContextWindow": 1047576,
+      "DefaultMaxTokens": 32768,
+      "CanReason": false,
+      "SupportsImages": true,
+      "PriceInput": 0.1,
+      "PriceOutput": 0.4,
+      "PriceCacheHit": 0.025,
+      "PriceCacheCreate": 0,
+      "Efforts": []
+    },
+    {
+      "ID": "gpt-4o",
+      "Name": "GPT-4o",
+      "ContextWindow": 128000,
+      "DefaultMaxTokens": 16384,
+      "CanReason": false,
+      "SupportsImages": true,
+      "PriceInput": 2.5,
+      "PriceOutput": 10,
+      "PriceCacheHit": 1.25,
+      "PriceCacheCreate": 0,
+      "Efforts": []
+    },
+    {
+      "ID": "gpt-4o-2024-05-13",
+      "Name": "GPT-4o (2024-05-13)",
+      "ContextWindow": 128000,
+      "DefaultMaxTokens": 4096,
+      "CanReason": false,
+      "SupportsImages": true,
+      "PriceInput": 5,
+      "PriceOutput": 15,
+      "PriceCacheHit": 0,
+      "PriceCacheCreate": 0,
+      "Efforts": []
+    },
+    {
+      "ID": "gpt-4o-2024-08-06",
+      "Name": "GPT-4o (2024-08-06)",
+      "ContextWindow": 128000,
+      "DefaultMaxTokens": 16384,
+      "CanReason": false,
+      "SupportsImages": true,
+      "PriceInput": 2.5,
+      "PriceOutput": 10,
+      "PriceCacheHit": 1.25,
+      "PriceCacheCreate": 0,
+      "Efforts": []
+    },
+    {
+      "ID": "gpt-4o-2024-11-20",
+      "Name": "GPT-4o (2024-11-20)",
+      "ContextWindow": 128000,
+      "DefaultMaxTokens": 16384,
+      "CanReason": false,
+      "SupportsImages": true,
+      "PriceInput": 2.5,
+      "PriceOutput": 10,
+      "PriceCacheHit": 1.25,
+      "PriceCacheCreate": 0,
+      "Efforts": []
+    },
+    {
+      "ID": "gpt-4o-mini",
+      "Name": "GPT-4o mini",
+      "ContextWindow": 128000,
+      "DefaultMaxTokens": 16384,
+      "CanReason": false,
+      "SupportsImages": true,
+      "PriceInput": 0.15,
+      "PriceOutput": 0.6,
+      "PriceCacheHit": 0.075,
+      "PriceCacheCreate": 0,
+      "Efforts": []
+    },
+    {
+      "ID": "gpt-5",
+      "Name": "GPT-5",
+      "ContextWindow": 400000,
+      "DefaultMaxTokens": 128000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 1.25,
+      "PriceOutput": 10,
+      "PriceCacheHit": 0.125,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "ID": "gpt-5-chat-latest",
+      "Name": "GPT-5 Chat Latest",
+      "ContextWindow": 128000,
+      "DefaultMaxTokens": 16384,
+      "CanReason": false,
+      "SupportsImages": true,
+      "PriceInput": 1.25,
+      "PriceOutput": 10,
+      "PriceCacheHit": 0.125,
+      "PriceCacheCreate": 0,
+      "Efforts": []
+    },
+    {
+      "ID": "gpt-5-codex",
+      "Name": "GPT-5-Codex",
+      "ContextWindow": 272000,
+      "DefaultMaxTokens": 128000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 1.25,
+      "PriceOutput": 10,
+      "PriceCacheHit": 0.125,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "ID": "gpt-5-mini",
+      "Name": "GPT-5 Mini",
+      "ContextWindow": 400000,
+      "DefaultMaxTokens": 128000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 0.25,
+      "PriceOutput": 2,
+      "PriceCacheHit": 0.025,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "ID": "gpt-5-nano",
+      "Name": "GPT-5 Nano",
+      "ContextWindow": 400000,
+      "DefaultMaxTokens": 128000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 0.05,
+      "PriceOutput": 0.4,
+      "PriceCacheHit": 0.005,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "ID": "gpt-5-pro",
+      "Name": "GPT-5 Pro",
+      "ContextWindow": 400000,
+      "DefaultMaxTokens": 272000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 15,
+      "PriceOutput": 120,
+      "PriceCacheHit": 0,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "ID": "gpt-5.1",
+      "Name": "GPT-5.1",
+      "ContextWindow": 400000,
+      "DefaultMaxTokens": 128000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 1.25,
+      "PriceOutput": 10,
+      "PriceCacheHit": 0.125,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "ID": "gpt-5.1-chat-latest",
+      "Name": "GPT-5.1 Chat",
+      "ContextWindow": 128000,
+      "DefaultMaxTokens": 16384,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 1.25,
+      "PriceOutput": 10,
+      "PriceCacheHit": 0.125,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "ID": "gpt-5.1-codex",
+      "Name": "GPT-5.1 Codex",
+      "ContextWindow": 272000,
+      "DefaultMaxTokens": 128000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 1.25,
+      "PriceOutput": 10,
+      "PriceCacheHit": 0.125,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "ID": "gpt-5.1-codex-max",
+      "Name": "GPT-5.1 Codex Max",
+      "ContextWindow": 272000,
+      "DefaultMaxTokens": 128000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 1.25,
+      "PriceOutput": 10,
+      "PriceCacheHit": 0.125,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "ID": "gpt-5.1-codex-mini",
+      "Name": "GPT-5.1 Codex Mini",
+      "ContextWindow": 272000,
+      "DefaultMaxTokens": 128000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 0.25,
+      "PriceOutput": 2,
+      "PriceCacheHit": 0.025,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "ID": "gpt-5.2",
+      "Name": "GPT-5.2",
+      "ContextWindow": 400000,
+      "DefaultMaxTokens": 128000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 1.75,
+      "PriceOutput": 14,
+      "PriceCacheHit": 0.175,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ]
+    },
+    {
+      "ID": "gpt-5.2-chat-latest",
+      "Name": "GPT-5.2 Chat",
+      "ContextWindow": 128000,
+      "DefaultMaxTokens": 16384,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 1.75,
+      "PriceOutput": 14,
+      "PriceCacheHit": 0.175,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ]
+    },
+    {
+      "ID": "gpt-5.2-codex",
+      "Name": "GPT-5.2 Codex",
+      "ContextWindow": 272000,
+      "DefaultMaxTokens": 128000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 1.75,
+      "PriceOutput": 14,
+      "PriceCacheHit": 0.175,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ]
+    },
+    {
+      "ID": "gpt-5.2-pro",
+      "Name": "GPT-5.2 Pro",
+      "ContextWindow": 400000,
+      "DefaultMaxTokens": 128000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 21,
+      "PriceOutput": 168,
+      "PriceCacheHit": 0,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ]
+    },
+    {
+      "ID": "gpt-5.3-chat-latest",
+      "Name": "GPT-5.3 Chat",
+      "ContextWindow": 128000,
+      "DefaultMaxTokens": 16384,
+      "CanReason": false,
+      "SupportsImages": true,
+      "PriceInput": 1.75,
+      "PriceOutput": 14,
+      "PriceCacheHit": 0.175,
+      "PriceCacheCreate": 0,
+      "Efforts": []
+    },
+    {
+      "ID": "gpt-5.3-codex",
+      "Name": "GPT-5.3 Codex",
+      "ContextWindow": 272000,
+      "DefaultMaxTokens": 128000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 1.75,
+      "PriceOutput": 14,
+      "PriceCacheHit": 0.175,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ]
+    },
+    {
+      "ID": "gpt-5.3-codex-spark",
+      "Name": "GPT-5.3 Codex Spark",
+      "ContextWindow": 128000,
+      "DefaultMaxTokens": 32000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 1.75,
+      "PriceOutput": 14,
+      "PriceCacheHit": 0.175,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ]
+    },
+    {
+      "ID": "gpt-5.4",
+      "Name": "GPT-5.4",
+      "ContextWindow": 1050000,
+      "DefaultMaxTokens": 128000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 2.5,
+      "PriceOutput": 15,
+      "PriceCacheHit": 0.25,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ]
+    },
+    {
+      "ID": "gpt-5.4-mini",
+      "Name": "GPT-5.4 mini",
+      "ContextWindow": 400000,
+      "DefaultMaxTokens": 128000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 0.75,
+      "PriceOutput": 4.5,
+      "PriceCacheHit": 0.075,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ]
+    },
+    {
+      "ID": "gpt-5.4-nano",
+      "Name": "GPT-5.4 nano",
+      "ContextWindow": 400000,
+      "DefaultMaxTokens": 128000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 0.2,
+      "PriceOutput": 1.25,
+      "PriceCacheHit": 0.02,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ]
+    },
+    {
+      "ID": "gpt-5.4-pro",
+      "Name": "GPT-5.4 Pro",
+      "ContextWindow": 1050000,
+      "DefaultMaxTokens": 128000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 30,
+      "PriceOutput": 180,
+      "PriceCacheHit": 0,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ]
+    },
+    {
+      "ID": "gpt-5.5",
+      "Name": "GPT-5.5",
+      "ContextWindow": 1050000,
+      "DefaultMaxTokens": 128000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 5,
+      "PriceOutput": 30,
+      "PriceCacheHit": 0.5,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ]
+    },
+    {
+      "ID": "gpt-5.5-pro",
+      "Name": "GPT-5.5 Pro",
+      "ContextWindow": 1050000,
+      "DefaultMaxTokens": 128000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 30,
+      "PriceOutput": 180,
+      "PriceCacheHit": 0,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ]
+    },
+    {
+      "ID": "gpt-5.6",
+      "Name": "GPT-5.6",
+      "ContextWindow": 1050000,
+      "DefaultMaxTokens": 128000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 4,
+      "PriceOutput": 20,
+      "PriceCacheHit": 0.4,
+      "PriceCacheCreate": 5,
+      "Efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "ID": "gpt-5.6-cyber",
+      "Name": "GPT-5.6 Cyber",
+      "ContextWindow": 400000,
+      "DefaultMaxTokens": 128000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 12.5,
+      "PriceOutput": 75,
+      "PriceCacheHit": 1.25,
+      "PriceCacheCreate": 15.625,
+      "Efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "ID": "gpt-5.6-luna",
+      "Name": "GPT-5.6 Luna",
+      "ContextWindow": 1050000,
+      "DefaultMaxTokens": 128000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 0.2,
+      "PriceOutput": 1.2,
+      "PriceCacheHit": 0.02,
+      "PriceCacheCreate": 0.25,
+      "Efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "ID": "gpt-5.6-luna-pro",
+      "Name": "GPT-5.6 Luna Pro",
+      "ContextWindow": 1050000,
+      "DefaultMaxTokens": 128000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 0.2,
+      "PriceOutput": 1.2,
+      "PriceCacheHit": 0.02,
+      "PriceCacheCreate": 0.25,
+      "Efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "ID": "gpt-5.6-sol",
+      "Name": "GPT-5.6 Sol",
+      "ContextWindow": 1050000,
+      "DefaultMaxTokens": 128000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 4,
+      "PriceOutput": 20,
+      "PriceCacheHit": 0.4,
+      "PriceCacheCreate": 5,
+      "Efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "ID": "gpt-5.6-sol-pro",
+      "Name": "GPT-5.6 Sol Pro",
+      "ContextWindow": 1050000,
+      "DefaultMaxTokens": 128000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 4,
+      "PriceOutput": 20,
+      "PriceCacheHit": 0.4,
+      "PriceCacheCreate": 5,
+      "Efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "ID": "gpt-5.6-terra",
+      "Name": "GPT-5.6 Terra",
+      "ContextWindow": 1050000,
+      "DefaultMaxTokens": 128000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 2,
+      "PriceOutput": 12,
+      "PriceCacheHit": 0.2,
+      "PriceCacheCreate": 2.5,
+      "Efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "ID": "gpt-5.6-terra-pro",
+      "Name": "GPT-5.6 Terra Pro",
+      "ContextWindow": 1050000,
+      "DefaultMaxTokens": 128000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 2,
+      "PriceOutput": 12,
+      "PriceCacheHit": 0.2,
+      "PriceCacheCreate": 2.5,
+      "Efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "ID": "gpt-6-astra",
+      "Name": "GPT-6 Astra",
+      "ContextWindow": 1050000,
+      "DefaultMaxTokens": 128000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 10,
+      "PriceOutput": 50,
+      "PriceCacheHit": 1,
+      "PriceCacheCreate": 12.5,
+      "Efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "ID": "gpt-realtime-2.1",
+      "Name": "GPT-Realtime-2.1",
+      "ContextWindow": 128000,
+      "DefaultMaxTokens": 32000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 4,
+      "PriceOutput": 24,
+      "PriceCacheHit": 0.4,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ]
+    },
+    {
+      "ID": "o1",
+      "Name": "o1",
+      "ContextWindow": 200000,
+      "DefaultMaxTokens": 100000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 15,
+      "PriceOutput": 60,
+      "PriceCacheHit": 7.5,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ]
+    },
+    {
+      "ID": "o1-pro",
+      "Name": "o1-pro",
+      "ContextWindow": 200000,
+      "DefaultMaxTokens": 100000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 150,
+      "PriceOutput": 600,
+      "PriceCacheHit": 0,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ]
+    },
+    {
+      "ID": "o3",
+      "Name": "o3",
+      "ContextWindow": 200000,
+      "DefaultMaxTokens": 100000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 2,
+      "PriceOutput": 8,
+      "PriceCacheHit": 0.5,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ]
+    },
+    {
+      "ID": "o3-deep-research",
+      "Name": "o3-deep-research",
+      "ContextWindow": 200000,
+      "DefaultMaxTokens": 100000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 10,
+      "PriceOutput": 40,
+      "PriceCacheHit": 2.5,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ]
+    },
+    {
+      "ID": "o3-mini",
+      "Name": "o3-mini",
+      "ContextWindow": 200000,
+      "DefaultMaxTokens": 100000,
+      "CanReason": true,
+      "SupportsImages": false,
+      "PriceInput": 1.1,
+      "PriceOutput": 4.4,
+      "PriceCacheHit": 0.55,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ]
+    },
+    {
+      "ID": "o3-pro",
+      "Name": "o3-pro",
+      "ContextWindow": 200000,
+      "DefaultMaxTokens": 100000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 20,
+      "PriceOutput": 80,
+      "PriceCacheHit": 0,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ]
+    },
+    {
+      "ID": "o4-mini",
+      "Name": "o4-mini",
+      "ContextWindow": 200000,
+      "DefaultMaxTokens": 100000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 1.1,
+      "PriceOutput": 4.4,
+      "PriceCacheHit": 0.275,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ]
+    },
+    {
+      "ID": "o4-mini-deep-research",
+      "Name": "o4-mini-deep-research",
+      "ContextWindow": 200000,
+      "DefaultMaxTokens": 100000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 2,
+      "PriceOutput": 8,
+      "PriceCacheHit": 0.5,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ]
+    }
+  ],
+  "xai": [
+    {
+      "ID": "grok-2",
+      "Name": "Grok 2",
+      "ContextWindow": 131072,
+      "DefaultMaxTokens": 8192,
+      "CanReason": false,
+      "SupportsImages": false,
+      "PriceInput": 2,
+      "PriceOutput": 10,
+      "PriceCacheHit": 2,
+      "PriceCacheCreate": 0,
+      "Efforts": []
+    },
+    {
+      "ID": "grok-2-1212",
+      "Name": "Grok 2 (1212)",
+      "ContextWindow": 131072,
+      "DefaultMaxTokens": 8192,
+      "CanReason": false,
+      "SupportsImages": false,
+      "PriceInput": 2,
+      "PriceOutput": 10,
+      "PriceCacheHit": 2,
+      "PriceCacheCreate": 0,
+      "Efforts": []
+    },
+    {
+      "ID": "grok-2-latest",
+      "Name": "Grok 2 Latest",
+      "ContextWindow": 131072,
+      "DefaultMaxTokens": 8192,
+      "CanReason": false,
+      "SupportsImages": false,
+      "PriceInput": 2,
+      "PriceOutput": 10,
+      "PriceCacheHit": 2,
+      "PriceCacheCreate": 0,
+      "Efforts": []
+    },
+    {
+      "ID": "grok-2-vision",
+      "Name": "Grok 2 Vision",
+      "ContextWindow": 8192,
+      "DefaultMaxTokens": 4096,
+      "CanReason": false,
+      "SupportsImages": true,
+      "PriceInput": 2,
+      "PriceOutput": 10,
+      "PriceCacheHit": 2,
+      "PriceCacheCreate": 0,
+      "Efforts": []
+    },
+    {
+      "ID": "grok-2-vision-1212",
+      "Name": "Grok 2 Vision (1212)",
+      "ContextWindow": 8192,
+      "DefaultMaxTokens": 4096,
+      "CanReason": false,
+      "SupportsImages": true,
+      "PriceInput": 2,
+      "PriceOutput": 10,
+      "PriceCacheHit": 2,
+      "PriceCacheCreate": 0,
+      "Efforts": []
+    },
+    {
+      "ID": "grok-2-vision-latest",
+      "Name": "Grok 2 Vision Latest",
+      "ContextWindow": 8192,
+      "DefaultMaxTokens": 4096,
+      "CanReason": false,
+      "SupportsImages": true,
+      "PriceInput": 2,
+      "PriceOutput": 10,
+      "PriceCacheHit": 2,
+      "PriceCacheCreate": 0,
+      "Efforts": []
+    },
+    {
+      "ID": "grok-3",
+      "Name": "Grok 3",
+      "ContextWindow": 131072,
+      "DefaultMaxTokens": 8192,
+      "CanReason": false,
+      "SupportsImages": false,
+      "PriceInput": 3,
+      "PriceOutput": 15,
+      "PriceCacheHit": 0.75,
+      "PriceCacheCreate": 0,
+      "Efforts": []
+    },
+    {
+      "ID": "grok-3-fast",
+      "Name": "Grok 3 Fast",
+      "ContextWindow": 131072,
+      "DefaultMaxTokens": 8192,
+      "CanReason": false,
+      "SupportsImages": false,
+      "PriceInput": 5,
+      "PriceOutput": 25,
+      "PriceCacheHit": 1.25,
+      "PriceCacheCreate": 0,
+      "Efforts": []
+    },
+    {
+      "ID": "grok-3-fast-latest",
+      "Name": "Grok 3 Fast Latest",
+      "ContextWindow": 131072,
+      "DefaultMaxTokens": 8192,
+      "CanReason": false,
+      "SupportsImages": false,
+      "PriceInput": 5,
+      "PriceOutput": 25,
+      "PriceCacheHit": 1.25,
+      "PriceCacheCreate": 0,
+      "Efforts": []
+    },
+    {
+      "ID": "grok-3-latest",
+      "Name": "Grok 3 Latest",
+      "ContextWindow": 131072,
+      "DefaultMaxTokens": 8192,
+      "CanReason": false,
+      "SupportsImages": false,
+      "PriceInput": 3,
+      "PriceOutput": 15,
+      "PriceCacheHit": 0.75,
+      "PriceCacheCreate": 0,
+      "Efforts": []
+    },
+    {
+      "ID": "grok-3-mini",
+      "Name": "Grok 3 Mini",
+      "ContextWindow": 131072,
+      "DefaultMaxTokens": 8192,
+      "CanReason": true,
+      "SupportsImages": false,
+      "PriceInput": 0.3,
+      "PriceOutput": 0.5,
+      "PriceCacheHit": 0.075,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "ID": "grok-3-mini-fast",
+      "Name": "Grok 3 Mini Fast",
+      "ContextWindow": 131072,
+      "DefaultMaxTokens": 8192,
+      "CanReason": true,
+      "SupportsImages": false,
+      "PriceInput": 0.6,
+      "PriceOutput": 4,
+      "PriceCacheHit": 0.15,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "ID": "grok-3-mini-fast-latest",
+      "Name": "Grok 3 Mini Fast Latest",
+      "ContextWindow": 131072,
+      "DefaultMaxTokens": 8192,
+      "CanReason": true,
+      "SupportsImages": false,
+      "PriceInput": 0.6,
+      "PriceOutput": 4,
+      "PriceCacheHit": 0.15,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "ID": "grok-3-mini-latest",
+      "Name": "Grok 3 Mini Latest",
+      "ContextWindow": 131072,
+      "DefaultMaxTokens": 8192,
+      "CanReason": true,
+      "SupportsImages": false,
+      "PriceInput": 0.3,
+      "PriceOutput": 0.5,
+      "PriceCacheHit": 0.075,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "ID": "grok-4",
+      "Name": "Grok 4",
+      "ContextWindow": 256000,
+      "DefaultMaxTokens": 64000,
+      "CanReason": true,
+      "SupportsImages": false,
+      "PriceInput": 3,
+      "PriceOutput": 15,
+      "PriceCacheHit": 0.75,
+      "PriceCacheCreate": 0,
+      "Efforts": []
+    },
+    {
+      "ID": "grok-4-1-fast",
+      "Name": "Grok 4.1 Fast",
+      "ContextWindow": 2000000,
+      "DefaultMaxTokens": 30000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 0.2,
+      "PriceOutput": 0.5,
+      "PriceCacheHit": 0.05,
+      "PriceCacheCreate": 0,
+      "Efforts": []
+    },
+    {
+      "ID": "grok-4-1-fast-non-reasoning",
+      "Name": "Grok 4.1 Fast (Non-Reasoning)",
+      "ContextWindow": 2000000,
+      "DefaultMaxTokens": 30000,
+      "CanReason": false,
+      "SupportsImages": true,
+      "PriceInput": 0.2,
+      "PriceOutput": 0.5,
+      "PriceCacheHit": 0.05,
+      "PriceCacheCreate": 0,
+      "Efforts": []
+    },
+    {
+      "ID": "grok-4-fast",
+      "Name": "Grok 4 Fast",
+      "ContextWindow": 2000000,
+      "DefaultMaxTokens": 30000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 0.2,
+      "PriceOutput": 0.5,
+      "PriceCacheHit": 0.05,
+      "PriceCacheCreate": 0,
+      "Efforts": []
+    },
+    {
+      "ID": "grok-4-fast-non-reasoning",
+      "Name": "Grok 4 Fast (Non-Reasoning)",
+      "ContextWindow": 2000000,
+      "DefaultMaxTokens": 30000,
+      "CanReason": false,
+      "SupportsImages": true,
+      "PriceInput": 0.2,
+      "PriceOutput": 0.5,
+      "PriceCacheHit": 0.05,
+      "PriceCacheCreate": 0,
+      "Efforts": []
+    },
+    {
+      "ID": "grok-4.20-0309-non-reasoning",
+      "Name": "Grok 4.20 (Non-Reasoning)",
+      "ContextWindow": 1000000,
+      "DefaultMaxTokens": 30000,
+      "CanReason": false,
+      "SupportsImages": true,
+      "PriceInput": 1.25,
+      "PriceOutput": 2.5,
+      "PriceCacheHit": 0.2,
+      "PriceCacheCreate": 0,
+      "Efforts": []
+    },
+    {
+      "ID": "grok-4.20-0309-reasoning",
+      "Name": "Grok 4.20 (Reasoning)",
+      "ContextWindow": 1000000,
+      "DefaultMaxTokens": 30000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 1.25,
+      "PriceOutput": 2.5,
+      "PriceCacheHit": 0.2,
+      "PriceCacheCreate": 0,
+      "Efforts": []
+    },
+    {
+      "ID": "grok-4.20-beta-latest-non-reasoning",
+      "Name": "Grok 4.20 Beta (Non-Reasoning)",
+      "ContextWindow": 2000000,
+      "DefaultMaxTokens": 30000,
+      "CanReason": false,
+      "SupportsImages": true,
+      "PriceInput": 2,
+      "PriceOutput": 6,
+      "PriceCacheHit": 0.2,
+      "PriceCacheCreate": 0,
+      "Efforts": []
+    },
+    {
+      "ID": "grok-4.20-beta-latest-reasoning",
+      "Name": "Grok 4.20 Beta (Reasoning)",
+      "ContextWindow": 2000000,
+      "DefaultMaxTokens": 30000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 2,
+      "PriceOutput": 6,
+      "PriceCacheHit": 0.2,
+      "PriceCacheCreate": 0,
+      "Efforts": []
+    },
+    {
+      "ID": "grok-4.20-multi-agent-beta-latest",
+      "Name": "Grok 4.20 Multi-Agent Beta",
+      "ContextWindow": 2000000,
+      "DefaultMaxTokens": 30000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 2,
+      "PriceOutput": 6,
+      "PriceCacheHit": 0.2,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ]
+    },
+    {
+      "ID": "grok-4.3",
+      "Name": "Grok 4.3",
+      "ContextWindow": 1000000,
+      "DefaultMaxTokens": 30000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 1.25,
+      "PriceOutput": 2.5,
+      "PriceCacheHit": 0.2,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "ID": "grok-4.5",
+      "Name": "Grok 4.5",
+      "ContextWindow": 500000,
+      "DefaultMaxTokens": 500000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 2,
+      "PriceOutput": 6,
+      "PriceCacheHit": 0.3,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "ID": "grok-4.6",
+      "Name": "Grok 4.6",
+      "ContextWindow": 500000,
+      "DefaultMaxTokens": 500000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 2,
+      "PriceOutput": 6,
+      "PriceCacheHit": 0.5,
+      "PriceCacheCreate": 0,
+      "Efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ]
+    },
+    {
+      "ID": "grok-beta",
+      "Name": "Grok Beta",
+      "ContextWindow": 131072,
+      "DefaultMaxTokens": 4096,
+      "CanReason": false,
+      "SupportsImages": false,
+      "PriceInput": 5,
+      "PriceOutput": 15,
+      "PriceCacheHit": 5,
+      "PriceCacheCreate": 0,
+      "Efforts": []
+    },
+    {
+      "ID": "grok-build-0.1",
+      "Name": "Grok Build 0.1",
+      "ContextWindow": 256000,
+      "DefaultMaxTokens": 256000,
+      "CanReason": true,
+      "SupportsImages": true,
+      "PriceInput": 1,
+      "PriceOutput": 2,
+      "PriceCacheHit": 0.2,
+      "PriceCacheCreate": 0,
+      "Efforts": []
+    },
+    {
+      "ID": "grok-code-fast-1",
+      "Name": "Grok Code Fast 1",
+      "ContextWindow": 256000,
+      "DefaultMaxTokens": 10000,
+      "CanReason": true,
+      "SupportsImages": false,
+      "PriceInput": 0.2,
+      "PriceOutput": 1.5,
+      "PriceCacheHit": 0.02,
+      "PriceCacheCreate": 0,
+      "Efforts": []
+    },
+    {
+      "ID": "grok-vision-beta",
+      "Name": "Grok Vision Beta",
+      "ContextWindow": 8192,
+      "DefaultMaxTokens": 4096,
+      "CanReason": false,
+      "SupportsImages": true,
+      "PriceInput": 5,
+      "PriceOutput": 15,
+      "PriceCacheHit": 5,
+      "PriceCacheCreate": 0,
+      "Efforts": []
+    }
+  ]
+}

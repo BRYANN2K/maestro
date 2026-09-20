@@ -1,6 +1,7 @@
 package editor
 
 import (
+	"context"
 	"errors"
 	"os"
 	"os/exec"
@@ -11,6 +12,15 @@ import (
 	"time"
 	"unicode/utf8"
 )
+
+func TestLoadContextHonorsCancellationBeforeFilesystemAccess(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := LoadContext(ctx, filepath.Join(t.TempDir(), "missing.txt"))
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("LoadContext error = %v, want context.Canceled", err)
+	}
+}
 
 func TestLoadRejectsNonTextBeforeConstructingBuffer(t *testing.T) {
 	tests := []struct {
@@ -138,7 +148,7 @@ func TestEditorOpenFailureKeepsActiveBufferAndBinaryUnchanged(t *testing.T) {
 	if err != nil || string(got) != string(binary) {
 		t.Fatalf("binary changed after rejected open: %x, %v", got, err)
 	}
-	if files := ListFiles(dir, 20); !containsPath(files, "tui.test") {
+	if files, err := ListFiles(t.Context(), dir, 20); err != nil || !containsPath(files, "tui.test") {
 		t.Fatalf("tracked-style binary should remain discoverable and be refused on open: %v", files)
 	}
 }

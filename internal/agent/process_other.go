@@ -14,3 +14,16 @@ const legacyProcessWaitDelay = 2 * time.Second
 func configureProcessTree(cmd *exec.Cmd) {
 	cmd.WaitDelay = legacyProcessWaitDelay
 }
+
+func startProcessTree(cmd *exec.Cmd) (processWaiter, error) {
+	configureProcessTree(cmd)
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+	return commandWaiter{cmd: cmd}, nil
+}
+
+func runProcessTree(cmd *exec.Cmd) error {
+	configureProcessTree(cmd)
+	return cmd.Run()
+}

@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "extension": "customer-support",
+  "purpose": "Editorial cases for human or agent evaluation; structural tests do not establish these decisions.",
+  "cases": [
+    {
+      "id": "relevant",
+      "prompt": "prepare a procedure to diagnose stalled synchronization and recover data.",
+      "expected": "select",
+      "reason": "Prepare diagnosis, assistance, and escalation for problems users actually encounter."
+    },
+    {
+      "id": "irrelevant",
+      "prompt": "refactor an internal function without affecting incidents, help, or user behavior.",
+      "expected": "do-not-select",
+      "reason": "No responsibility of this domain is affected."
+    },
+    {
+      "id": "existing",
+      "prompt": "prepare a procedure to diagnose stalled synchronization and recover data. The project already has an implementation and evidence of this capability, but no dedicated document.",
+      "expected": "inspect-and-reuse",
+      "reason": "Inspect evidence, classify coverage, and address only gaps; missing documentation does not mean the domain practice is absent."
+    },
+    {
+      "id": "insufficient",
+      "prompt": "The FAQ describes the symptom, but its steps enable neither recovery nor escalation for the reproduced case.",
+      "expected": "failed-or-unverified",
+      "reason": "Compare against the approved criterion outcome; producing a file does not establish that the outcome was achieved."
+    }
+  ]
+}

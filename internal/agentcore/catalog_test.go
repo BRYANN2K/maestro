@@ -159,6 +159,83 @@ func TestModelsDevStaleCacheFallback(t *testing.T) {
 	}
 }
 
+func TestModelsDevLoadCachedUsesStaleCacheWithoutNetwork(t *testing.T) {
+	dir := t.TempDir()
+	cache := filepath.Join(dir, "models.json")
+	const cached = `{"cached":{"id":"cached","name":"Cached","env":["CACHED_API_KEY"],"api":"https://cached.invalid/v1","models":{"cached-model":{"id":"cached-model","name":"Cached model","limit":{"context":12345,"output":1024},"status":"active"}}}}`
+	if err := os.WriteFile(cache, []byte(cached), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	past := time.Now().Add(-24 * time.Hour)
+	if err := os.Chtimes(cache, past, past); err != nil {
+		t.Fatalf("Chtimes: %v", err)
+	}
+
+	var hits int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		http.Error(w, "LoadCached must stay offline", http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	dev := NewModelsDev(ModelsDevOptions{URL: srv.URL, CachePath: cache, TTL: time.Nanosecond})
+	providers, source, err := dev.LoadCached()
+	if err != nil {
+		t.Fatalf("LoadCached: %v", err)
+	}
+	if source != "cache" {
+		t.Fatalf("source = %q, want cache", source)
+	}
+	if _, ok := providers["cached"]; !ok {
+		t.Fatal("stale cached provider missing")
+	}
+	if hits != 0 {
+		t.Fatalf("network hits = %d, want 0", hits)
+	}
+}
+
+func TestModelsDevBoundsCacheAndRemoteResponse(t *testing.T) {
+	dir := t.TempDir()
+	cache := filepath.Join(dir, "models.json")
+	f, err := os.Create(cache)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := f.Truncate(modelsDevMaxBytes + 1); err != nil {
+		f.Close()
+		t.Fatalf("Truncate: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	dev := NewModelsDev(ModelsDevOptions{CachePath: cache, Disabled: false})
+	providers, source, err := dev.LoadCached()
+	if err != nil {
+		t.Fatalf("LoadCached: %v", err)
+	}
+	if source != "core" || len(providers) == 0 {
+		t.Fatalf("oversized cache fallback = %q, %d providers", source, len(providers))
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		chunk := make([]byte, 32<<10)
+		remaining := modelsDevMaxBytes + 1
+		for remaining > 0 {
+			n := min(len(chunk), remaining)
+			if _, writeErr := w.Write(chunk[:n]); writeErr != nil {
+				return
+			}
+			remaining -= n
+		}
+	}))
+	defer srv.Close()
+	dev = NewModelsDev(ModelsDevOptions{URL: srv.URL})
+	if _, err := dev.Refresh(context.Background()); err == nil || !strings.Contains(err.Error(), "response exceeds") {
+		t.Fatalf("Refresh oversized response error = %v", err)
+	}
+}
+
 func TestRegistryEnvAutoDetection(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "sk-env")
 	cfg := &config.Config{} // no maestrorc providers at all
@@ -206,6 +283,13 @@ func TestRegistryPassesCatalogDeclaredEnvironmentKeyToProvider(t *testing.T) {
 			provider, ok := r.Provider(tc.provider)
 			if !ok {
 				t.Fatalf("%s was not detected from %s", tc.provider, tc.env)
+			}
+			if tc.provider == "google" {
+				p, ok := provider.(*RuntimeProvider)
+				if !ok || p.Key != secret {
+					t.Fatalf("Google must use its native API adapter: %T", provider)
+				}
+				return
 			}
 			openai, ok := provider.(*openaiProvider)
 			if !ok {

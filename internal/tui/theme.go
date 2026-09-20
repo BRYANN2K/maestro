@@ -57,8 +57,8 @@ var themeTokenHex = map[string]map[Token]string{
 		TokenSash: "#FF716A", TokenSquid: "#B99AF2", TokenSmoke: "#9BA3AE", TokenOyster: "#E4E7EB",
 		TokenPepper: "#090B0F", TokenChar: "#05070A", TokenIron: "#5F6875", TokenCoral: "#E98A68",
 		TokenSriracha: "#F2766E", TokenMustard: "#DDB642", TokenTang: "#C99D38", TokenCitron: "#86B85C",
-		TokenMalibu: "#76AFC4", TokenJulep: "#76B852", TokenGuac: "#8FB56A", TokenSurface: "#07090D",
-		TokenPanel: "#0C1016",
+		TokenMalibu: "#76AFC4", TokenJulep: "#76B852", TokenGuac: "#8FB56A", TokenSurface: "#000000",
+		TokenPanel: "#111113",
 	},
 	"charmtone-light": {
 		TokenCharple: "#9E1B24", TokenDolly: "#8E2633", TokenBok: "#8D1B55", TokenBlush: "#8D3441",
@@ -535,18 +535,25 @@ func clampANSIHeight(content string, height int) string {
 // taller than the terminal. Keeping the tail is important for overlays and
 // screens with a footer: a top-only clamp can hide the actionable controls.
 func fitANSIHeight(content string, height int) string {
+	return strings.Join(fitANSIHeightLines(content, height), "\n")
+}
+
+// fitANSIHeightLines is the allocation-aware form used by the frame painter.
+// Keeping the split result avoids splitting the complete frame once to check
+// its height and a second time to paint it.
+func fitANSIHeightLines(content string, height int) []string {
 	if height <= 0 {
-		return ""
+		return nil
 	}
 	lines := strings.Split(content, "\n")
 	if len(lines) <= height {
-		return content
+		return lines
 	}
 	if height == 1 {
-		return stripBrokenANSI(lines[0])
+		return []string{stripBrokenANSI(lines[0])}
 	}
 	if height == 2 {
-		return strings.Join([]string{stripBrokenANSI(lines[0]), stripBrokenANSI(lines[len(lines)-1])}, "\n")
+		return []string{stripBrokenANSI(lines[0]), stripBrokenANSI(lines[len(lines)-1])}
 	}
 	top := (height - 1) / 2
 	bottom := height - top - 1
@@ -556,7 +563,7 @@ func fitANSIHeight(content string, height int) string {
 	kept = append(kept, lines[len(lines)-bottom:]...)
 	kept[0] = stripBrokenANSI(kept[0])
 	kept[len(kept)-1] = stripBrokenANSI(kept[len(kept)-1])
-	return strings.Join(kept, "\n")
+	return kept
 }
 
 // paintSurface pads and paints the full terminal rectangle so no area is
@@ -565,38 +572,68 @@ func paintSurface(content string, width, height int, bg, fg color.Color) string 
 	if width <= 0 || height <= 0 {
 		return ""
 	}
-	content = fitANSIHeight(content, height)
 	style := lipgloss.NewStyle().Foreground(fg).Background(bg)
 	baseBackground := surfaceBackgroundSGR(bg)
 	baseForeground := surfaceForegroundSGR(fg)
-	lines := strings.Split(content, "\n")
-	painted := make([]string, 0, max(len(lines), height))
-	for _, line := range lines {
+	// Ask Lipgloss for the exact outer style once, then reuse its prefix and
+	// suffix. Rendering every row independently made a 60-row frame repeat the
+	// same style-resolution and allocation work 60 times.
+	styledSentinel := style.Render("\x00")
+	stylePrefix, styleSuffix, found := strings.Cut(styledSentinel, "\x00")
+	if !found {
+		stylePrefix, styleSuffix = "", ""
+	}
+	lines := fitANSIHeightLines(content, height)
+	var painted strings.Builder
+	painted.Grow(len(content) + min(height*(len(stylePrefix)+len(styleSuffix)+width+1), 1<<20))
+	writeLine := func(line string) {
 		line = stripBrokenANSI(ansi.Truncate(line, width, ""))
 		// A nested lipgloss span normally ends with SGR 0 (or SGR 49), which
-		// also clears the background established by style.Render below. Restore
+		// also clears the background established by the outer style. Restore
 		// the surface background immediately after those resets so later text
 		// cannot fall back to the terminal's default black background.
-		line = restoreSurfaceBackground(line, baseBackground)
 		// Light themes expose a second form of the same nesting bug: unstyled
 		// text, or text following a child span that emits SGR 0/39, inherits the
 		// terminal's default ink. That default is commonly near-white even when
 		// Maestro paints a light surface. Restore the theme's body ink at the
 		// full-frame boundary just as we restore its background.
-		line = restoreSurfaceForeground(line, baseForeground)
+		line = restoreSurfaceColors(line, baseForeground, baseBackground)
+		painted.WriteString(stylePrefix)
+		painted.WriteString(line)
 		if pad := width - ansi.StringWidth(line); pad > 0 {
 			// Explicitly select the base background before padding as well. This
 			// keeps the right edge painted even when a truncated child style left
 			// its own background active.
-			line += baseBackground + strings.Repeat(" ", pad)
+			painted.WriteString(baseBackground)
+			writeSpaces(&painted, pad)
 		}
-		painted = append(painted, style.Render(line))
+		painted.WriteString(styleSuffix)
 	}
-	blank := style.Render(strings.Repeat(" ", width))
-	for len(painted) < height {
-		painted = append(painted, blank)
+	for row := 0; row < height; row++ {
+		if row > 0 {
+			painted.WriteByte('\n')
+		}
+		if row < len(lines) {
+			writeLine(lines[row])
+			continue
+		}
+		painted.WriteString(stylePrefix)
+		writeSpaces(&painted, width)
+		painted.WriteString(styleSuffix)
 	}
-	return strings.Join(painted, "\n")
+	return painted.String()
+}
+
+const surfaceSpaceChunk = "                                                                "
+
+func writeSpaces(out *strings.Builder, count int) {
+	for count >= len(surfaceSpaceChunk) {
+		out.WriteString(surfaceSpaceChunk)
+		count -= len(surfaceSpaceChunk)
+	}
+	if count > 0 {
+		out.WriteString(surfaceSpaceChunk[:count])
+	}
 }
 
 // surfaceForegroundSGR returns the full-fidelity foreground sequence paired
@@ -697,17 +734,64 @@ func restoreSurfaceForeground(line, baseForeground string) string {
 	return out.String()
 }
 
+// restoreSurfaceColors performs the foreground and background repair in one
+// ANSI pass. paintSurface previously reparsed and recopied every styled row
+// twice, even though both decisions depend on the same SGR parameter list.
+func restoreSurfaceColors(line, baseForeground, baseBackground string) string {
+	if (baseForeground == "" && baseBackground == "") || !strings.Contains(line, "\x1b[") {
+		return line
+	}
+	var out strings.Builder
+	out.Grow(len(line) + 64)
+	for pos := 0; pos < len(line); {
+		rel := strings.Index(line[pos:], "\x1b[")
+		if rel < 0 {
+			out.WriteString(line[pos:])
+			break
+		}
+		start := pos + rel
+		out.WriteString(line[pos:start])
+		end := start + 2
+		for end < len(line) && (line[end] < 0x40 || line[end] > 0x7e) {
+			end++
+		}
+		if end >= len(line) {
+			out.WriteString(line[start:])
+			break
+		}
+		out.WriteString(line[start : end+1])
+		if line[end] == 'm' {
+			foregroundDefault, backgroundDefault := sgrLeavesColorsDefault(line[start+2 : end])
+			if foregroundDefault {
+				out.WriteString(baseForeground)
+			}
+			if backgroundDefault {
+				out.WriteString(baseBackground)
+			}
+		}
+		pos = end + 1
+	}
+	return out.String()
+}
+
 // sgrLeavesBackgroundDefault reports whether an SGR parameter list finishes
 // by selecting the terminal's default background. Extended foreground colors
 // are skipped as a group so zero-valued RGB channels are never mistaken for
 // SGR 0.
 func sgrLeavesBackgroundDefault(params string) bool {
+	_, backgroundDefault := sgrLeavesColorsDefault(params)
+	return backgroundDefault
+}
+
+// sgrLeavesColorsDefault returns the final default-color state for both
+// channels after one parse of an SGR parameter list.
+func sgrLeavesColorsDefault(params string) (foregroundDefault, backgroundDefault bool) {
 	if params == "" {
-		return true // ESC[m is equivalent to ESC[0m.
+		return true, true // ESC[m is equivalent to ESC[0m.
 	}
 	parts := strings.Split(params, ";")
-	changed := false
-	defaultBackground := false
+	foregroundChanged := false
+	backgroundChanged := false
 	for i := 0; i < len(parts); i++ {
 		part := parts[i]
 		if colon := strings.IndexByte(part, ':'); colon >= 0 {
@@ -726,15 +810,28 @@ func sgrLeavesBackgroundDefault(params string) bool {
 		}
 		switch {
 		case code == 0 || code == 49:
-			changed = true
-			defaultBackground = true
+			backgroundChanged = true
+			backgroundDefault = true
+			if code == 0 {
+				foregroundChanged = true
+				foregroundDefault = true
+			}
+		case code == 39:
+			foregroundChanged = true
+			foregroundDefault = true
 		case code >= 40 && code <= 47 || code >= 100 && code <= 107:
-			changed = true
-			defaultBackground = false
+			backgroundChanged = true
+			backgroundDefault = false
+		case code >= 30 && code <= 37 || code >= 90 && code <= 97:
+			foregroundChanged = true
+			foregroundDefault = false
 		case code == 38 || code == 48 || code == 58:
 			if code == 48 {
-				changed = true
-				defaultBackground = false
+				backgroundChanged = true
+				backgroundDefault = false
+			} else if code == 38 {
+				foregroundChanged = true
+				foregroundDefault = false
 			}
 			// Semicolon-form extended colors are 38/48/58;5;n or
 			// 38/48/58;2;r;g;b. Colon-form colors are contained in part.
@@ -749,54 +846,13 @@ func sgrLeavesBackgroundDefault(params string) bool {
 			}
 		}
 	}
-	return changed && defaultBackground
+	return foregroundChanged && foregroundDefault, backgroundChanged && backgroundDefault
 }
 
 // sgrLeavesForegroundDefault is the foreground counterpart to
 // sgrLeavesBackgroundDefault. Extended background colors are skipped as one
 // group so RGB zero channels cannot be mistaken for SGR 0.
 func sgrLeavesForegroundDefault(params string) bool {
-	if params == "" {
-		return true
-	}
-	parts := strings.Split(params, ";")
-	changed := false
-	defaultForeground := false
-	for i := 0; i < len(parts); i++ {
-		part := parts[i]
-		if colon := strings.IndexByte(part, ':'); colon >= 0 {
-			part = part[:colon]
-		}
-		code := 0
-		if part != "" {
-			var err error
-			code, err = strconv.Atoi(part)
-			if err != nil {
-				continue
-			}
-		}
-		switch {
-		case code == 0 || code == 39:
-			changed = true
-			defaultForeground = true
-		case code >= 30 && code <= 37 || code >= 90 && code <= 97:
-			changed = true
-			defaultForeground = false
-		case code == 38 || code == 48 || code == 58:
-			if code == 38 {
-				changed = true
-				defaultForeground = false
-			}
-			if strings.Contains(parts[i], ":") || i+1 >= len(parts) {
-				continue
-			}
-			switch parts[i+1] {
-			case "5":
-				i += min(2, len(parts)-i-1)
-			case "2":
-				i += min(4, len(parts)-i-1)
-			}
-		}
-	}
-	return changed && defaultForeground
+	foregroundDefault, _ := sgrLeavesColorsDefault(params)
+	return foregroundDefault
 }

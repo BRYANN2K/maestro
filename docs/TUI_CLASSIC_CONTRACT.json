@@ -1,0 +1,134 @@
+{
+  "schema_version": "1.0",
+  "kind": "terminal-ui",
+  "application": {
+    "name": "maestro",
+    "primary_user": "A developer supervising model-assisted work in a local repository",
+    "core_task": "Inspect, direct, approve, and verify agent work without leaving the terminal"
+  },
+  "screens": [
+    {
+      "id": "agent-workspace",
+      "purpose": "Direct the active agent, read its transcript, and inspect current decisions and progress",
+      "minimum_size": {"columns": 40, "rows": 10},
+      "focus_order": ["composer", "transcript", "activity-rail"],
+      "states": ["ready", "busy", "empty", "error"]
+    },
+    {
+      "id": "ide-workspace",
+      "purpose": "Inspect repository files, staged proposals, diffs, and focused agent context",
+      "minimum_size": {"columns": 40, "rows": 10},
+      "focus_order": ["file-tree", "editor", "action-rail", "ide-composer"],
+      "states": ["ready", "loading", "empty", "error"]
+    },
+    {
+      "id": "tool-permission-confirmation",
+      "purpose": "Confirm or cancel the execute approved tool operation after showing its exact target and arguments",
+      "minimum_size": {"columns": 40, "rows": 10},
+      "focus_order": ["cancel", "confirm"],
+      "states": ["ready", "confirming", "error"]
+    },
+    {
+      "id": "proposal-review-confirmation",
+      "purpose": "Confirm or cancel the apply proposal operation after reviewing the affected path and hunks",
+      "minimum_size": {"columns": 40, "rows": 10},
+      "focus_order": ["cancel", "confirm", "diff"],
+      "states": ["ready", "confirming", "error"]
+    },
+    {
+      "id": "model-picker",
+      "purpose": "Select an available provider model and reasoning effort for the active role",
+      "minimum_size": {"columns": 40, "rows": 10},
+      "focus_order": ["search", "model-list", "reasoning-list"],
+      "states": ["ready", "loading", "empty", "error"]
+    },
+    {
+      "id": "help-overlay",
+      "purpose": "Show discoverable keyboard controls for the current workspace",
+      "minimum_size": {"columns": 40, "rows": 10},
+      "focus_order": ["keymap", "close"],
+      "states": ["ready", "compact", "error"]
+    }
+  ],
+  "keybindings": [
+    {"key": "ctrl+q", "action": "quit", "scope": "global", "discoverable": true},
+    {"key": "ctrl+c", "action": "cancel active task or quit when idle", "scope": "global", "discoverable": true},
+    {"key": "esc esc", "action": "cancel active task and close transient surface", "scope": "global", "discoverable": true},
+    {"key": "space ?", "action": "open contextual help", "scope": "global", "discoverable": true},
+    {"key": "ctrl+p", "action": "open command palette", "scope": "global", "discoverable": true},
+    {"key": "ctrl+l", "action": "open model picker", "scope": "global", "discoverable": true},
+    {"key": "tab", "action": "cycle focus", "scope": "global", "discoverable": true},
+    {"key": "enter", "action": "send message", "scope": "agent-workspace", "discoverable": true},
+    {"key": "ctrl+j", "action": "insert portable newline", "scope": "agent-workspace", "discoverable": true},
+    {"key": "pgup", "action": "scroll transcript up", "scope": "agent-workspace", "discoverable": true},
+    {"key": "pgdn", "action": "scroll transcript down", "scope": "agent-workspace", "discoverable": true},
+    {"key": "enter", "action": "open selected file or action", "scope": "ide-workspace", "discoverable": true},
+    {"key": "ctrl+j", "action": "insert portable newline in IDE composer", "scope": "ide-workspace", "discoverable": true},
+    {"key": "esc", "action": "reject permission", "scope": "tool-permission-confirmation", "discoverable": true},
+    {"key": "enter", "action": "activate selected safe-default decision", "scope": "tool-permission-confirmation", "discoverable": true},
+    {"key": "esc", "action": "cancel proposal application", "scope": "proposal-review-confirmation", "discoverable": true},
+    {"key": "enter", "action": "activate selected proposal decision", "scope": "proposal-review-confirmation", "discoverable": true}
+  ],
+  "operations": [
+    {
+      "id": "run-agent",
+      "screen": "agent-workspace",
+      "async": true,
+      "cancellable": true,
+      "destructive": false,
+      "confirmation_screen": "agent-workspace",
+      "success_state": "The transcript closes the active turn and the activity rail records completion",
+      "failure_state": "The active turn closes with a visible bounded error and remains retryable"
+    },
+    {
+      "id": "execute-approved-tool",
+      "screen": "agent-workspace",
+      "async": true,
+      "cancellable": true,
+      "destructive": true,
+      "confirmation_screen": "tool-permission-confirmation",
+      "success_state": "The tool card becomes complete and exposes a bounded result summary",
+      "failure_state": "The tool card becomes failed or rejected without silently executing another action"
+    },
+    {
+      "id": "apply-proposal",
+      "screen": "agent-workspace",
+      "async": false,
+      "cancellable": false,
+      "destructive": true,
+      "confirmation_screen": "proposal-review-confirmation",
+      "success_state": "Accepted hunks are written atomically and the proposal status becomes applied",
+      "failure_state": "The source file remains unchanged and a stale or invalid proposal stays reviewable"
+    },
+    {
+      "id": "load-session",
+      "screen": "agent-workspace",
+      "async": true,
+      "cancellable": true,
+      "destructive": false,
+      "confirmation_screen": "agent-workspace",
+      "success_state": "The selected session and workspace revision replace the visible snapshot together",
+      "failure_state": "The current session remains active and a visible error explains the failed load"
+    }
+  ],
+  "terminal": {
+    "alternate_screen": true,
+    "restore_on_exit": true,
+    "resize_behavior": "Every resize recomputes pane geometry; undersized terminals show a recoverable compact surface with hidden actions disabled",
+    "color_mode": "Color follows terminal capability with explicit monochrome, ANSI, indexed, and true-color projections",
+    "unicode_fallback": "ASCII output preserves labels and single-cell layout when the terminal profile cannot render the preferred Unicode marks",
+    "non_tty_behavior": "The launcher exits before initialization with a plain diagnostic and directs users to the line-oriented chat command"
+  },
+  "compatibility": {
+    "platforms": ["macOS", "Linux", "Windows through a compatible console host"],
+    "terminals": ["xterm-compatible terminals", "Ghostty", "iTerm2", "Windows Terminal"],
+    "minimum_sizes": ["40 columns by 10 rows is the tested absolute minimum", "80 columns by 24 rows is recommended for Agent", "100 columns by 28 rows is recommended for IDE", "smaller sizes use the recovery surface"]
+  },
+  "verification": {
+    "state_tests": true,
+    "snapshot_tests": true,
+    "virtual_terminal_tests": true,
+    "pty_tests": true,
+    "cleanup_test": "A Unix PTY integration test launches the production runTUI boundary, waits for actual mode-entry bytes, sends Ctrl+Q, and requires a bounded clean exit plus restoration of alternate-screen, cursor visibility/color, focus-reporting, bracketed-paste, and configured mouse state; Windows/ConPTY is outside this Unix PTY evidence"
+  }
+}

@@ -3,6 +3,75 @@
 All notable changes to Maestro are documented here. Maestro follows
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### OpenTUI workspace
+
+- Made the English OpenTUI / React workspace the default terminal interface,
+  with changes, specifications, conversation and five workflow phases.
+- Added native model/account dialogs, masked API-key entry, endpoint discovery,
+  multiline composition, file previews and saved-session navigation.
+- Bound contract approval to the exact reviewed digest; stale approvals fail.
+- Added authenticated host/UI transport, cancellation and terminal restoration.
+- Included the compiled UI in source builds, release bundles and npm cache
+  verification. The previous editor remains under `maestro tui --classic`.
+
+### Runtime and context safety
+
+- Added complete per-turn context preflight for native providers, including
+  system/history content, reasoning and signed-thinking blocks, tool
+  calls/results, provider options, tool schemas, and reserved output tokens.
+- Bounded retained provider/tool output, tool-call payload accumulation,
+  built-in reads/search/command output, review inputs, Git inventories, and
+  model/MCP catalogs; oversized semantic evidence now fails explicitly instead
+  of being silently truncated.
+- Made provider event delivery cancellation-aware and changed streamed text,
+  reasoning, and tool-argument accumulation to avoid repeated full-buffer
+  copies. Deterministic tool ordering keeps equivalent request prefixes stable.
+- Made native provider cost admission reserve each turn immediately before
+  dispatch. Daily reservations are atomic across concurrent Maestro processes;
+  proven pre-dispatch failures release them, incomplete post-dispatch turns
+  retain a bounded lease, and valid completions settle exact cost to the
+  admission day. Accounting uncertainty now fails later admission closed.
+- Added Anthropic prompt-cache breakpoints within the provider's four-marker
+  limit, with `MAESTRO_NO_CACHE=1` for incompatible endpoints.
+
+### Catalogs and integrations
+
+- Made TUI model-catalog startup cache-first and asynchronous, with periodic
+  refresh, newest-generation publication, bounded local model discovery,
+  retry cooldowns, and transport cleanup on close. Headless loading remains
+  synchronous.
+- Bounded MCP configuration and native tool catalogs, connected/discovered
+  servers through a four-worker pool, shared concurrent discovery, and rejected
+  stale catalogs after reconnect, close, workspace changes, or
+  `tools/list_changed` notifications.
+
+### Review and process isolation
+
+- Built complete worktree review patches in a private Git index and object
+  directory without mutating the user's index/object database, and refused
+  content filters, dirty submodules, special files, and oversized evidence.
+- Reused bounded identity-checked review inputs and ran `gofmt` against private
+  stable copies, closing path-replacement and blocking-special-file races.
+- Propagated cancellation to subprocess trees for vendor CLIs, built-in shell
+  tools, review commands, and stdio MCP servers. Windows uses kill-on-close Job
+  Objects with suspended process startup; Unix uses isolated process groups
+  plus escaped-descendant cleanup where required.
+
+### Terminal interface
+
+- Moved file trees, Git gutters, provider/model probes and refreshes, picker
+  listings, editor hydration/file opens, and hunk staging off the Bubble Tea
+  update loop. Loading/error/retry states remain interactive, and stale results
+  cannot overwrite a newer session, workspace, or request.
+- Made `Ctrl+Q`, overlay close, and cancellation tear down outstanding TUI
+  workers; permission dialogs default to Reject and proposal application adds a
+  target-specific confirmation focused on Cancel.
+- Added non-TTY startup refusal, `NO_COLOR` coverage for cursor-color control,
+  `MAESTRO_GLYPHS` Unicode/ASCII selection, and a Unix PTY test for terminal
+  mode restoration on `Ctrl+Q`.
+
 ## [1.0.0] — 2026-08-11
 
 Maestro's first public release: a spec-driven AI development environment for

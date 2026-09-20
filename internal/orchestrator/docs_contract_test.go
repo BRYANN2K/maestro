@@ -131,7 +131,11 @@ Spec: specs/%s/spec.md
 - Provision the variable before boot.
 `, active.ID, active.GoalLine(), requirement, decision, success)
 	capture := &captureDocsLegacyAgent{summary: contradictory}
-	orch.runner = &legacyRunner{agent: capture, model: "gpt-5.6-luna", o: orch}
+	orch.runner = runnerFunc(func(ctx context.Context, role agentcore.Role, prompt string) (agentcore.AgentResult, error) {
+		capture.prompt = prompt
+		capture.opts = agent.Options{Model: "gpt-5.6-luna", WorkDir: orch.workDir(), ReadOnly: true}
+		return agentcore.AgentResult{OK: true, Summary: contradictory}, nil
+	})
 
 	path, adr, err := orch.DocsDraft(t.Context())
 	if err != nil {

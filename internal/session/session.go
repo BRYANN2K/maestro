@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -21,7 +22,11 @@ import (
 
 // CurrentSchemaVersion is written on every new or updated session. A zero
 // value remains valid when loading records written before versioning existed.
-const CurrentSchemaVersion = 3
+const (
+	CurrentSchemaVersion  = 3
+	maxSessionRecordBytes = int64(16 << 20)
+	maxActivePointerBytes = int64(1 << 10)
+)
 
 // ErrConflict means a different Maestro process committed a newer snapshot of
 // the same session. Callers must reload instead of retrying their stale state:
@@ -161,10 +166,11 @@ func New(project string) Session {
 type Store struct {
 	dir string
 	mu  sync.Mutex
+	now func() time.Time
 }
 
 // NewStore returns a Store rooted at dir.
-func NewStore(dir string) *Store { return &Store{dir: dir} }
+func NewStore(dir string) *Store { return &Store{dir: dir, now: time.Now} }
 
 // Dir returns the store root.
 func (s *Store) Dir() string { return s.dir }
@@ -259,6 +265,9 @@ func (s *Store) saveRecordLocked(ctx context.Context, sess Session, preservePers
 	if err != nil {
 		return Session{}, fmt.Errorf("save session %s: %w", sess.ID, err)
 	}
+	if int64(len(data)) > maxSessionRecordBytes {
+		return Session{}, fmt.Errorf("save session %s: record is %d bytes; limit is %d", sess.ID, len(data), maxSessionRecordBytes)
+	}
 	dir := filepath.Join(s.dir, sess.Project)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return Session{}, fmt.Errorf("save session %s: %w", sess.ID, err)
@@ -284,7 +293,7 @@ func (s *Store) loadLocked(ctx context.Context, project, id string) (Session, er
 	if err := ctx.Err(); err != nil {
 		return Session{}, err
 	}
-	data, err := os.ReadFile(filepath.Join(s.dir, project, id+".json"))
+	data, err := readBoundedRegularFile(filepath.Join(s.dir, project, id+".json"), maxSessionRecordBytes)
 	if err != nil {
 		return Session{}, fmt.Errorf("load session %s: %w", id, err)
 	}
@@ -348,6 +357,36 @@ func validComponent(value string) bool {
 	return value != "" && value != "." && value != ".." &&
 		len(value) <= 240 && filepath.Base(value) == value &&
 		!strings.ContainsAny(value, "/\\\x00")
+}
+
+func readBoundedRegularFile(path string, limit int64) ([]byte, error) {
+	pathInfo, err := os.Lstat(path)
+	if err != nil {
+		return nil, err
+	}
+	if !pathInfo.Mode().IsRegular() || pathInfo.Size() > limit {
+		return nil, fmt.Errorf("record is not a regular file within the %d-byte limit", limit)
+	}
+	file, err := openReadOnly(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	openedInfo, err := file.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !openedInfo.Mode().IsRegular() || !os.SameFile(pathInfo, openedInfo) || openedInfo.Size() > limit {
+		return nil, fmt.Errorf("record changed or exceeds the %d-byte limit", limit)
+	}
+	data, err := io.ReadAll(io.LimitReader(file, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > limit {
+		return nil, fmt.Errorf("record exceeds the %d-byte limit", limit)
+	}
+	return data, nil
 }
 
 // Latest returns the most recent session for project.

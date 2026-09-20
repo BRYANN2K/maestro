@@ -1,16 +1,27 @@
 package orchestrator
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/bryann2k/maestro/internal/agentcore"
+	gitpkg "github.com/bryann2k/maestro/internal/git"
 	"github.com/bryann2k/maestro/internal/security"
 	"github.com/bryann2k/maestro/internal/session"
+)
+
+const (
+	maxReviewCommandOutputBytes = 64 << 10
+	maxReviewVetDuration        = 2 * time.Minute
+	maxReviewTestDuration       = 10 * time.Minute
 )
 
 // ReviewItem is one finding of a review, at a level.
@@ -64,6 +75,9 @@ func (v Verdict) Findings() string {
 // the test suite — plus spec-alignment checks, and enters the review phase.
 // The LLM reviewer (native spawn) replaces this stub in B5.
 func (o *Orchestrator) Review(ctx context.Context) (Verdict, error) {
+	if err := o.requireLegacyWorkflow(); err != nil {
+		return Verdict{}, err
+	}
 	if o.spec == nil {
 		return Verdict{}, errors.New("review: no active spec")
 	}
@@ -71,11 +85,12 @@ func (o *Orchestrator) Review(ctx context.Context) (Verdict, error) {
 	if from != session.PhaseBuild && from != session.PhaseReview && from != session.PhaseDocs {
 		return Verdict{}, fmt.Errorf("review: cannot start from phase %q", from)
 	}
-	if err := o.validateSessionWorkspaceIdentity(ctx, "review"); err != nil {
+	reviewedIdentity, err := o.validatedSessionWorkspaceIdentity(ctx, "review")
+	if err != nil {
 		return Verdict{}, err
 	}
 	if (from == session.PhaseReview || from == session.PhaseDocs) && o.sess.Review != nil && o.sess.Review.GitRef != "" && o.sess.Review.GitHead != "" {
-		if err := o.requireReviewedGitIdentity(ctx, "review"); err != nil {
+		if err := o.requireReviewedGitIdentitySnapshot(reviewedIdentity, "review"); err != nil {
 			return Verdict{}, err
 		}
 	}
@@ -84,23 +99,37 @@ func (o *Orchestrator) Review(ctx context.Context) (Verdict, error) {
 	if contractErr != nil {
 		v.Items = append(v.Items, ReviewItem{Level: "fail", Message: contractErr.Error()})
 	}
-	reviewedIdentity, err := readGitWorkspaceIdentity(ctx, o.workDir())
-	if err != nil {
-		return Verdict{}, fmt.Errorf("review: capture Git identity: %w", err)
-	}
 	reviewedState, err := o.worktreeFingerprint(ctx)
 	if err != nil {
 		return Verdict{}, fmt.Errorf("review: fingerprint worktree: %w", err)
 	}
 	o.emit(agentcore.NewEvent(nil, agentcore.RoleReviewer, agentcore.EvSubAgent, agentcore.SubAgentStatus{Role: "reviewer", Status: "running", Detail: "deterministic gates"}))
-	v.Items = append(v.Items, o.gofmtCheck(ctx)...)
+	// Inventory the effective HEAD-to-worktree change set once. Four review
+	// gates consume the same immutable path list; independently asking Git in
+	// each gate used to spawn twelve processes before any compiler/test work.
+	changes, changesErr := o.workspaceRoute().git.AllChanges(ctx)
+	changes, changesErr = boundReviewChangeInventory(changes, changesErr)
+	v.Items = append(v.Items, o.gofmtCheckChanges(ctx, changes, changesErr)...)
 	v.Items = append(v.Items, o.vetCheck(ctx)...)
 	v.Items = append(v.Items, o.testCheck(ctx)...)
 	v.Items = append(v.Items, o.taskAlignment(ctx)...)
 	// B8 gates: security scan (F5), comprehension (8.7), TDD (8.9).
-	v.Items = append(v.Items, o.securityItems(ctx)...)
-	v.Items = append(v.Items, o.comprehensionChecks(ctx)...)
-	v.Items = append(v.Items, o.tddGate(ctx)...)
+	if changesErr == nil {
+		files, fileErr := newReviewFileCache(ctx, o.workDir())
+		if fileErr != nil {
+			v.Items = append(v.Items, ReviewItem{Level: "fail", Message: "capture bounded review inputs: " + fileErr.Error()})
+		} else {
+			v.Items = append(v.Items, o.securityItemsForChangesRead(ctx, changes, files.Read)...)
+			v.Items = append(v.Items, o.comprehensionChecksForChangesRead(ctx, changes, files.Read)...)
+			if err := files.Err(); err != nil {
+				v.Items = append(v.Items, ReviewItem{Level: "fail", Message: "bounded review input refused: " + err.Error()})
+			}
+			if err := files.Close(); err != nil {
+				v.Items = append(v.Items, ReviewItem{Level: "fail", Message: "close review inputs: " + err.Error()})
+			}
+		}
+	}
+	v.Items = append(v.Items, o.tddGateForChanges(changes, changesErr)...)
 	if o.runner == nil && (o.registry != nil || o.SettingsSnapshot().RoleDefaults[string(agentcore.RoleReviewer)].Engine == "legacy") {
 		v.Items = append(v.Items, o.agentReview(ctx)...)
 	}
@@ -327,17 +356,25 @@ func reviewFindingBoundary(summary string, start, end int) bool {
 	return next == ' ' || next == '\t' || next == '\r' || next == '\n'
 }
 
+const gofmtBatchSize = 128
+const maxReviewGofmtDuration = 30 * time.Second
+
 // gofmtCheck flags changed .go files that are not gofmt-clean.
 func (o *Orchestrator) gofmtCheck(ctx context.Context) []ReviewItem {
+	changes, err := o.workspaceRoute().git.AllChanges(ctx)
+	changes, err = boundReviewChangeInventory(changes, err)
+	return o.gofmtCheckChanges(ctx, changes, err)
+}
+
+func (o *Orchestrator) gofmtCheckChanges(ctx context.Context, changes []gitpkg.FileChange, changesErr error) []ReviewItem {
 	var items []ReviewItem
 	gofmtPath, err := exec.LookPath("gofmt")
 	if err != nil {
 		return []ReviewItem{{Level: "fail", Message: fmt.Sprintf("gofmt unavailable: %v", err)}}
 	}
 	workspace := o.workspaceRoute()
-	changes, err := workspace.git.AllChanges(ctx)
-	if err != nil {
-		return append(items, ReviewItem{Level: "fail", Message: fmt.Sprintf("gofmt cannot determine changed Go files: %v", err)})
+	if changesErr != nil {
+		return append(items, ReviewItem{Level: "fail", Message: fmt.Sprintf("gofmt cannot determine changed Go files: %v", changesErr)})
 	}
 	var goFiles []string
 	seen := make(map[string]bool, len(changes))
@@ -350,18 +387,92 @@ func (o *Orchestrator) gofmtCheck(ctx context.Context) []ReviewItem {
 	if len(goFiles) == 0 {
 		return items
 	}
-	// gofmt's -l output is newline-delimited and therefore ambiguous for a
-	// legal filename containing a newline. Check each literal path separately
-	// and report the already-known path rather than reparsing tool output.
+	files, err := newReviewFileCache(ctx, workspace.dir)
+	if err != nil {
+		return append(items, ReviewItem{Level: "fail", Message: fmt.Sprintf("gofmt cannot capture changed files: %v", err)})
+	}
+	defer files.Close()
+	stableRoot, err := os.MkdirTemp("", "maestro-gofmt-")
+	if err != nil {
+		return append(items, ReviewItem{Level: "fail", Message: fmt.Sprintf("gofmt cannot create stable input directory: %v", err)})
+	}
+	defer os.RemoveAll(stableRoot)
+	validated := goFiles[:0]
 	for _, file := range goFiles {
-		cmd := exec.CommandContext(ctx, gofmtPath, "-l", "--", file)
-		cmd.Dir = workspace.dir
-		out, err := cmd.Output()
+		data, err := files.Read(file)
 		if err != nil {
-			items = append(items, ReviewItem{Level: "fail", Message: fmt.Sprintf("gofmt %s failed: %v", file, err)})
+			items = append(items, ReviewItem{Level: "fail", Message: "gofmt refused changed path: " + err.Error()})
 			continue
 		}
-		if len(out) != 0 {
+		rel := filepath.FromSlash(file)
+		if !filepath.IsLocal(rel) {
+			items = append(items, ReviewItem{Level: "fail", Message: fmt.Sprintf("gofmt refused non-local changed path %q", file)})
+			continue
+		}
+		target := filepath.Join(stableRoot, rel)
+		if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+			items = append(items, ReviewItem{Level: "fail", Message: fmt.Sprintf("gofmt stage %s: %v", file, err)})
+			continue
+		}
+		if err := os.WriteFile(target, data, 0o600); err != nil {
+			items = append(items, ReviewItem{Level: "fail", Message: fmt.Sprintf("gofmt stage %s: %v", file, err)})
+			continue
+		}
+		validated = append(validated, rel)
+	}
+	goFiles = validated
+	if len(goFiles) == 0 {
+		return items
+	}
+	gofmtCtx, cancelGofmt := context.WithTimeout(ctx, maxReviewGofmtDuration)
+	defer cancelGofmt()
+	// Batch ordinary paths to avoid one process per changed Go file. Newline is
+	// legal in a Git path and ambiguous in gofmt's line-oriented output, so
+	// those exceptional names retain a literal one-file check.
+	var ordinary, exceptional []string
+	for _, file := range goFiles {
+		if strings.ContainsAny(file, "\r\n") {
+			exceptional = append(exceptional, file)
+		} else {
+			ordinary = append(ordinary, file)
+		}
+	}
+	for start := 0; start < len(ordinary); start += gofmtBatchSize {
+		end := min(start+gofmtBatchSize, len(ordinary))
+		batch := ordinary[start:end]
+		args := append([]string{"-l", "--"}, batch...)
+		out, err := runBoundedReviewCommand(gofmtCtx, stableRoot, gofmtPath, args...)
+		if err != nil {
+			if gofmtCtx.Err() != nil {
+				return append(items, ReviewItem{Level: "fail", Message: fmt.Sprintf("gofmt exceeded its %s aggregate deadline: %v", maxReviewGofmtDuration, gofmtCtx.Err())})
+			}
+			detail := strings.TrimSpace(shortOutput(out))
+			if detail == "" {
+				detail = err.Error()
+			}
+			for _, file := range batch {
+				items = append(items, ReviewItem{Level: "fail", Message: fmt.Sprintf("gofmt %s failed: %s", file, detail)})
+			}
+			continue
+		}
+		for _, file := range strings.Split(strings.TrimSuffix(string(out), "\n"), "\n") {
+			if file != "" {
+				items = append(items, ReviewItem{Level: "fail", Message: fmt.Sprintf("gofmt: %s is not formatted", file)})
+			}
+		}
+	}
+	for _, file := range exceptional {
+		out, err := runBoundedReviewCommand(gofmtCtx, stableRoot, gofmtPath, "-l", "--", file)
+		if err != nil {
+			if gofmtCtx.Err() != nil {
+				return append(items, ReviewItem{Level: "fail", Message: fmt.Sprintf("gofmt exceeded its %s aggregate deadline: %v", maxReviewGofmtDuration, gofmtCtx.Err())})
+			}
+			detail := strings.TrimSpace(shortOutput(out))
+			if detail == "" {
+				detail = err.Error()
+			}
+			items = append(items, ReviewItem{Level: "fail", Message: fmt.Sprintf("gofmt %s failed: %s", file, detail)})
+		} else if len(out) != 0 {
 			items = append(items, ReviewItem{Level: "fail", Message: fmt.Sprintf("gofmt: %s is not formatted", file)})
 		}
 	}
@@ -370,30 +481,102 @@ func (o *Orchestrator) gofmtCheck(ctx context.Context) []ReviewItem {
 
 // vetCheck runs go vet in the working directory.
 func (o *Orchestrator) vetCheck(ctx context.Context) []ReviewItem {
-	cmd := exec.CommandContext(ctx, "go", "vet", "./...")
-	cmd.Dir = o.workDir()
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return []ReviewItem{{Level: "fail", Message: fmt.Sprintf("go vet: %s", strings.TrimSpace(shortOutput(out)))}}
-	}
-	return nil
+	return vetCheckWithRunner(ctx, o.workDir(), runBoundedReviewCommand)
 }
 
 // testCheck runs the test suite.
 func (o *Orchestrator) testCheck(ctx context.Context) []ReviewItem {
-	cmd := exec.CommandContext(ctx, "go", "test", "./...", "-count=1")
-	cmd.Dir = o.workDir()
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return []ReviewItem{{Level: "fail", Message: fmt.Sprintf("go test: %s", strings.TrimSpace(shortOutput(out)))}}
+	return testCheckWithRunner(ctx, o.workDir(), runBoundedReviewCommand)
+}
+
+type reviewCommandRunner func(context.Context, string, string, ...string) ([]byte, error)
+
+func vetCheckWithRunner(ctx context.Context, dir string, runner reviewCommandRunner) []ReviewItem {
+	if item, failed := runReviewCommandCheck(ctx, maxReviewVetDuration, dir, "go vet", "go", runner, "vet", "./..."); failed {
+		return []ReviewItem{item}
+	}
+	return nil
+}
+
+func testCheckWithRunner(ctx context.Context, dir string, runner reviewCommandRunner) []ReviewItem {
+	if item, failed := runReviewCommandCheck(ctx, maxReviewTestDuration, dir, "go test", "go", runner, "test", "./...", "-count=1"); failed {
+		return []ReviewItem{item}
 	}
 	return []ReviewItem{{Level: "pass", Message: "go test ./... passes"}}
 }
 
-// securityItems runs the OWASP scan (F5) and renders findings as review
-// items — the card surface is the review output itself.
-func (o *Orchestrator) securityItems(ctx context.Context) []ReviewItem {
-	findings := o.securityScan(ctx)
+func runReviewCommandCheck(
+	ctx context.Context,
+	timeout time.Duration,
+	dir, label, name string,
+	runner reviewCommandRunner,
+	args ...string,
+) (ReviewItem, bool) {
+	commandCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	out, err := runner(commandCtx, dir, name, args...)
+	if err == nil {
+		return ReviewItem{}, false
+	}
+
+	message := ""
+	switch {
+	case errors.Is(commandCtx.Err(), context.DeadlineExceeded) && ctx.Err() == nil:
+		message = fmt.Sprintf("%s timed out after %s", label, timeout)
+	case ctx.Err() != nil:
+		message = fmt.Sprintf("%s cancelled: %v", label, ctx.Err())
+	default:
+		detail := strings.TrimSpace(shortOutput(out))
+		if detail == "" {
+			detail = err.Error()
+		}
+		message = fmt.Sprintf("%s: %s", label, detail)
+	}
+	return ReviewItem{Level: "fail", Message: message}, true
+}
+
+type boundedReviewOutput struct {
+	buf       bytes.Buffer
+	truncated bool
+}
+
+func (w *boundedReviewOutput) Write(p []byte) (int, error) {
+	n := len(p)
+	remaining := max(maxReviewCommandOutputBytes-w.buf.Len(), 0)
+	if len(p) > remaining {
+		p = p[:remaining]
+		w.truncated = true
+	}
+	_, _ = w.buf.Write(p)
+	return n, nil
+}
+
+func (w *boundedReviewOutput) Bytes() []byte {
+	if !w.truncated {
+		return append([]byte(nil), w.buf.Bytes()...)
+	}
+	out := make([]byte, 0, w.buf.Len()+32)
+	out = append(out, w.buf.Bytes()...)
+	out = append(out, []byte("\n… command output truncated")...)
+	return out
+}
+
+func runBoundedReviewCommand(ctx context.Context, dir, name string, args ...string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Dir = dir
+	out := &boundedReviewOutput{}
+	cmd.Stdout, cmd.Stderr = out, out
+	err := runReviewProcessTreeCommand(cmd)
+	return out.Bytes(), err
+}
+
+func (o *Orchestrator) securityItemsForChangesRead(ctx context.Context, changes []gitpkg.FileChange, read security.ReadFile) []ReviewItem {
+	findings := o.securityScanChangesRead(ctx, changes, read)
+	return o.securityItemsFromFindings(findings)
+}
+
+func (o *Orchestrator) securityItemsFromFindings(findings []security.Finding) []ReviewItem {
 	var items []ReviewItem
 	for _, f := range findings {
 		level := "fail"

@@ -54,12 +54,8 @@ func (m *Model) switchTab(tab Tab) tea.Cmd {
 		created := m.ide == nil
 		if created {
 			project := m.orch.WorkDirDisplay()
-			if m.streaming() {
-				m.ide = newDeferredIDE(m, project, git.New(project))
-				cmd = m.refreshModifiedFiles()
-			} else {
-				m.ide = NewIDE(m, project, git.New(project))
-			}
+			m.ide = newDeferredIDE(m, project, git.New(project))
+			cmd = m.beginIDEHydration(m.ide)
 		}
 		m.ensureIDEProportions()
 		m.activeTab = TabIDE
@@ -80,7 +76,9 @@ func (m *Model) switchTab(tab Tab) tea.Cmd {
 }
 
 func (m *Model) closeIDE() {
+	m.invalidateIDEGutterRequest()
 	if m.ide != nil {
+		m.ide.cancelOperation()
 		m.ide.Save()
 	}
 	m.ide = nil
@@ -224,13 +222,12 @@ func (m *Model) renderTabBar() string {
 }
 
 // renderRuntimeChrome exposes the orchestration contract in the command bar.
-// Chat is deliberately labelled read-only: the LLM may discuss and inspect,
-// but only /propose can create a spec proposal.
+// Discovery starts with context. Mutating capabilities require approval.
 func (m *Model) renderRuntimeChrome(width int) string {
 	if m.orch == nil || width < 18 {
 		return ""
 	}
-	label := "DISCOVERY · READ ONLY"
+	label := "DISCOVERY · PLAN FIRST"
 	color := m.styles.T.Color(TokenSmoke)
 	switch m.orch.Phase() {
 	case session.PhasePropose:

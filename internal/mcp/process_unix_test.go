@@ -71,3 +71,17 @@ func TestStdioCancellationKillsEscapedProcessGroupDescendant(t *testing.T) {
 	}
 	t.Fatalf("escaped MCP descendant %d survived cancellation", pid)
 }
+
+func testProcessAlive(pid int) bool {
+	if pid <= 1 {
+		return false
+	}
+	err := syscall.Kill(pid, 0)
+	return err == nil || errors.Is(err, syscall.EPERM)
+}
+
+func terminateTestProcess(pid int) {
+	if pid > 1 {
+		_ = syscall.Kill(pid, syscall.SIGKILL)
+	}
+}

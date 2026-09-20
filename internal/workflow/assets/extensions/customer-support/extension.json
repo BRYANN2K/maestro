@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "id": "customer-support",
+  "description": "Prepare diagnosis, assistance, and escalation for problems users actually encounter.",
+  "explore": "explore.md",
+  "apply": "apply.md",
+  "check": "check.md",
+  "docs": "docs.md"
+}

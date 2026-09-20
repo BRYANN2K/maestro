@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -31,14 +32,17 @@ type Ecosystem struct {
 	mu         sync.Mutex
 	sessionUSD float64
 	toolCalls  int
-	sessionTok int
+	contextTok map[agentcore.Role]int // latest provider turn per role
 
-	mcpMu    sync.Mutex
-	mcpReady bool
-	mcpBusy  bool
-	mcpDone  chan struct{}
-	mcpTools []agentcore.Tool
-	mcpInfo  []MCPToolSummary
+	mcpMu      sync.Mutex
+	mcpReady   bool
+	mcpBusy    bool
+	mcpClosed  bool
+	mcpDone    chan struct{}
+	mcpCancel  context.CancelFunc
+	mcpTools   []agentcore.Tool
+	mcpInfo    []MCPToolSummary
+	mcpOmitted map[*mcp.Client]mcpCatalogOmission
 }
 
 // newEcosystem builds the B9 wiring (called from New).
@@ -54,13 +58,14 @@ func (o *Orchestrator) newEcosystem() {
 		home = "."
 	}
 	eco := &Ecosystem{
-		Advisor: advisor.New(o.baseDir),
-		MCP:     o.configuredMCPRegistry(o.workDir()),
-		Notify:  notify.New(notify.ModeAuto),
+		Advisor:    advisor.New(o.baseDir),
+		MCP:        o.configuredMCPRegistry(o.workDir()),
+		Notify:     notify.New(notify.ModeAuto),
+		contextTok: make(map[agentcore.Role]int),
 	}
 	// Advisor rules: fired stream rules become convention patterns.
-	if o.guardrails.Rules != nil {
-		for _, r := range o.guardrails.Rules.Rules() {
+	if rules := o.guardrailSnapshot().Rules; rules != nil {
+		for _, r := range rules.Rules() {
 			if !r.Fired {
 				eco.Advisor.Conventions = append(eco.Advisor.Conventions, r.Pattern)
 			}
@@ -115,17 +120,22 @@ func closeEcosystemMCP(eco *Ecosystem) {
 	for {
 		eco.mcpMu.Lock()
 		if !eco.mcpBusy {
+			eco.mcpClosed = true
 			if eco.MCP != nil {
 				eco.MCP.CloseAll()
 			}
 			eco.mcpTools = nil
 			eco.mcpInfo = nil
+			eco.mcpOmitted = nil
 			eco.mcpReady = false
 			eco.mcpMu.Unlock()
 			return
 		}
-		done := eco.mcpDone
+		done, cancel := eco.mcpDone, eco.mcpCancel
 		eco.mcpMu.Unlock()
+		if cancel != nil {
+			cancel()
+		}
 		if done == nil {
 			continue
 		}
@@ -137,11 +147,37 @@ func closeEcosystemMCP(eco *Ecosystem) {
 // be called by every frontend when its orchestrator lifetime ends so an MCP
 // stdio child cannot outlive a CLI, REPL, or TUI session.
 func (o *Orchestrator) Close() error {
-	if o == nil || o.eco == nil {
+	if o == nil {
 		return nil
 	}
-	closeEcosystemMCP(o.eco)
-	return nil
+	o.closeOnce.Do(func() {
+		// Mark closed before cancellation so no refresh can join the wait group
+		// or publish after shutdown begins. Fetches run outside registryMu and
+		// inherit this lifetime context, so cancellation reaches the HTTP request.
+		o.registryMu.Lock()
+		o.closed = true
+		o.modelRefreshGen++
+		cancelRefresh := o.modelRefreshCancel
+		o.registryMu.Unlock()
+		if cancelRefresh != nil {
+			cancelRefresh()
+		}
+		o.modelRefreshWG.Wait()
+
+		o.registryMu.Lock()
+		if o.modelsDev != nil {
+			o.modelsDev.Close()
+		}
+		if o.registry != nil {
+			o.closeErr = o.registry.Close()
+		}
+		o.registryMu.Unlock()
+
+		if o.eco != nil {
+			closeEcosystemMCP(o.eco)
+		}
+	})
+	return o.closeErr
 }
 
 // retargetMCPWorkspace is the workspace lifecycle boundary for MCP. It closes
@@ -157,18 +193,27 @@ func (o *Orchestrator) retargetMCPWorkspace(workDir string) {
 	for {
 		eco.mcpMu.Lock()
 		if !eco.mcpBusy {
+			if eco.mcpClosed {
+				next.CloseAll()
+				eco.mcpMu.Unlock()
+				return
+			}
 			if eco.MCP != nil {
 				eco.MCP.CloseAll()
 			}
 			eco.MCP = next
 			eco.mcpTools = nil
 			eco.mcpInfo = nil
+			eco.mcpOmitted = nil
 			eco.mcpReady = false
 			eco.mcpMu.Unlock()
 			return
 		}
-		done := eco.mcpDone
+		done, cancel := eco.mcpDone, eco.mcpCancel
 		eco.mcpMu.Unlock()
+		if cancel != nil {
+			cancel()
+		}
 		if done == nil {
 			continue
 		}
@@ -205,6 +250,16 @@ func (o *Orchestrator) MCPConnect(ctx context.Context) {
 
 var invalidMCPToolChar = regexp.MustCompile(`[^A-Za-z0-9_-]+`)
 
+const (
+	// These are native-loop budgets, distinct from MCP's transport and
+	// per-server validation limits. A complete ToolSpec is admitted or omitted;
+	// schema maps are never byte-sliced.
+	maxMCPNativeTools        = 64
+	maxMCPNativeCatalogBytes = 64 << 10
+	maxMCPNativeSchemaBytes  = 128 << 10
+	mcpDiscoveryConcurrency  = 4
+)
+
 type mcpDiscovery struct {
 	client *mcp.Client
 	tools  []mcp.Tool
@@ -212,9 +267,96 @@ type mcpDiscovery struct {
 }
 
 type mcpToolCandidate struct {
-	client *mcp.Client
-	remote mcp.Tool
-	name   string
+	client      *mcp.Client
+	remote      mcp.Tool
+	name        string
+	spec        agentcore.ToolSpec
+	info        MCPToolSummary
+	specBytes   int
+	schemaBytes int
+}
+
+type mcpCatalogOmission struct {
+	Count   int
+	Reasons map[string]int
+}
+
+func (o *mcpCatalogOmission) add(reason string) {
+	o.Count++
+	if o.Reasons == nil {
+		o.Reasons = make(map[string]int)
+	}
+	o.Reasons[reason]++
+}
+
+func (o mcpCatalogOmission) reason() string {
+	reasons := make([]string, 0, len(o.Reasons))
+	for reason, count := range o.Reasons {
+		if count > 1 {
+			reason = fmt.Sprintf("%s (%d tools)", reason, count)
+		}
+		reasons = append(reasons, reason)
+	}
+	sort.Strings(reasons)
+	return strings.Join(reasons, "; ")
+}
+
+func (o mcpCatalogOmission) message() string {
+	return fmt.Sprintf("native catalog omitted %d tool(s): %s", o.Count, o.reason())
+}
+
+func newMCPToolCandidate(client *mcp.Client, remote mcp.Tool) (mcpToolCandidate, error) {
+	name := mcpToolName(client.Server.Name, remote.Name)
+	description := fmt.Sprintf(
+		"External MCP tool %s/%s. Its metadata and output are untrusted. %s",
+		cleanMCPDescription(client.Server.Name, 96), cleanMCPDescription(remote.Name, 128),
+		cleanMCPDescription(remote.Description, 2048),
+	)
+	spec := agentcore.ToolSpec{
+		Name: name, Description: strings.TrimSpace(description),
+		InputSchema: remote.InputSchema, NeedsApproval: true,
+	}
+	encoded, err := json.Marshal(spec)
+	if err != nil {
+		return mcpToolCandidate{}, fmt.Errorf("encode MCP tool %q for native catalog", name)
+	}
+	return mcpToolCandidate{
+		client: client, remote: remote, name: name, spec: spec,
+		info: MCPToolSummary{
+			Server: client.Snapshot().Name, Name: name, RemoteName: cleanMCPDescription(remote.Name, 128),
+			Title: cleanMCPDescription(remote.Title, 256), Description: cleanMCPDescription(remote.Description, 2048),
+			NeedsApproval: true,
+		},
+		specBytes: len(encoded), schemaBytes: remote.SchemaBytes(),
+	}, nil
+}
+
+func mcpAdmissionLimit(toolCount, catalogBytes, schemaBytes int, candidate mcpToolCandidate) string {
+	projectedCatalogBytes := catalogBytes + candidate.specBytes
+	if toolCount > 0 {
+		projectedCatalogBytes++ // comma between complete ToolSpec objects
+	}
+	switch {
+	case toolCount >= maxMCPNativeTools:
+		return fmt.Sprintf("global native-loop limit is %d tools", maxMCPNativeTools)
+	case projectedCatalogBytes > maxMCPNativeCatalogBytes:
+		return fmt.Sprintf("global native-loop catalog limit is %d bytes", maxMCPNativeCatalogBytes)
+	case candidate.schemaBytes > maxMCPNativeSchemaBytes-schemaBytes:
+		return fmt.Sprintf("global retained-schema limit is %d bytes", maxMCPNativeSchemaBytes)
+	default:
+		return ""
+	}
+}
+
+func exposeMCPTool(candidate mcpToolCandidate) agentcore.Tool {
+	client, remoteName := candidate.client, candidate.remote.Name
+	return agentcore.NewToolFunc(candidate.spec, func(callCtx context.Context, args map[string]any) (string, error) {
+		result, err := client.CallTool(callCtx, remoteName, args)
+		if err != nil {
+			return "", err
+		}
+		return result.ModelOutput()
+	})
 }
 
 func (o *Orchestrator) connectMCP(ctx context.Context) error {
@@ -223,6 +365,10 @@ func (o *Orchestrator) connectMCP(ctx context.Context) error {
 		return nil
 	}
 	eco.mcpMu.Lock()
+	if eco.mcpClosed {
+		eco.mcpMu.Unlock()
+		return errors.New("MCP ecosystem is closed")
+	}
 	if eco.mcpReady {
 		eco.mcpMu.Unlock()
 		return nil
@@ -234,106 +380,246 @@ func (o *Orchestrator) connectMCP(ctx context.Context) error {
 		return nil
 	}
 	eco.mcpBusy = true
-	eco.mcpDone = make(chan struct{})
+	discoveryDone := make(chan struct{})
+	eco.mcpDone = discoveryDone
+	discoveryCtx, cancelDiscovery := context.WithCancel(ctx)
+	eco.mcpCancel = cancelDiscovery
 	eco.mcpMu.Unlock()
+	defer cancelDiscovery()
+	defer func() {
+		eco.mcpMu.Lock()
+		if eco.mcpDone == discoveryDone {
+			eco.mcpBusy = false
+			eco.mcpCancel = nil
+			close(discoveryDone)
+			eco.mcpDone = nil
+		}
+		eco.mcpMu.Unlock()
+	}()
 
 	clients := eco.MCP.Clients()
-	results := make(chan mcpDiscovery, len(clients))
-	for _, client := range clients {
-		client := client
+	discovered := make([]mcpDiscovery, len(clients))
+	jobs := make(chan int, len(clients))
+	for i := range clients {
+		jobs <- i
+	}
+	close(jobs)
+	workers := mcpDiscoveryConcurrency
+	if len(clients) < workers {
+		workers = len(clients)
+	}
+	var connectWG sync.WaitGroup
+	connectWG.Add(workers)
+	for range workers {
 		go func() {
-			if client.Snapshot().Status != "connected" {
-				if err := client.Connect(ctx); err != nil {
-					results <- mcpDiscovery{client: client, err: err}
-					return
+			defer connectWG.Done()
+			for index := range jobs {
+				client := clients[index]
+				result := mcpDiscovery{client: client}
+				if err := discoveryCtx.Err(); err != nil {
+					result.err = err
+				} else if client.Snapshot().Status != "connected" {
+					result.err = client.Connect(discoveryCtx)
 				}
+				discovered[index] = result
 			}
-			serverTools, err := client.ListTools(ctx)
-			if err != nil {
-				client.Fail(err)
-				results <- mcpDiscovery{client: client, err: err}
-				return
-			}
-			results <- mcpDiscovery{client: client, tools: serverTools}
 		}()
 	}
-
-	discovered := make([]mcpDiscovery, 0, len(clients))
-	var failures []error
-	for range clients {
-		result := <-results
-		discovered = append(discovered, result)
-		if result.err != nil {
-			failures = append(failures, fmt.Errorf("mcp %s: %w", result.client.Snapshot().Name, result.err))
-		}
+	connectWG.Wait()
+	if err := discoveryCtx.Err(); err != nil {
+		return err
 	}
 	sort.Slice(discovered, func(i, j int) bool {
-		return discovered[i].client.Snapshot().Name < discovered[j].client.Snapshot().Name
+		return discovered[i].client.Server.Name < discovered[j].client.Server.Name
 	})
 
-	var candidates []mcpToolCandidate
-	byName := map[string][]int{}
-	for _, server := range discovered {
-		if server.err != nil {
-			continue
-		}
-		for _, remote := range server.tools {
-			name := mcpToolName(server.client.Server.Name, remote.Name)
-			byName[name] = append(byName[name], len(candidates))
-			candidates = append(candidates, mcpToolCandidate{client: server.client, remote: remote, name: name})
-		}
-	}
-	invalidClients := map[*mcp.Client]bool{}
-	for name, indexes := range byName {
-		if len(indexes) < 2 {
-			continue
-		}
-		err := fmt.Errorf("MCP tool name collision after sanitization: %q", name)
-		for _, index := range indexes {
-			invalidClients[candidates[index].client] = true
-		}
+	// Connections initialize concurrently. Tool catalogs are then fetched in
+	// sorted batches and admitted only after the whole batch completes. This
+	// preserves stable server/name admission while bounding discovery latency
+	// and peak schemas to the retained global set plus four server catalogs.
+	var failures []error
+	if err := eco.MCP.ConfigurationError(); err != nil {
 		failures = append(failures, err)
 	}
-	for client := range invalidClients {
-		client.Fail(errors.New("MCP tool names collide after sanitization"))
+	var published []mcpToolCandidate
+	nameOwner := make(map[string]*mcp.Client)
+	omissions := make(map[*mcp.Client]mcpCatalogOmission)
+	toolCount, catalogBytes, schemaBytes := 0, 2, 0 // [] around the ToolSpec catalog
+	for batchStart := 0; batchStart < len(discovered); batchStart += mcpDiscoveryConcurrency {
+		batchEnd := batchStart + mcpDiscoveryConcurrency
+		if batchEnd > len(discovered) {
+			batchEnd = len(discovered)
+		}
+		batch := append([]mcpDiscovery(nil), discovered[batchStart:batchEnd]...)
+		var batchWG sync.WaitGroup
+		for i := range batch {
+			if batch[i].err != nil {
+				continue
+			}
+			batchWG.Add(1)
+			go func(index int) {
+				defer batchWG.Done()
+				serverTools, err := batch[index].client.ListTools(discoveryCtx)
+				if err != nil && discoveryCtx.Err() == nil {
+					batch[index].client.Fail(err)
+				}
+				batch[index].tools, batch[index].err = serverTools, err
+			}(i)
+		}
+		batchWG.Wait()
+		if err := discoveryCtx.Err(); err != nil {
+			return err
+		}
+
+		for i := range batch {
+			server := &batch[i]
+			if server.err != nil {
+				failures = append(failures, fmt.Errorf("mcp %s: %w", server.client.Snapshot().Name, server.err))
+				continue
+			}
+			serverTools := server.tools
+			server.tools = nil
+
+			candidates := make([]mcpToolCandidate, 0, len(serverTools))
+			localNames := make(map[string]bool, len(serverTools))
+			localCollisions := make(map[string]bool)
+			candidateFailed := false
+			for _, remote := range serverTools {
+				candidate, candidateErr := newMCPToolCandidate(server.client, remote)
+				if candidateErr != nil {
+					server.client.Fail(candidateErr)
+					failures = append(failures, fmt.Errorf("mcp %s: %w", server.client.Snapshot().Name, candidateErr))
+					candidateFailed = true
+					break
+				}
+				if localNames[candidate.name] {
+					localCollisions[candidate.name] = true
+				}
+				localNames[candidate.name] = true
+				candidates = append(candidates, candidate)
+			}
+			sort.Slice(candidates, func(i, j int) bool {
+				if candidates[i].name != candidates[j].name {
+					return candidates[i].name < candidates[j].name
+				}
+				return candidates[i].remote.Name < candidates[j].remote.Name
+			})
+			if candidateFailed {
+				continue
+			}
+			if len(localCollisions) > 0 {
+				names := make([]string, 0, len(localCollisions))
+				for name := range localCollisions {
+					names = append(names, name)
+				}
+				sort.Strings(names)
+				for _, name := range names {
+					failures = append(failures, fmt.Errorf("MCP tool name collision after sanitization: %q", name))
+				}
+				server.client.Fail(errors.New("MCP tool names collide after sanitization"))
+				continue
+			}
+
+			provisional := make([]mcpToolCandidate, 0, len(candidates))
+			serverOmission := mcpCatalogOmission{}
+			nextToolCount, nextCatalogBytes, nextSchemaBytes := toolCount, catalogBytes, schemaBytes
+			for _, candidate := range candidates {
+				if reason := mcpAdmissionLimit(nextToolCount, nextCatalogBytes, nextSchemaBytes, candidate); reason != "" {
+					serverOmission.add(reason)
+					continue
+				}
+				provisional = append(provisional, candidate)
+				if nextToolCount > 0 {
+					nextCatalogBytes++
+				}
+				nextToolCount++
+				nextCatalogBytes += candidate.specBytes
+				nextSchemaBytes += candidate.schemaBytes
+			}
+
+			collisionNames := make(map[string]bool)
+			collisionClients := map[*mcp.Client]bool{server.client: true}
+			for _, candidate := range provisional {
+				if owner := nameOwner[candidate.name]; owner != nil && owner != server.client {
+					collisionNames[candidate.name] = true
+					collisionClients[owner] = true
+				}
+			}
+			if len(collisionNames) > 0 {
+				names := make([]string, 0, len(collisionNames))
+				for name := range collisionNames {
+					names = append(names, name)
+				}
+				sort.Strings(names)
+				for _, name := range names {
+					failures = append(failures, fmt.Errorf("MCP tool name collision after sanitization: %q", name))
+				}
+				invalid := make([]*mcp.Client, 0, len(collisionClients))
+				for client := range collisionClients {
+					invalid = append(invalid, client)
+				}
+				sort.Slice(invalid, func(i, j int) bool { return invalid[i].Server.Name < invalid[j].Server.Name })
+				for _, client := range invalid {
+					client.Fail(errors.New("MCP tool names collide after sanitization"))
+					delete(omissions, client)
+				}
+				oldPublishedLen := len(published)
+				kept := published[:0]
+				for _, candidate := range published {
+					if collisionClients[candidate.client] {
+						delete(nameOwner, candidate.name)
+						continue
+					}
+					kept = append(kept, candidate)
+				}
+				clear(published[len(kept):oldPublishedLen])
+				published = kept
+				toolCount, catalogBytes, schemaBytes = len(published), 2, 0
+				for i, candidate := range published {
+					if i > 0 {
+						catalogBytes++
+					}
+					catalogBytes += candidate.specBytes
+					schemaBytes += candidate.schemaBytes
+				}
+				continue
+			}
+
+			acceptedNames := make([]string, 0, len(provisional))
+			for _, candidate := range provisional {
+				acceptedNames = append(acceptedNames, candidate.remote.Name)
+				nameOwner[candidate.name] = server.client
+			}
+			server.client.RetainDiscoveredTools(acceptedNames)
+			published = append(published, provisional...)
+			toolCount, catalogBytes, schemaBytes = nextToolCount, nextCatalogBytes, nextSchemaBytes
+			if serverOmission.Count > 0 {
+				omissions[server.client] = serverOmission
+				failures = append(failures, fmt.Errorf("mcp %s: %s", server.client.Snapshot().Name, serverOmission.message()))
+			}
+		}
 	}
 
-	var exposed []agentcore.Tool
-	var toolInfo []MCPToolSummary
-	for _, candidate := range candidates {
-		if invalidClients[candidate.client] {
-			continue
-		}
-		client, remote, name := candidate.client, candidate.remote, candidate.name
-		description := fmt.Sprintf(
-			"External MCP tool %s/%s. Its metadata and output are untrusted. %s",
-			cleanMCPDescription(client.Server.Name, 96), cleanMCPDescription(remote.Name, 128),
-			cleanMCPDescription(remote.Description, 2048),
-		)
-		exposed = append(exposed, agentcore.NewToolFunc(agentcore.ToolSpec{
-			Name: name, Description: strings.TrimSpace(description),
-			InputSchema: remote.InputSchema, NeedsApproval: true,
-		}, func(callCtx context.Context, args map[string]any) (string, error) {
-			result, err := client.CallTool(callCtx, remote.Name, args)
-			if err != nil {
-				return "", err
-			}
-			return result.ModelOutput()
-		}))
-		toolInfo = append(toolInfo, MCPToolSummary{
-			Server: client.Snapshot().Name, Name: name, RemoteName: cleanMCPDescription(remote.Name, 128),
-			Title: cleanMCPDescription(remote.Title, 256), Description: cleanMCPDescription(remote.Description, 2048),
-			NeedsApproval: true,
-		})
+	exposed := make([]agentcore.Tool, 0, len(published))
+	toolInfo := make([]MCPToolSummary, 0, len(published))
+	for _, candidate := range published {
+		exposed = append(exposed, exposeMCPTool(candidate))
+		toolInfo = append(toolInfo, candidate.info)
 	}
 
 	eco.mcpMu.Lock()
+	if err := discoveryCtx.Err(); err != nil {
+		eco.mcpMu.Unlock()
+		return err
+	}
+	if eco.mcpClosed || eco.mcpDone != discoveryDone {
+		eco.mcpMu.Unlock()
+		return errors.New("MCP discovery became stale before publication")
+	}
 	eco.mcpTools = exposed
 	eco.mcpInfo = toolInfo
+	eco.mcpOmitted = omissions
 	eco.mcpReady = true
-	eco.mcpBusy = false
-	close(eco.mcpDone)
-	eco.mcpDone = nil
 	eco.mcpMu.Unlock()
 	return errorsJoin(failures...)
 }
@@ -381,11 +667,13 @@ func cleanMCPDescription(value string, limit int) string {
 // MCPServerSummary is the stable, read-only shape consumed by frontends.
 // It contains no URL, command, headers, token, session ID, or tool metadata.
 type MCPServerSummary struct {
-	Name      string
-	Type      string
-	Status    string
-	Error     string
-	ToolCount int
+	Name           string
+	Type           string
+	Status         string
+	Error          string
+	ToolCount      int
+	OmittedTools   int
+	OmissionReason string
 }
 
 // MCPToolSummary is a terminal-safe catalog row. Schemas and annotations are
@@ -414,9 +702,18 @@ func (o *Orchestrator) MCPServerSummaries(_ context.Context) []MCPServerSummary 
 	out := make([]MCPServerSummary, 0, len(clients))
 	for _, client := range clients {
 		snapshot := client.Snapshot()
+		omission := o.eco.mcpOmitted[client]
+		detail := snapshot.Error
+		if omission.Count > 0 {
+			if detail != "" {
+				detail += "; "
+			}
+			detail += omission.message()
+		}
 		out = append(out, MCPServerSummary{
 			Name: snapshot.Name, Type: snapshot.Type, Status: snapshot.Status,
-			Error: snapshot.Error, ToolCount: snapshot.ToolCount,
+			Error: detail, ToolCount: snapshot.ToolCount,
+			OmittedTools: omission.Count, OmissionReason: omission.reason(),
 		})
 	}
 	return out
@@ -468,6 +765,7 @@ func (o *Orchestrator) MCPReconnect(ctx context.Context, name string) error {
 			eco.mcpReady = false
 			eco.mcpTools = nil
 			eco.mcpInfo = nil
+			eco.mcpOmitted = nil
 			eco.mcpMu.Unlock()
 			connectErr := o.connectMCP(ctx)
 			if name == "" || name == "all" {
@@ -553,8 +851,10 @@ func (o *Orchestrator) EmitCost(usd float64, tools int) {
 	o.eco.mu.Unlock()
 }
 
-// trackSession accounts an event into the session totals + advisor.
-func (o *Orchestrator) trackSession(ev agentcore.StreamEvent) {
+// accountSession records provider usage independently from event visibility.
+// Private structured runs are intentionally absent from the transcript, but
+// their tokens, cost, and tool calls still consume the user's session budget.
+func (o *Orchestrator) accountSession(ev agentcore.StreamEvent) {
 	if o.eco == nil {
 		return
 	}
@@ -566,18 +866,35 @@ func (o *Orchestrator) trackSession(ev agentcore.StreamEvent) {
 				o.eco.sessionUSD += d.Cost.Total()
 			}
 			if d.Usage != nil {
-				// Context consumed by the turn: input + output + cache
-				// components all refill the window on the next request.
-				o.eco.sessionTok += d.Usage.InputTokens + d.Usage.OutputTokens +
+				// A context window is per request, not a lifetime session budget.
+				// Keep the latest turn per role: a private Docs/Reviewer call must
+				// not be compared with the orchestrator model shown in the TUI.
+				if o.eco.contextTok == nil {
+					o.eco.contextTok = make(map[agentcore.Role]int)
+				}
+				o.eco.contextTok[ev.Role] = d.Usage.InputTokens + d.Usage.OutputTokens +
 					d.Usage.CacheCreateTokens + d.Usage.CacheHitTokens
 			}
 			o.eco.mu.Unlock()
 		}
 	case agentcore.EvToolResult:
-		if tr, ok := ev.Content.(agentcore.ToolResult); ok {
+		if _, ok := ev.Content.(agentcore.ToolResult); ok {
 			o.eco.mu.Lock()
 			o.eco.toolCalls++
 			o.eco.mu.Unlock()
+		}
+	}
+}
+
+// trackSession accounts a public event and feeds visible tool outcomes to the
+// advisor. Silent machine protocols use accountSession directly.
+func (o *Orchestrator) trackSession(ev agentcore.StreamEvent) {
+	o.accountSession(ev)
+	if o.eco == nil || o.eco.Advisor == nil {
+		return
+	}
+	if ev.Type == agentcore.EvToolResult {
+		if tr, ok := ev.Content.(agentcore.ToolResult); ok {
 			o.eco.Advisor.Observe(context.Background(), "tool_result", tr.Name, tr.Output, string(ev.Role))
 		}
 	}

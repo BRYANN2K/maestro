@@ -20,6 +20,9 @@ type ArchiveOptions struct {
 // Archive ends every spec: propose a commit, commit, move the spec folder
 // to specs/archive/, and optionally merge the branch back.
 func (o *Orchestrator) Archive(ctx context.Context, opts ArchiveOptions) error {
+	if err := o.requireLegacyWorkflow(); err != nil {
+		return err
+	}
 	if o.spec == nil {
 		return errors.New("archive: no active spec")
 	}

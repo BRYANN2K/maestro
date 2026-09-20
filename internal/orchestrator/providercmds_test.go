@@ -4,11 +4,16 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
+	"github.com/bryann2k/maestro/internal/agentcore"
 	"github.com/bryann2k/maestro/internal/config"
 	"github.com/bryann2k/maestro/internal/vault"
 )
@@ -54,6 +59,135 @@ func TestProviderListSources(t *testing.T) {
 	if !found {
 		t.Error("catalog gpt-5 pricing missing from model list")
 	}
+}
+
+func TestReloadRegistryPublishesThroughStablePointer(t *testing.T) {
+	cfg := &config.Config{
+		Providers: []config.Provider{{
+			Name: "reload-test", Type: "openai-compat",
+			BaseURL: "https://example.invalid/v1", APIKey: "test-key",
+		}},
+		Models: []config.Model{{ID: "reload-test/model-a", Name: "Model A"}},
+	}
+	registry, err := agentcore.NewRegistry(context.Background(), cfg, nil, map[string]agentcore.CatalogProvider{})
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	o := &Orchestrator{cfg: cfg, registry: registry}
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 200; i++ {
+			if err := o.reloadRegistry(context.Background()); err != nil {
+				t.Errorf("reloadRegistry: %v", err)
+				return
+			}
+		}
+	}()
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < 500; i++ {
+				_, _ = registry.Provider("reload-test")
+				_, _ = registry.Model("reload-test/model-a")
+				_, _ = registry.ProviderOf("reload-test/model-a")
+				_ = registry.APIModelID("reload-test/model-a")
+				_ = registry.CheckModel("reload-test/model-a")
+				_ = registry.Catalog()
+			}
+		}()
+	}
+	wg.Wait()
+
+	if o.registry != registry {
+		t.Fatal("reloadRegistry replaced the Registry pointer")
+	}
+	if _, ok := registry.Provider("reload-test"); !ok {
+		t.Fatal("reloaded provider was not published")
+	}
+}
+
+func TestRefreshModelsReplacesCatalogInsteadOfMerging(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"new-remote": {
+				"id": "new-remote", "name": "New remote", "api": "https://example.invalid/v1",
+				"models": {"new-model": {"id": "new-model", "name": "New model"}}
+			}
+		}`))
+	}))
+	defer server.Close()
+
+	registry, err := agentcore.NewRegistry(context.Background(), &config.Config{}, nil, map[string]agentcore.CatalogProvider{
+		"old-remote": {ID: "old-remote", Models: map[string]agentcore.CatalogModel{"old-model": {ID: "old-model"}}},
+	})
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	o := &Orchestrator{
+		registry: registry,
+		modelsDev: agentcore.NewModelsDev(agentcore.ModelsDevOptions{
+			URL: server.URL,
+		}),
+	}
+	if err := o.RefreshModels(context.Background()); err != nil {
+		t.Fatalf("RefreshModels: %v", err)
+	}
+
+	catalog := registry.Catalog()
+	if _, exists := catalog["old-remote"]; exists {
+		t.Fatal("refresh retained a remote provider absent from the response")
+	}
+	if _, exists := catalog["new-remote"].Models["new-model"]; !exists {
+		t.Fatal("refresh did not publish the replacement model")
+	}
+}
+
+func TestRefreshModelsRebuildsActiveProviderMetadata(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"remote": {
+				"id":"remote", "name":"Remote", "env":["REMOTE_API_KEY"],
+				"api":"https://example.invalid/v1",
+				"models":{"same-model":{"id":"same-model","name":"Updated","cost":{"input":9},"limit":{"context":77777,"output":2048}}}
+			}
+		}`))
+	}))
+	defer server.Close()
+
+	initial := map[string]agentcore.CatalogProvider{
+		"remote": {
+			ID: "remote", Name: "Remote", Env: []string{"REMOTE_API_KEY"}, API: "https://example.invalid/v1",
+			Models: map[string]agentcore.CatalogModel{"same-model": {ID: "same-model", Name: "Old"}},
+		},
+	}
+	keys := mapKeyStore{"remote": "test-key"}
+	cfg := &config.Config{}
+	registry, err := agentcore.NewRegistry(context.Background(), cfg, keys, initial)
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	o := &Orchestrator{
+		cfg: cfg, keys: keys, registry: registry,
+		modelsDev: agentcore.NewModelsDev(agentcore.ModelsDevOptions{URL: server.URL}),
+	}
+	if err := o.RefreshModels(context.Background()); err != nil {
+		t.Fatalf("RefreshModels: %v", err)
+	}
+	for _, model := range o.ModelList(context.Background()) {
+		if model.Provider == "remote" && model.ID == "same-model" {
+			if model.Name != "Updated" || model.Context != 77777 || model.PriceIn != 9 {
+				t.Fatalf("refreshed active model metadata = %+v", model)
+			}
+			return
+		}
+	}
+	t.Fatal("refreshed active model missing")
 }
 
 type mapKeyStore map[string]string
@@ -257,7 +391,8 @@ func TestAuthLoginStatusLogout(t *testing.T) {
 	}
 }
 
-func TestAuthOAuthRefusesBeforeStartingFlow(t *testing.T) {
+func TestAuthOAuthRefusesMissingRuntimeBeforeStartingFlow(t *testing.T) {
+	t.Setenv("MAESTRO_RUNTIME", filepath.Join(t.TempDir(), "missing-runtime"))
 	dir := newTestRepo(t)
 	v, err := vault.Open(context.Background(), filepath.Join(t.TempDir(), "vault.json"))
 	if err != nil {
@@ -273,7 +408,7 @@ func TestAuthOAuthRefusesBeforeStartingFlow(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 	err = orch.AuthOAuth(context.Background(), "github-copilot")
-	if err == nil || !strings.Contains(err.Error(), "not supported by the native provider runtime") {
+	if err == nil || !strings.Contains(err.Error(), "regular executable") {
 		t.Fatalf("AuthOAuth error = %v, want explicit runtime capability error", err)
 	}
 	if out.Len() != 0 {
@@ -442,4 +577,39 @@ func TestProviderAddWritesProjectConfig(t *testing.T) {
 	if !strings.Contains(string(data), "--base-url") {
 		t.Errorf("maestrorc = %q", data)
 	}
+}
+
+func TestProviderAddActivatesDiscoveryWithoutRestart(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/models" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"data":[{"id":"new-model"}]}`))
+	}))
+	defer server.Close()
+	orch := newTestOrch(t, newTestRepo(t), &fakeRunner{})
+	orch.cfg = &config.Config{}
+	orch.registry, _ = agentcore.NewRegistry(t.Context(), orch.cfg, nil, map[string]agentcore.CatalogProvider{})
+	t.Cleanup(func() { orch.Close() })
+	previous := orch.cfg
+	if err := orch.ProviderAdd(t.Context(), config.Provider{Name: "review-local", Type: "openai-compat", BaseURL: server.URL + "/v1"}, false); err != nil {
+		t.Fatal(err)
+	}
+	if orch.cfg == previous {
+		t.Fatal("mutated the config snapshot held by an in-flight catalog refresh")
+	}
+	if _, ok := orch.registry.Provider("review-local"); !ok {
+		t.Fatal("saved endpoint missing from active registry")
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		for _, model := range orch.Models() {
+			if model == "review-local/new-model" {
+				return
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("new endpoint models never became available without restart")
 }

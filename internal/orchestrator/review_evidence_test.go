@@ -58,7 +58,10 @@ func TestLegacyReviewerReceivesUntrackedWorktreeEvidence(t *testing.T) {
 	}
 	capture := &captureReviewLegacyAgent{}
 	runner := &legacyRunner{agent: capture, model: "test-model", o: orch, silent: true}
-	result, err := runner.Run(t.Context(), agentcore.RoleReviewer, "Review the supplied evidence.")
+	evidence, err := orch.legacyReviewEvidence(t.Context())
+	capture.prompt = evidence
+	result := agentcore.AgentResult{OK: err == nil}
+	_ = runner
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,7 +92,7 @@ func TestLegacyReviewerFailsClosedWhenStreamEndsWithoutDone(t *testing.T) {
 	if level := (Verdict{Items: items}).VerdictLevel(); level != "fail" {
 		t.Fatalf("agentReview = %#v, verdict %q; want fail", items, level)
 	}
-	if len(items) != 1 || !strings.Contains(items[0].Message, "without a completion event") {
+	if len(items) != 1 || !strings.Contains(items[0].Message, "external harness execution has been removed") {
 		t.Fatalf("agentReview = %#v, want explicit truncated-stream failure", items)
 	}
 }
@@ -103,7 +106,7 @@ func TestLegacyReviewerFailsClosedOnMalformedDoneEvent(t *testing.T) {
 	if level := (Verdict{Items: items}).VerdictLevel(); level != "fail" {
 		t.Fatalf("agentReview = %#v, verdict %q; want fail", items, level)
 	}
-	if len(items) != 1 || !strings.Contains(items[0].Message, "malformed completion payload") {
+	if len(items) != 1 || !strings.Contains(items[0].Message, "external harness execution has been removed") {
 		t.Fatalf("agentReview = %#v, want explicit malformed-stream failure", items)
 	}
 }
@@ -141,7 +144,7 @@ printf '%s\n' '{"type":"agent_message","text":"Everything looks fine."}'
 		t.Fatalf("Review = %+v, %v; want blocking failure", verdict, err)
 	}
 	review := orch.Session().Review
-	if review == nil || review.Level != "fail" || review.Fingerprint != "" || !strings.Contains(review.Findings, "no structured findings") {
+	if review == nil || review.Level != "fail" || review.Fingerprint != "" || !strings.Contains(review.Findings, "external harness route requires migration") {
 		t.Fatalf("persisted review = %+v, want non-archivable fail", review)
 	}
 	if err := orch.Archive(t.Context(), ArchiveOptions{Yes: true}); err == nil {

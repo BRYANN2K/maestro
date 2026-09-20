@@ -89,6 +89,50 @@ func TestTrailingBackslashInsertsNewline(t *testing.T) {
 	}
 }
 
+func TestPortableNewlineBindingsDoNotSend(t *testing.T) {
+	m, _ := newTestModel(t)
+	feed(m, tea.WindowSizeMsg{Width: 100, Height: 30})
+	m.input.Set("first")
+	messages := len(m.messages)
+
+	feed(m, tea.KeyMsg{Type: tea.KeyCtrlJ})
+	if got := m.input.Value(); got != "first\n" {
+		t.Fatalf("ctrl+j input = %q, want %q", got, "first\n")
+	}
+	if len(m.messages) != messages {
+		t.Fatalf("ctrl+j sent the prompt: messages %d → %d", messages, len(m.messages))
+	}
+
+	feed(m, tea.KeyMsg{Type: tea.KeyEnter, Alt: true})
+	if got := m.input.Value(); got != "first\n\n" {
+		t.Fatalf("alt+enter input = %q, want %q", got, "first\n\n")
+	}
+	if len(m.messages) != messages {
+		t.Fatalf("alt+enter sent the prompt: messages %d → %d", messages, len(m.messages))
+	}
+}
+
+func TestIDEChatPortableNewlineBindingsDoNotSend(t *testing.T) {
+	m, _ := newTestModel(t)
+	feed(m, tea.WindowSizeMsg{Width: 120, Height: 30})
+	m.switchTab(TabIDE)
+	m.ide.Focus = ideChat
+	m.input.Set("first")
+	messages := len(m.messages)
+
+	feed(m, tea.KeyMsg{Type: tea.KeyCtrlJ})
+	if got := m.input.Value(); got != "first\n" {
+		t.Fatalf("IDE ctrl+j input = %q, want %q", got, "first\n")
+	}
+	feed(m, tea.KeyMsg{Type: tea.KeyEnter, Alt: true})
+	if got := m.input.Value(); got != "first\n\n" {
+		t.Fatalf("IDE alt+enter input = %q, want %q", got, "first\n\n")
+	}
+	if len(m.messages) != messages {
+		t.Fatalf("IDE newline binding sent the prompt: messages %d → %d", messages, len(m.messages))
+	}
+}
+
 func TestTabBarKeepsProjectVisibleWithLongSessionAndBranch(t *testing.T) {
 	m, _ := newTestModel(t)
 	m.SetSize(120, 30)
@@ -446,12 +490,27 @@ func TestWriteCardAcceptApplies(t *testing.T) {
 		t.Fatalf("card status = %q", card.Status)
 	}
 
-	// Keyboard accept ('a') also works from the normal empty composer. The
-	// proposal hint is visible while this focus is active, so swallowing the
-	// key as text would leave the review/HITL flow blocked.
+	// Keyboard accept ('a') opens the cancel-first confirmation from the normal
+	// empty composer. Enter on the default must leave the file untouched.
 	m.focus = FocusInput
 	feed(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	confirm, ok := m.overlayM.(*proposalConfirmationOverlay)
+	if m.overlay != overlayProposalConfirm || !ok || confirm.selected != proposalConfirmationCancel {
+		t.Fatalf("proposal confirmation = overlay %v, model %T, selection %v", m.overlay, m.overlayM, confirm)
+	}
+	feed(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if m.overlay != overlayNone || len(m.pending) != 1 {
+		t.Fatalf("safe-default cancel changed proposal state: overlay=%v pending=%d", m.overlay, len(m.pending))
+	}
 	data, err := os.ReadFile(filepath.Join(dir, "target.txt"))
+	if err != nil || string(data) != "one\ntwo\n" {
+		t.Fatalf("safe-default confirmation changed the file: %q, %v", data, err)
+	}
+
+	feed(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	feed(m, tea.KeyMsg{Type: tea.KeyTab})
+	feed(m, tea.KeyMsg{Type: tea.KeyEnter})
+	data, err = os.ReadFile(filepath.Join(dir, "target.txt"))
 	if err != nil {
 		t.Fatalf("ReadFile: %v", err)
 	}
@@ -505,8 +564,13 @@ func TestDiffOverlayAcceptShortcutClosesAndResolvesHITL(t *testing.T) {
 	m.overlay = overlayDiff
 	m.overlayM = newDiffOverlay(m.styles, m.pending[0].Proposal, 90)
 	feed(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	if m.overlay != overlayProposalConfirm || len(m.pending) != 1 {
+		t.Fatalf("diff accept bypassed confirmation: overlay=%v pending=%d", m.overlay, len(m.pending))
+	}
+	feed(m, tea.KeyMsg{Type: tea.KeyTab})
+	feed(m, tea.KeyMsg{Type: tea.KeyEnter})
 	if m.overlay != overlayNone || len(m.pending) != 0 {
-		t.Fatalf("diff accept left overlay=%v pending=%d", m.overlay, len(m.pending))
+		t.Fatalf("confirmed diff accept left overlay=%v pending=%d", m.overlay, len(m.pending))
 	}
 	if !m.sidebar.checked["diff"] {
 		t.Fatalf("review decision did not resolve HITL: %+v", m.sidebar.checked)
@@ -533,8 +597,13 @@ func TestIDEHITLRailAcceptsPendingProposal(t *testing.T) {
 	m.ToggleIDE()
 	m.ide.Focus = ideHITL
 	feed(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	if m.overlay != overlayProposalConfirm || len(m.pending) != 1 {
+		t.Fatalf("IDE HITL rail bypassed confirmation: overlay=%v pending=%d", m.overlay, len(m.pending))
+	}
+	feed(m, tea.KeyMsg{Type: tea.KeyTab})
+	feed(m, tea.KeyMsg{Type: tea.KeyEnter})
 	if len(m.pending) != 0 {
-		t.Fatal("IDE HITL rail swallowed the accept shortcut")
+		t.Fatal("confirmed IDE HITL accept did not settle the proposal")
 	}
 }
 
@@ -643,6 +712,11 @@ func TestDiffMouseToIDEReviewButtonsResolveHITL(t *testing.T) {
 		t.Fatalf("IDE review buttons are incomplete: accept=%+v decline=%+v", accept, decline)
 	}
 	feed(m, tea.MouseMsg{X: accept.X + 1, Y: accept.Y, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress})
+	if m.overlay != overlayProposalConfirm || len(m.pending) != 1 {
+		t.Fatalf("IDE Accept bypassed confirmation: overlay=%v pending=%d", m.overlay, len(m.pending))
+	}
+	feed(m, tea.KeyMsg{Type: tea.KeyTab})
+	feed(m, tea.KeyMsg{Type: tea.KeyEnter})
 	if len(m.pending) != 0 || !m.sidebar.checked["diff"] {
 		t.Fatalf("IDE Accept did not settle proposal/HITL: pending=%d checked=%+v", len(m.pending), m.sidebar.checked)
 	}
@@ -684,6 +758,7 @@ func TestKeymapActions(t *testing.T) {
 		ok     bool
 	}{
 		{tea.KeyMsg{Type: tea.KeyEnter}, ActionSend, true},
+		{tea.KeyMsg{Type: tea.KeyCtrlJ}, ActionNewline, true},
 		{tea.KeyMsg{Type: tea.KeyEnter, Alt: true}, ActionNewline, true},
 		{tea.KeyMsg{Type: tea.KeyCtrlP}, ActionPalette, true},
 		{tea.KeyMsg{Type: tea.KeyCtrlL}, ActionModelPicker, true},
@@ -705,10 +780,13 @@ func TestKeymapActions(t *testing.T) {
 
 func TestKeymapViewer(t *testing.T) {
 	view := KeymapView(NewStyles(Charmtone()), 60)
-	for _, want := range []string{"ctrl+p", "ctrl+l", "enter", "esc", "alt+1", "alt+2"} {
+	for _, want := range []string{"ctrl+p", "ctrl+l", "enter", "ctrl+j", "alt+enter", "space ?", "Cancel active task; quit if idle", "esc", "alt+1", "alt+2"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("keymap viewer missing %q", want)
 		}
+	}
+	if strings.Contains(strings.ToLower(view), "shift+enter") {
+		t.Fatalf("keymap viewer advertises unsupported shift+enter: %q", stripANSI(view))
 	}
 }
 
@@ -807,6 +885,35 @@ func TestPermissionPromptFlow(t *testing.T) {
 	}
 }
 
+func TestPermissionPromptEnterConfirmsSafeDefault(t *testing.T) {
+	m, _ := newTestModel(t)
+	req := &permissionRequest{
+		Call:    agentcore.ToolCall{ID: "safe-default", Name: "bash", Args: `{"command":"echo safe"}`},
+		Spec:    agentcore.ToolSpec{Name: "bash", NeedsApproval: true},
+		Respond: make(chan error, 1),
+	}
+
+	feed(m, permRequestMsg{req: req})
+	dialog, ok := m.dialogs.top()
+	if !ok {
+		t.Fatal("permission dialog not pushed")
+	}
+	permission, ok := dialog.(*permissionDialog)
+	if !ok {
+		t.Fatalf("permission dialog type = %T", dialog)
+	}
+	if permission.buttonSel != 2 {
+		t.Fatalf("default permission selection = %d, want Reject (2)", permission.buttonSel)
+	}
+	feed(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if !m.dialogs.empty() {
+		t.Fatal("confirming the default permission selection left the dialog open")
+	}
+	if err := <-req.Respond; err == nil {
+		t.Fatal("confirming the default permission selection approved the request")
+	}
+}
+
 func TestPermissionPromptMouseActions(t *testing.T) {
 	m, _ := newTestModel(t)
 	feed(m, tea.WindowSizeMsg{Width: 100, Height: 30})
@@ -897,6 +1004,15 @@ func TestWriteCardMouseClickAccepts(t *testing.T) {
 	if !found {
 		t.Fatal("accept region not registered")
 	}
+	if m.overlay != overlayProposalConfirm || len(m.pending) != 1 {
+		t.Fatalf("mouse accept bypassed confirmation: overlay=%v pending=%d", m.overlay, len(m.pending))
+	}
+	before, err := os.ReadFile(filepath.Join(dir, "target.txt"))
+	if err != nil || string(before) != "one\ntwo\n" {
+		t.Fatalf("mouse accept changed the file before confirmation: %q, %v", before, err)
+	}
+	feed(m, tea.KeyMsg{Type: tea.KeyTab})
+	feed(m, tea.KeyMsg{Type: tea.KeyEnter})
 	data, err := os.ReadFile(filepath.Join(dir, "target.txt"))
 	if err != nil {
 		t.Fatalf("ReadFile: %v", err)
@@ -939,7 +1055,7 @@ func TestInputBehavior(t *testing.T) {
 	if in.String() != "hello!" {
 		t.Errorf("after type = %q", in.String())
 	}
-	// shift+enter newline
+	// portable newline insertion
 	in.insertNewline()
 	if in.String() != "hello!\n" {
 		t.Errorf("after newline = %q", in.String())
@@ -1070,6 +1186,9 @@ func TestStatuslineRenders(t *testing.T) {
 	}
 	if !strings.Contains(clean, "enter") || !strings.Contains(clean, "commands") {
 		t.Errorf("composer actions missing: %q", clean)
+	}
+	if !strings.Contains(clean, "space ? help") {
+		t.Errorf("statusline help hint does not match its binding: %q", clean)
 	}
 }
 
@@ -1340,7 +1459,7 @@ func TestCompactWelcomeUsesAvailableWidth(t *testing.T) {
 		t.Fatalf("compact viewport width = %d", m.viewport.Width)
 	}
 	plain := stripANSI(m.View())
-	if !strings.Contains(plain, "Discuss the change with Maestro") {
+	if !strings.Contains(plain, "Explore the intent. Approve the contract.") {
 		t.Fatalf("compact welcome is clipped:\n%s", plain)
 	}
 }
@@ -1680,9 +1799,9 @@ func TestInputBoxSpansPaneWidth(t *testing.T) {
 func TestQuietComposerActionsAreMouseComplete(t *testing.T) {
 	m, _ := newTestModel(t)
 	feed(m, tea.WindowSizeMsg{Width: 140, Height: 38})
-	restore := editorListFiles
-	editorListFiles = func(string) []string { return []string{"target.txt"} }
-	defer func() { editorListFiles = restore }()
+	restore := atFileListLoader
+	atFileListLoader = func(context.Context, string, int) ([]string, error) { return []string{"target.txt"}, nil }
+	defer func() { atFileListLoader = restore }()
 
 	find := func(action ActionID) Region {
 		m.View()

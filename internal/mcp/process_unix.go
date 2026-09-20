@@ -24,6 +24,18 @@ func configureProcessGroup(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 }
 
+func newStdioCommand(_ context.Context, name string, args ...string) *exec.Cmd {
+	return exec.Command(name, args...)
+}
+
+func startProcessGroup(cmd *exec.Cmd) (processWaiter, error) {
+	configureProcessGroup(cmd)
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+	return commandWaiter{cmd: cmd}, nil
+}
+
 // killProcessTree freezes the isolated MCP process group, discovers children
 // that deliberately escaped it with setpgid/setsid, and kills descendants
 // leaves-first. Group-only termination is insufficient because an untrusted

@@ -79,3 +79,19 @@ jobs:
       - name: Inspect package
         working-directory: npm
         run: npm pack --dry-run
+
+  harness:
+    name: Maestro runtime and Stipulate integration
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+      - name: Install pinned Bun
+        run: npm install --global bun@1.3.14
+      - name: Run compiled harness acceptance tests
+        run: make runtime-test ui-test

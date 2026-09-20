@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "extension": "release-management",
+  "purpose": "Editorial cases for human or agent evaluation; structural tests do not establish these decisions.",
+  "cases": [
+    {
+      "id": "relevant",
+      "prompt": "prepare a distributable release with migration and compatibility notes.",
+      "expected": "select",
+      "reason": "Prepare an identifiable release with compatibility, artifacts, release notes, and recovery."
+    },
+    {
+      "id": "irrelevant",
+      "prompt": "explore a prototype without planned versioning or distribution.",
+      "expected": "do-not-select",
+      "reason": "No responsibility of this domain is affected."
+    },
+    {
+      "id": "existing",
+      "prompt": "prepare a distributable release with migration and compatibility notes. The project already has an implementation and evidence of this capability, but no dedicated document.",
+      "expected": "inspect-and-reuse",
+      "reason": "Inspect evidence, classify coverage, and address only gaps; missing documentation does not mean the domain practice is absent."
+    },
+    {
+      "id": "insufficient",
+      "prompt": "The archive is created, but the artifact does not install on a platform claimed as supported.",
+      "expected": "failed-or-unverified",
+      "reason": "Compare against the approved criterion outcome; producing a file does not establish that the outcome was achieved."
+    }
+  ]
+}

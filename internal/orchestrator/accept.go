@@ -32,6 +32,9 @@ type BranchMenu struct {
 // Accept materializes the proposal into specs/<id>/{spec,design,tasks}.md
 // and applies the branch choice.
 func (o *Orchestrator) Accept(ctx context.Context, choice BranchChoice) (*spec.Spec, error) {
+	if err := o.requireLegacyWorkflow(); err != nil {
+		return nil, err
+	}
 	workspace := o.workspaceRoute()
 	if o.sess.Phase != session.PhasePropose {
 		return nil, errors.New("accept: no proposal in flight (run /propose first)")

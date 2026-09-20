@@ -2,6 +2,7 @@ package editor
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -84,6 +85,19 @@ func blockedFile(reason FileBlockReason, size int64) error {
 // readTextFile reads a complete, bounded UTF-8 text file. It validates every
 // byte before the caller constructs a Buffer.
 func readTextFile(path string) ([]byte, error) {
+	return readTextFileContext(context.Background(), path)
+}
+
+// readTextFileContext is the cancellable form used by asynchronous TUI file
+// opens. Reads remain hard-bounded by MaxEditableFileSize and check the
+// operation context between chunks so a closed IDE cannot publish stale data.
+func readTextFileContext(ctx context.Context, path string) ([]byte, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	// Inspect the path before opening it: opening a FIFO can otherwise block the
 	// event loop indefinitely. The descriptor is validated again below to close
 	// the ordinary path-replacement window as far as portable os APIs allow.
@@ -115,22 +129,40 @@ func readTextFile(path string) ([]byte, error) {
 		return nil, blockedFile(FileBlockTooLarge, info.Size())
 	}
 
-	data, err := io.ReadAll(io.LimitReader(f, MaxEditableFileSize+1))
-	if err != nil {
-		return nil, fmt.Errorf("read %q: %w", path, err)
+	limited := io.LimitReader(f, MaxEditableFileSize+1)
+	var data bytes.Buffer
+	chunk := make([]byte, 64<<10)
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		n, readErr := limited.Read(chunk)
+		if n > 0 {
+			_, _ = data.Write(chunk[:n])
+		}
+		if readErr != nil {
+			if !errors.Is(readErr, io.EOF) {
+				return nil, fmt.Errorf("read %q: %w", path, readErr)
+			}
+			break
+		}
 	}
-	if int64(len(data)) > MaxEditableFileSize {
-		return nil, blockedFile(FileBlockTooLarge, int64(len(data)))
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
-	if reason := classifyFileText(data, true); reason != "" {
-		return nil, blockedFile(reason, int64(len(data)))
+	content := data.Bytes()
+	if int64(len(content)) > MaxEditableFileSize {
+		return nil, blockedFile(FileBlockTooLarge, int64(len(content)))
+	}
+	if reason := classifyFileText(content, true); reason != "" {
+		return nil, blockedFile(reason, int64(len(content)))
 	}
 
 	// CR is meaningful text input but unsafe as raw terminal output. Normalize
 	// line endings before the buffer sees them.
-	data = bytes.ReplaceAll(data, []byte("\r\n"), []byte("\n"))
-	data = bytes.ReplaceAll(data, []byte("\r"), []byte("\n"))
-	return data, nil
+	content = bytes.ReplaceAll(content, []byte("\r\n"), []byte("\n"))
+	content = bytes.ReplaceAll(content, []byte("\r"), []byte("\n"))
+	return content, nil
 }
 
 func classifyFileText(data []byte, complete bool) FileBlockReason {

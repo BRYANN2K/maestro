@@ -14,6 +14,7 @@ type fakeTurn struct {
 	deltas    []string
 	reasoning []string
 	calls     []ToolCall
+	cost      *Cost
 	block     bool // block until ctx is done, then emit a cancelled error
 }
 
@@ -23,10 +24,33 @@ type fakeProvider struct {
 	turns             []fakeTurn
 	call              int
 	receivedReasoning string
+	receivedTools     []string
+	estimate          Cost
 }
 
 type cancellationAwareProvider struct {
 	canceled chan struct{}
+}
+
+// closeOnContextProvider mirrors the native HTTP providers: cancellation
+// stops their producer and closes the stream without manufacturing a protocol
+// error event after the request context is already done.
+type closeOnContextProvider struct {
+	started chan struct{}
+}
+
+func (p *closeOnContextProvider) Name() string                      { return "close-on-context" }
+func (p *closeOnContextProvider) Type() string                      { return "fake" }
+func (p *closeOnContextProvider) Models() []Model                   { return nil }
+func (p *closeOnContextProvider) Cost(Request, Usage) (Cost, error) { return Cost{}, nil }
+func (p *closeOnContextProvider) Stream(ctx context.Context, _ Request) (<-chan StreamEvent, error) {
+	ch := make(chan StreamEvent)
+	go func() {
+		defer close(ch)
+		close(p.started)
+		<-ctx.Done()
+	}()
+	return ch, nil
 }
 
 func (p *cancellationAwareProvider) Name() string                      { return "cancellation-aware" }
@@ -56,7 +80,7 @@ func (f *fakeProvider) Type() string { return "fake" }
 func (f *fakeProvider) Models() []Model {
 	return nil
 }
-func (f *fakeProvider) Cost(req Request, usage Usage) (Cost, error) { return Cost{}, nil }
+func (f *fakeProvider) Cost(req Request, usage Usage) (Cost, error) { return f.estimate, nil }
 
 func (f *fakeProvider) Stream(ctx context.Context, req Request) (<-chan StreamEvent, error) {
 	f.mu.Lock()
@@ -70,6 +94,10 @@ func (f *fakeProvider) Stream(ctx context.Context, req Request) (<-chan StreamEv
 		}
 	}
 	f.receivedReasoning = strings.Join(reasoning, " ")
+	f.receivedTools = f.receivedTools[:0]
+	for _, tool := range req.Tools {
+		f.receivedTools = append(f.receivedTools, tool.Name)
+	}
 	f.mu.Unlock()
 	ch := make(chan StreamEvent, 16)
 	go func() {
@@ -88,7 +116,7 @@ func (f *fakeProvider) Stream(ctx context.Context, req Request) (<-chan StreamEv
 		for _, c := range turn.calls {
 			ch <- NewEvent(nil, RoleOrchestrator, EvToolCall, c)
 		}
-		ch <- NewEvent(nil, RoleOrchestrator, EvDone, Done{})
+		ch <- NewEvent(nil, RoleOrchestrator, EvDone, Done{Cost: turn.cost})
 	}()
 	return ch, nil
 }
@@ -184,6 +212,95 @@ func TestLoopToolRoundTrip(t *testing.T) {
 	}
 	if toolResults != 1 {
 		t.Errorf("tool result events = %d, want exactly one terminal result", toolResults)
+	}
+}
+
+func TestLoopRechecksBudgetEstimateBeforeEveryProviderTurn(t *testing.T) {
+	p := &fakeProvider{
+		estimate: Cost{InputUSD: 0.6},
+		turns: []fakeTurn{
+			{calls: []ToolCall{{ID: "c1", Name: "echo", Args: `{}`}}, cost: &Cost{InputUSD: 0.4}},
+			{deltas: []string{"must not run"}},
+		},
+	}
+	loop, _, _ := newTestLoop(p, &recordingGate{allow: true})
+	loop.Budget = NewBudgetState(Budget{MaxUSD: 1}, 0)
+	err := loop.Run(t.Context(), "use a tool")
+	if err == nil || !strings.Contains(err.Error(), "budget preflight") {
+		t.Fatalf("second-turn budget error = %v", err)
+	}
+	p.mu.Lock()
+	calls := p.call
+	p.mu.Unlock()
+	if calls != 1 {
+		t.Fatalf("provider streams = %d, want only the admitted first turn", calls)
+	}
+}
+
+func TestLoopContextPreflightRejectsLargeHistoryAndToolSchemaBeforeStream(t *testing.T) {
+	provider := &fakeProvider{}
+	largeSchema := strings.Repeat("schema", 3_000)
+	tool := NewToolFunc(ToolSpec{
+		Name:        "large",
+		Description: largeSchema,
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"payload": map[string]any{"type": "string", "description": largeSchema},
+			},
+		},
+	}, func(context.Context, map[string]any) (string, error) { return "", nil })
+	loop := &Loop{
+		Provider:         provider,
+		Model:            "32k-model",
+		ContextWindow:    32_000,
+		DefaultMaxTokens: 4_096,
+		History: []Message{{
+			Role:      "assistant",
+			Content:   strings.Repeat("history", 1_500),
+			Reasoning: strings.Repeat("reasoning", 500),
+			ThinkingBlocks: []ThinkingBlock{{
+				Type: "thinking", Thinking: "signed", Signature: strings.Repeat("sig", 500), Index: 0,
+			}},
+		}},
+		Tools: map[string]Tool{"large": tool},
+		Gate:  GateFunc(AllowAll),
+	}
+
+	err := loop.Run(t.Context(), "do not send this oversized request")
+	if err == nil || !strings.Contains(err.Error(), "context window exceeded") {
+		t.Fatalf("Run error = %v, want context-window refusal", err)
+	}
+	if provider.call != 0 {
+		t.Fatalf("provider Stream calls = %d, want 0", provider.call)
+	}
+}
+
+func TestLoopContextPreflightRunsAgainAfterToolResult(t *testing.T) {
+	provider := &fakeProvider{turns: []fakeTurn{{
+		calls: []ToolCall{{ID: "large-1", Name: "large", Args: `{}`}},
+	}}}
+	tool := NewToolFunc(ToolSpec{Name: "large", InputSchema: map[string]any{"type": "object"}}, func(context.Context, map[string]any) (string, error) {
+		return strings.Repeat("tool-result", 3_000), nil
+	})
+	loop := &Loop{
+		Provider:         provider,
+		Model:            "32k-model",
+		ContextWindow:    32_000,
+		DefaultMaxTokens: 4_096,
+		Tools:            map[string]Tool{"large": tool},
+		Gate:             GateFunc(AllowAll),
+	}
+
+	err := loop.Run(t.Context(), "fetch a large result")
+	if err == nil || !strings.Contains(err.Error(), "context window exceeded") {
+		t.Fatalf("Run error = %v, want second-turn context refusal", err)
+	}
+	if provider.call != 1 {
+		t.Fatalf("provider Stream calls = %d, want only the fitting first turn", provider.call)
+	}
+	if got := loop.History[len(loop.History)-1]; got.Role != "tool" || len(got.Content) < 30_000 {
+		t.Fatalf("large tool result was not retained for preflight: role=%q bytes=%d", got.Role, len(got.Content))
 	}
 }
 
@@ -312,6 +429,51 @@ func TestStopperCancelsTour(t *testing.T) {
 	}
 }
 
+func TestLoopPreservesSilentProviderCancellation(t *testing.T) {
+	provider := &closeOnContextProvider{started: make(chan struct{})}
+	loop := &Loop{Provider: provider, Model: "m", Gate: GateFunc(AllowAll), MaxTurn: 5 * time.Second}
+	var emittedError bool
+	loop.OnEvent = func(ev StreamEvent) {
+		if ev.Type == EvError {
+			emittedError = true
+		}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- loop.Run(ctx, "blocked") }()
+	select {
+	case <-provider.started:
+	case <-time.After(time.Second):
+		t.Fatal("provider did not start")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Run error = %v, want context.Canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Run did not return after parent cancellation")
+	}
+	if emittedError {
+		t.Fatal("normal parent cancellation emitted a persistent protocol error")
+	}
+}
+
+func TestLoopDoesNotMislabelInheritedDeadlineAsWatchdog(t *testing.T) {
+	provider := &closeOnContextProvider{started: make(chan struct{})}
+	loop := &Loop{Provider: provider, Model: "m", Gate: GateFunc(AllowAll), MaxTurn: 5 * time.Second}
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	err := loop.Run(ctx, "blocked")
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Run error = %v, want inherited context deadline", err)
+	}
+	if strings.Contains(err.Error(), "watchdog") {
+		t.Fatalf("inherited deadline mislabeled as watchdog: %v", err)
+	}
+}
+
 func TestStopperQuit(t *testing.T) {
 	s := NewStopper()
 	s.Press() // no tour active → quit
@@ -392,5 +554,80 @@ func TestLoopOwnsMonotonicEventSequence(t *testing.T) {
 	l.emit(StreamEvent{Seq: 1, Type: EvDone})
 	if len(got) != 2 || got[0] != 1 || got[1] != 2 {
 		t.Fatalf("canonical event sequence = %v, want [1 2]", got)
+	}
+}
+
+func TestLoopSendsToolsInStableOrder(t *testing.T) {
+	provider := &fakeProvider{turns: []fakeTurn{{deltas: []string{"done"}}}}
+	tool := func(name string) Tool {
+		return NewToolFunc(ToolSpec{Name: name}, func(context.Context, map[string]any) (string, error) {
+			return "", nil
+		})
+	}
+	loop := &Loop{
+		Provider: provider,
+		Model:    "m",
+		Gate:     GateFunc(AllowAll),
+		Tools: map[string]Tool{
+			"zeta":  tool("zeta"),
+			"alpha": tool("alpha"),
+			"mid":   tool("mid"),
+		},
+	}
+	if err := loop.Run(t.Context(), "stable tools"); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(provider.receivedTools, ","); got != "alpha,mid,zeta" {
+		t.Fatalf("provider tool order = %q", got)
+	}
+}
+
+// BenchmarkLoopOneTurnStreaming protects the provider hot path from
+// accidentally turning incremental output into quadratic string copying.
+// A 64 KiB answer split into realistic SSE-sized chunks is large enough to
+// expose regressions while keeping the benchmark quick in CI.
+func BenchmarkLoopOneTurnStreaming(b *testing.B) {
+	deltas := make([]string, 1024)
+	for i := range deltas {
+		deltas[i] = strings.Repeat("x", 64)
+	}
+	b.ReportAllocs()
+	b.SetBytes(int64(len(deltas) * len(deltas[0])))
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		provider := &fakeProvider{turns: []fakeTurn{{deltas: deltas}}}
+		loop := &Loop{Provider: provider, Model: "benchmark", Gate: GateFunc(AllowAll)}
+		assistant, _, _, _, err := loop.oneTurn(context.Background())
+		if err != nil {
+			b.Fatal(err)
+		}
+		if len(assistant.Content) != len(deltas)*len(deltas[0]) {
+			b.Fatalf("assistant bytes = %d", len(assistant.Content))
+		}
+	}
+}
+
+func BenchmarkLoopOneTurnStreamingEmptyRules(b *testing.B) {
+	deltas := make([]string, 1024)
+	for i := range deltas {
+		deltas[i] = strings.Repeat("x", 64)
+	}
+	rules, err := CompileRules("# Spec\n\nNo stream rules.\n")
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	b.SetBytes(int64(len(deltas) * len(deltas[0])))
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		provider := &fakeProvider{turns: []fakeTurn{{deltas: deltas}}}
+		loop := &Loop{Provider: provider, Model: "benchmark", Gate: GateFunc(AllowAll), Rules: rules}
+		assistant, _, _, _, err := loop.oneTurn(context.Background())
+		if err != nil {
+			b.Fatal(err)
+		}
+		if len(assistant.Content) != len(deltas)*len(deltas[0]) {
+			b.Fatalf("assistant bytes = %d", len(assistant.Content))
+		}
 	}
 }

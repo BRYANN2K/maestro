@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "extension": "privacy-engineering",
+  "purpose": "Editorial cases for human or agent evaluation; structural tests do not establish these decisions.",
+  "cases": [
+    {
+      "id": "relevant",
+      "prompt": "add event collection containing personal identifiers.",
+      "expected": "select",
+      "reason": "Bound personal data processing through purpose, minimization, access, retention, and rights."
+    },
+    {
+      "id": "irrelevant",
+      "prompt": "optimize computation on synthetic data without a new personal-data flow.",
+      "expected": "do-not-select",
+      "reason": "No responsibility of this domain is affected."
+    },
+    {
+      "id": "existing",
+      "prompt": "add event collection containing personal identifiers. The project already has an implementation and evidence of this capability, but no dedicated document.",
+      "expected": "inspect-and-reuse",
+      "reason": "Inspect evidence, classify coverage, and address only gaps; missing documentation does not mean the domain practice is absent."
+    },
+    {
+      "id": "insufficient",
+      "prompt": "The primary row is deleted, but a copy containing personal data remains accessible in logs.",
+      "expected": "failed-or-unverified",
+      "reason": "Compare against the approved criterion outcome; producing a file does not establish that the outcome was achieved."
+    }
+  ]
+}

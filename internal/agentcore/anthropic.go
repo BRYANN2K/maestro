@@ -22,8 +22,14 @@ var (
 	cacheOn   = true
 )
 
+var anthropicReservedProviderOptions = map[string]struct{}{
+	"model": {}, "system": {}, "messages": {}, "stream": {}, "tools": {},
+	"max_tokens": {}, "temperature": {}, "top_p": {}, "top_k": {},
+	"thinking": {}, "output_config": {},
+}
+
 // promptCacheEnabled reports whether Anthropic prompt-caching directives are
-// sent (system, last 3 messages, last tool definition). Some Anthropic-
+// sent (last system block, last 2 messages, last tool definition). Some Anthropic-
 // compatible proxies reject cache_control blocks; disable with
 // MAESTRO_NO_CACHE=1.
 func promptCacheEnabled() bool {
@@ -68,6 +74,13 @@ func (p *anthropicProvider) Name() string { return p.name }
 // Type returns the wire protocol name.
 func (p *anthropicProvider) Type() string { return "anthropic" }
 
+// Close releases pooled idle connections. Active streams remain governed by
+// their caller contexts, so orchestrator shutdown stays deterministic.
+func (p *anthropicProvider) Close() error {
+	p.httpc.CloseIdleConnections()
+	return nil
+}
+
 func (p *anthropicProvider) Models() []Model {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
@@ -75,11 +88,18 @@ func (p *anthropicProvider) Models() []Model {
 }
 
 func (p *anthropicProvider) Cost(req Request, usage Usage) (Cost, error) {
+	if err := validateUsage(usage); err != nil {
+		return Cost{}, err
+	}
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	for _, m := range p.models {
 		if m.ID == req.Model {
-			return CostOf(m, usage), nil
+			cost := CostOf(m, usage)
+			if err := validateCost(cost); err != nil {
+				return Cost{}, err
+			}
+			return cost, nil
 		}
 	}
 	return Cost{}, nil
@@ -113,30 +133,56 @@ func (p *anthropicProvider) buildBody(req Request) ([]byte, error) {
 	}
 	body["max_tokens"] = maxTokens
 
-	if len(req.System) > 0 {
-		sys := make([]any, 0, len(req.System))
-		for _, m := range req.System {
+	systemMessages := append([]Message(nil), req.System...)
+	for _, message := range req.Messages {
+		if message.Role == "system" && message.Content != "" {
+			systemMessages = append(systemMessages, message)
+		}
+	}
+	if len(systemMessages) > 0 {
+		sys := make([]any, 0, len(systemMessages))
+		for _, m := range systemMessages {
 			if m.Content != "" {
-				block := map[string]any{"type": "text", "text": m.Content}
-				if cache {
-					block["cache_control"] = cacheControl()
-				}
-				sys = append(sys, block)
+				sys = append(sys, map[string]any{"type": "text", "text": m.Content})
 			}
 		}
-		body["system"] = sys
+		if len(sys) > 0 {
+			// A single breakpoint covers the complete static + dynamic system
+			// prefix. Dynamic guardrail messages are appended after req.System,
+			// so the marker remains on the actual final system block.
+			if cache {
+				sys[len(sys)-1].(map[string]any)["cache_control"] = cacheControl()
+			}
+			body["system"] = sys
+		}
 	}
-	// The last 3 messages carry ephemeral cache_control (opencode heuristic):
-	// the cached prefix shrinks as the conversation advances, cutting input
-	// cost on multi-turn agent loops.
-	lastCacheable := len(req.Messages) - 3
+	// Reserve at most two rolling breakpoints for conversation history. Together
+	// with the final system and tool breakpoints below, this stays within
+	// Anthropic's four-explicit-breakpoint request limit.
+	messageCount := 0
+	for _, message := range req.Messages {
+		switch message.Role {
+		case "user", "assistant", "tool":
+			messageCount++
+		}
+	}
+	lastCacheable := messageCount - 2
 	if lastCacheable < 0 {
 		lastCacheable = 0
 	}
 	var msgs []map[string]any
-	for i, m := range req.Messages {
-		cached := cache && i >= lastCacheable
+	messageIndex := 0
+	for _, m := range req.Messages {
+		if m.Role != "user" && m.Role != "assistant" && m.Role != "tool" && m.Role != "system" {
+			continue
+		}
+		cached := cache && messageIndex >= lastCacheable
 		switch m.Role {
+		case "system":
+			// Anthropic accepts system instructions only through the top-level
+			// field. Dynamic guardrail/anti-loop reminders from Loop.History were
+			// previously dropped here; they are promoted above instead.
+			continue
 		case "user":
 			block := map[string]any{"type": "text", "text": m.Content}
 			if cached {
@@ -156,6 +202,7 @@ func (p *anthropicProvider) buildBody(req Request) ([]byte, error) {
 			}
 			msgs = append(msgs, map[string]any{"role": "user", "content": []any{block}})
 		}
+		messageIndex++
 	}
 	body["messages"] = msgs
 
@@ -187,6 +234,9 @@ func (p *anthropicProvider) buildBody(req Request) ([]byte, error) {
 	}
 	if len(s.ProviderOptions) > 0 {
 		for k, v := range s.ProviderOptions {
+			if _, reserved := anthropicReservedProviderOptions[k]; reserved {
+				return nil, fmt.Errorf("anthropic: provider option %q is reserved; use normalized request fields", k)
+			}
 			body[k] = v
 		}
 	}
@@ -347,7 +397,7 @@ func (p *anthropicProvider) stream(ctx context.Context, req Request, payload []b
 	u := p.baseURL + "/v1/messages"
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, u, bytes.NewReader(payload))
 	if err != nil {
-		ch <- NewEvent(nil, RoleOrchestrator, EvError, StreamError{Message: err.Error()})
+		sendStreamEvent(ctx, ch, NewEvent(nil, RoleOrchestrator, EvError, StreamError{Message: err.Error()}))
 		return
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
@@ -355,17 +405,15 @@ func (p *anthropicProvider) stream(ctx context.Context, req Request, payload []b
 	httpReq.Header.Set("anthropic-version", anthropicVersion)
 	resp, err := doRequestWithRetry(ctx, p.httpc, httpReq)
 	if err != nil {
-		if errors.Is(err, context.Canceled) {
-			ch <- NewEvent(nil, RoleOrchestrator, EvError, StreamError{Message: "cancelled"})
-			return
+		if !errors.Is(err, context.Canceled) {
+			sendStreamEvent(ctx, ch, NewEvent(nil, RoleOrchestrator, EvError, StreamError{Message: err.Error()}))
 		}
-		ch <- NewEvent(nil, RoleOrchestrator, EvError, StreamError{Message: err.Error()})
 		return
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		ch <- NewEvent(nil, RoleOrchestrator, EvError, StreamError{Message: parseAPIError(resp.Status, body)})
+		sendStreamEvent(ctx, ch, NewEvent(nil, RoleOrchestrator, EvError, StreamError{Message: parseAPIError(resp.Status, body)}))
 		return
 	}
 	// Idle watchdog: a provider that goes silent mid-stream must fail the
@@ -375,10 +423,14 @@ func (p *anthropicProvider) stream(ctx context.Context, req Request, payload []b
 	var seq uint64
 	var usage *Usage
 	var pendingTool *toolCall // content_block in progress when it's a tool_use
+	var pendingToolArgs strings.Builder
+	pendingToolIndex := 0
+	toolPayloadBytes := 0
+	toolCalls := 0
 	completed := false
 
-	emitErr := func(typ, msg string) {
-		ch <- NewEvent(&seq, RoleOrchestrator, EvError, StreamError{Message: msg})
+	emitErr := func(msg string) {
+		sendStreamEvent(ctx, ch, NewEvent(&seq, RoleOrchestrator, EvError, StreamError{Message: msg}))
 	}
 
 	sc := bufio.NewScanner(resp.Body)
@@ -426,7 +478,7 @@ func (p *anthropicProvider) stream(ctx context.Context, req Request, payload []b
 			} `json:"error"`
 		}
 		if err := json.Unmarshal([]byte(data), &ev); err != nil {
-			emitErr("protocol", "invalid Anthropic stream event: "+err.Error())
+			emitErr("invalid Anthropic stream event: " + err.Error())
 			return
 		}
 		switch ev.Type {
@@ -437,25 +489,50 @@ func (p *anthropicProvider) stream(ctx context.Context, req Request, payload []b
 					CacheCreateTokens: ev.Message.Usage.CacheCreation,
 					CacheHitTokens:    ev.Message.Usage.CacheRead,
 				}
+				if err := validateUsage(*usage); err != nil {
+					emitErr(err.Error())
+					return
+				}
 			}
 		case "content_block_start":
+			if pendingTool != nil {
+				emitErr("Anthropic started a new content block before the active tool block stopped")
+				return
+			}
 			pendingTool = nil
+			pendingToolArgs.Reset()
 			if ev.ContentBlock == nil || ev.Index == nil {
 				continue
 			}
 			switch ev.ContentBlock.Type {
 			case "tool_use":
+				if toolCalls >= providerToolCallLimit {
+					emitErr(fmt.Sprintf("Anthropic stream exceeded %d tool calls", providerToolCallLimit))
+					return
+				}
+				metadataBytes := len(ev.ContentBlock.ID) + len(ev.ContentBlock.Name)
+				if metadataBytes > providerToolPayloadLimit-toolPayloadBytes {
+					emitErr(fmt.Sprintf("Anthropic tool calls exceeded %d-byte payload limit", providerToolPayloadLimit))
+					return
+				}
+				toolCalls++
+				toolPayloadBytes += metadataBytes
 				pendingTool = &toolCall{ID: ev.ContentBlock.ID, Function: toolFunction{Name: ev.ContentBlock.Name}}
+				pendingToolIndex = *ev.Index
 			case "thinking":
-				ch <- NewEvent(&seq, RoleOrchestrator, EvReasoningDelta, ReasoningDelta{
+				if !sendStreamEvent(ctx, ch, NewEvent(&seq, RoleOrchestrator, EvReasoningDelta, ReasoningDelta{
 					Text: ev.ContentBlock.Thinking, Signature: ev.ContentBlock.Signature,
 					BlockType: "thinking", Index: *ev.Index, Indexed: true,
-				})
+				})) {
+					return
+				}
 			case "redacted_thinking":
-				ch <- NewEvent(&seq, RoleOrchestrator, EvReasoningDelta, ReasoningDelta{
+				if !sendStreamEvent(ctx, ch, NewEvent(&seq, RoleOrchestrator, EvReasoningDelta, ReasoningDelta{
 					Data: ev.ContentBlock.Data, BlockType: "redacted_thinking",
 					Index: *ev.Index, Indexed: true,
-				})
+				})) {
+					return
+				}
 			}
 		case "content_block_delta":
 			if ev.Delta == nil {
@@ -468,67 +545,101 @@ func (p *anthropicProvider) stream(ctx context.Context, req Request, payload []b
 					if ev.Index != nil {
 						td.Index, td.Indexed = *ev.Index, true
 					}
-					ch <- NewEvent(&seq, RoleOrchestrator, EvTextDelta, td)
+					if !sendStreamEvent(ctx, ch, NewEvent(&seq, RoleOrchestrator, EvTextDelta, td)) {
+						return
+					}
 				}
 			case "thinking_delta":
 				rd := ReasoningDelta{Text: ev.Delta.Thinking, BlockType: "thinking"}
 				if ev.Index != nil {
 					rd.Index, rd.Indexed = *ev.Index, true
 				}
-				ch <- NewEvent(&seq, RoleOrchestrator, EvReasoningDelta, rd)
+				if !sendStreamEvent(ctx, ch, NewEvent(&seq, RoleOrchestrator, EvReasoningDelta, rd)) {
+					return
+				}
 			case "signature_delta":
 				rd := ReasoningDelta{Signature: ev.Delta.Signature, BlockType: "thinking"}
 				if ev.Index != nil {
 					rd.Index, rd.Indexed = *ev.Index, true
 				}
-				ch <- NewEvent(&seq, RoleOrchestrator, EvReasoningDelta, rd)
-			case "input_json_delta":
-				if pendingTool != nil {
-					pendingTool.Function.Arguments += ev.Delta.PartialJSON
+				if !sendStreamEvent(ctx, ch, NewEvent(&seq, RoleOrchestrator, EvReasoningDelta, rd)) {
+					return
 				}
+			case "input_json_delta":
+				if pendingTool == nil {
+					emitErr("Anthropic streamed tool arguments without an active tool block")
+					return
+				}
+				if ev.Index != nil && *ev.Index != pendingToolIndex {
+					emitErr("Anthropic streamed tool arguments for the wrong content block")
+					return
+				}
+				if len(ev.Delta.PartialJSON) > providerToolPayloadLimit-toolPayloadBytes {
+					emitErr(fmt.Sprintf("Anthropic tool calls exceeded %d-byte payload limit", providerToolPayloadLimit))
+					return
+				}
+				toolPayloadBytes += len(ev.Delta.PartialJSON)
+				pendingToolArgs.WriteString(ev.Delta.PartialJSON)
 			}
 		case "content_block_stop":
 			if pendingTool != nil {
-				call := ToolCall{ID: pendingTool.ID, Name: pendingTool.Function.Name, Args: pendingTool.Function.Arguments}
+				if ev.Index == nil || *ev.Index != pendingToolIndex {
+					emitErr("Anthropic stopped the wrong content block while a tool call was active")
+					return
+				}
+				call := ToolCall{ID: pendingTool.ID, Name: pendingTool.Function.Name, Args: pendingToolArgs.String()}
 				if ev.Index != nil {
 					call.ContentBlockIndex, call.ContentBlockIndexed = *ev.Index, true
 				}
-				ch <- NewEvent(&seq, RoleOrchestrator, EvToolCall, call)
+				if !sendStreamEvent(ctx, ch, NewEvent(&seq, RoleOrchestrator, EvToolCall, call)) {
+					return
+				}
 				pendingTool = nil
 			}
 		case "message_delta":
 			if ev.Usage != nil {
+				if ev.Usage.OutputTokens < 0 {
+					emitErr("Anthropic returned invalid token usage")
+					return
+				}
 				if usage == nil {
 					usage = &Usage{}
 				}
 				usage.OutputTokens = ev.Usage.OutputTokens
 			}
 		case "message_stop":
+			if pendingTool != nil {
+				emitErr("Anthropic message stopped before the active tool block completed")
+				return
+			}
 			completed = true
 		case "error":
 			msg := "unknown error"
 			if ev.Error != nil && ev.Error.Message != "" {
 				msg = ev.Error.Message
 			}
-			emitErr("error", msg)
+			emitErr(msg)
 			return
 		}
 	}
 	if err := sc.Err(); err != nil && !errors.Is(err, context.Canceled) {
-		emitErr("stream", err.Error())
+		emitErr(err.Error())
 		return
 	}
 	if err := ctx.Err(); err != nil {
-		emitErr("cancelled", err.Error())
 		return
 	}
 	if !completed {
-		emitErr("protocol", "Anthropic stream ended before message_stop")
+		emitErr("Anthropic stream ended before message_stop")
 		return
 	}
 	if usage == nil {
 		usage = &Usage{}
 	}
-	cost, _ := p.Cost(req, *usage)
-	ch <- NewEvent(&seq, RoleOrchestrator, EvDone, Done{Usage: usage, Cost: &cost})
+	cost, err := p.Cost(req, *usage)
+	if err != nil {
+		emitErr(err.Error())
+		return
+	}
+	sendStreamEvent(ctx, ch, NewEvent(&seq, RoleOrchestrator, EvDone, Done{Usage: usage, Cost: &cost}))
 }

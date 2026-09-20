@@ -1,6 +1,7 @@
 package proposals
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -41,6 +42,73 @@ func TestLineDiff(t *testing.T) {
 				t.Errorf("hunk shape = %q, want %q", b.String(), tt.shape)
 			}
 		})
+	}
+}
+
+func TestLineDiffBoundsWholesaleRewrite(t *testing.T) {
+	const lines = 10_000
+	base := make([]string, lines)
+	target := make([]string, lines)
+	for i := range base {
+		base[i] = fmt.Sprintf("old-%d", i)
+		target[i] = fmt.Sprintf("new-%d", i)
+	}
+
+	hunks := lineDiff(base, target)
+	if len(hunks) != 1 {
+		t.Fatalf("large rewrite hunks = %d, want bounded single hunk", len(hunks))
+	}
+	if hunks[0].Start != 1 || len(hunks[0].OldLines) != lines || len(hunks[0].NewLines) != lines {
+		t.Fatalf("large rewrite hunk shape = start %d, -%d +%d", hunks[0].Start, len(hunks[0].OldLines), len(hunks[0].NewLines))
+	}
+}
+
+func TestLineDiffTrimsLargeUnchangedRegions(t *testing.T) {
+	const lines = 20_000
+	base := make([]string, lines)
+	for i := range base {
+		base[i] = fmt.Sprintf("line-%d", i)
+	}
+	target := append([]string(nil), base...)
+	target[lines/2] = "changed"
+
+	hunks := lineDiff(base, target)
+	if len(hunks) != 1 || hunks[0].Start != lines/2+1 {
+		t.Fatalf("localized large diff = %+v", hunks)
+	}
+}
+
+func BenchmarkLineDiffWholesaleRewrite(b *testing.B) {
+	const lines = 10_000
+	base := make([]string, lines)
+	target := make([]string, lines)
+	for i := range base {
+		base[i] = fmt.Sprintf("old-%d", i)
+		target[i] = fmt.Sprintf("new-%d", i)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		if hunks := lineDiff(base, target); len(hunks) != 1 {
+			b.Fatalf("hunks = %d", len(hunks))
+		}
+	}
+}
+
+func BenchmarkLineDiffLocalizedLargeFile(b *testing.B) {
+	const lines = 100_000
+	base := make([]string, lines)
+	for i := range base {
+		base[i] = fmt.Sprintf("line-%d", i)
+	}
+	target := append([]string(nil), base...)
+	target[lines/2] = "changed"
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		if hunks := lineDiff(base, target); len(hunks) != 1 {
+			b.Fatalf("hunks = %d", len(hunks))
+		}
 	}
 }
 
@@ -178,6 +246,35 @@ func TestProposalNewFile(t *testing.T) {
 	}
 }
 
+func TestProposalStageRejectsOversizedBaseAndTarget(t *testing.T) {
+	dir := t.TempDir()
+	store := NewProposalStore(filepath.Join(dir, ".proposals"))
+	path := filepath.Join(dir, "large.bin")
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Truncate(maxProposalFileBytes + 1); err != nil {
+		f.Close()
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Stage(path, "small\n"); err == nil || !strings.Contains(err.Error(), "limit") {
+		t.Fatalf("oversized base error = %v", err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Stage(path, strings.Repeat("x", int(maxProposalFileBytes)+1)); err == nil || !strings.Contains(err.Error(), "limit") {
+		t.Fatalf("oversized target error = %v", err)
+	}
+	if pending, err := store.Pending(); err != nil || len(pending) != 0 {
+		t.Fatalf("oversized stage left records: %v, %v", pending, err)
+	}
+}
+
 func TestAcceptHunksSequentially(t *testing.T) {
 	dir := t.TempDir()
 	store := NewProposalStore(filepath.Join(dir, ".proposals"))
@@ -204,6 +301,42 @@ func TestAcceptHunksSequentially(t *testing.T) {
 	}
 	if got, want := string(data), "ONE\ntwo\nthree\nFOUR\n"; got != want {
 		t.Fatalf("content = %q, want %q", got, want)
+	}
+}
+
+func TestApplyManyHunksInOnePass(t *testing.T) {
+	dir := t.TempDir()
+	store := NewProposalStore(filepath.Join(dir, ".proposals"))
+	path := filepath.Join(dir, "many.txt")
+	const lines = 2_000
+	base := make([]string, lines)
+	target := make([]string, lines)
+	for i := range base {
+		base[i] = fmt.Sprintf("line-%d", i)
+		target[i] = base[i]
+		if i%2 == 0 {
+			target[i] = fmt.Sprintf("changed-%d", i)
+		}
+	}
+	if err := os.WriteFile(path, []byte(strings.Join(base, "\n")+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	prop, err := store.Stage(path, strings.Join(target, "\n")+"\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(prop.Hunks) < lines/4 {
+		t.Fatalf("scattered edit hunks = %d, want many independent hunks", len(prop.Hunks))
+	}
+	if err := store.Accept(prop); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != strings.Join(target, "\n")+"\n" {
+		t.Fatal("many-hunk application did not reconstruct target")
 	}
 }
 

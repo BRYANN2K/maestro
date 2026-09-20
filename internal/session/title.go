@@ -29,6 +29,25 @@ type Summary struct {
 	Worktree       string
 	Disabled       bool
 	DisabledReason string
+
+	// Raw routing fields are deliberately not exported: Worktree and
+	// WorkspaceRef above are terminal-safe display projections. The
+	// orchestrator accesses these through RoutingSession so paths containing
+	// control bytes are never confused with their escaped picker labels.
+	specID          string
+	rawWorkspaceRef string
+	rawWorktree     string
+	managedWorktree bool
+}
+
+// RoutingSession reconstructs the small validated subset needed to check a
+// picker row. ListSummaries already decoded the full record once.
+func (s Summary) RoutingSession(project string) Session {
+	return Session{
+		ID: s.ID, Project: project, Phase: s.Phase, SpecID: s.specID,
+		WorkspaceRef: s.rawWorkspaceRef, Worktree: s.rawWorktree,
+		ManagedWorktree: s.managedWorktree,
+	}
 }
 
 // NormalizeTitle turns arbitrary text into one safe, bounded display line.
@@ -255,6 +274,8 @@ func (s *Store) ListSummaries(ctx context.Context, project string) ([]Summary, e
 			Updated: sess.Updated, WorkspaceRef: pickerSafe(sess.WorkspaceRef),
 			Worktree: pickerSafe(sess.Worktree), Disabled: disabledReason != "",
 			DisabledReason: disabledReason,
+			specID:         sess.SpecID, rawWorkspaceRef: sess.WorkspaceRef,
+			rawWorktree: sess.Worktree, managedWorktree: sess.ManagedWorktree,
 		}, when: when})
 	}
 	sort.SliceStable(rows, func(i, j int) bool {
@@ -336,7 +357,7 @@ func (s *Store) Active(ctx context.Context, project string) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
-	data, err := os.ReadFile(filepath.Join(s.dir, project, "active"))
+	data, err := readBoundedRegularFile(filepath.Join(s.dir, project, "active"), maxActivePointerBytes)
 	if err != nil {
 		return "", err
 	}

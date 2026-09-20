@@ -1,0 +1,145 @@
+{
+  "schema_version": 1,
+  "extensions": [
+    {
+      "id": "accessibility",
+      "description": "Make tasks and content perceivable, operable, understandable, and robust for the intended audiences.",
+      "path": "accessibility"
+    },
+    {
+      "id": "ai-engineering",
+      "description": "Scope and evaluate a model capability, including its tools, errors, costs, and human fallback.",
+      "path": "ai-engineering"
+    },
+    {
+      "id": "analytics-experimentation",
+      "description": "Connect a hypothesis, instrumentation, and analysis method to a measurable decision.",
+      "path": "analytics-experimentation"
+    },
+    {
+      "id": "api-integrations",
+      "description": "Define and verify an API boundary, including identities, errors, retries, and versions.",
+      "path": "api-integrations"
+    },
+    {
+      "id": "backend-engineering",
+      "description": "Ensure consistent server behavior across success, failure, concurrency, and recovery.",
+      "path": "backend-engineering"
+    },
+    {
+      "id": "build-in-public",
+      "description": "Prepare useful public updates about project progress, evidence, lessons, and limitations.",
+      "path": "build-in-public"
+    },
+    {
+      "id": "cli-tooling",
+      "description": "Build a stable command-line interface for people and automation.",
+      "path": "cli-tooling"
+    },
+    {
+      "id": "cloud-engineering",
+      "description": "Design reproducible cloud resources with access controls, recovery, health, and cost considerations.",
+      "path": "cloud-engineering"
+    },
+    {
+      "id": "content-design",
+      "description": "Help people understand and complete their task through clear content in the right context.",
+      "path": "content-design"
+    },
+    {
+      "id": "customer-support",
+      "description": "Prepare diagnosis, assistance, and escalation for problems users actually encounter.",
+      "path": "customer-support"
+    },
+    {
+      "id": "data-engineering",
+      "description": "Make data flows traceable, replayable, and verifiable from source to consumer.",
+      "path": "data-engineering"
+    },
+    {
+      "id": "database-engineering",
+      "description": "Preserve invariants, compatibility, performance, and recovery when changing persisted data.",
+      "path": "database-engineering"
+    },
+    {
+      "id": "design-system",
+      "description": "Evolve shared primitives and components with their usage guidance, contracts, and migrations.",
+      "path": "design-system"
+    },
+    {
+      "id": "desktop-engineering",
+      "description": "Verify a desktop application across windows, processes, files, permissions, and packaging.",
+      "path": "desktop-engineering"
+    },
+    {
+      "id": "devops-delivery",
+      "description": "Make the build and delivery path reproducible, observable, and recoverable.",
+      "path": "devops-delivery"
+    },
+    {
+      "id": "frontend-engineering",
+      "description": "Build rendered web behavior, including states, data, accessibility, and performance.",
+      "path": "frontend-engineering"
+    },
+    {
+      "id": "mobile-engineering",
+      "description": "Build and verify a mobile experience across its lifecycle, network, permissions, and distribution.",
+      "path": "mobile-engineering"
+    },
+    {
+      "id": "privacy-engineering",
+      "description": "Bound personal data processing through purpose, minimization, access, retention, and rights.",
+      "path": "privacy-engineering"
+    },
+    {
+      "id": "product-strategy",
+      "description": "Connect the problem, audience, value, alternatives, and tradeoffs to a product decision.",
+      "path": "product-strategy"
+    },
+    {
+      "id": "quality-engineering",
+      "description": "Choose checks that reduce actual risks and link their results to acceptance criteria.",
+      "path": "quality-engineering"
+    },
+    {
+      "id": "release-management",
+      "description": "Prepare an identifiable release with compatibility, artifacts, release notes, and recovery.",
+      "path": "release-management"
+    },
+    {
+      "id": "security-engineering",
+      "description": "Reduce abuse risks affecting assets and trust boundaries touched by the change.",
+      "path": "security-engineering"
+    },
+    {
+      "id": "seo-discoverability",
+      "description": "Make public content discoverable and indexable according to its purpose and constraints.",
+      "path": "seo-discoverability"
+    },
+    {
+      "id": "sre-operations",
+      "description": "Connect user-perceived reliability, indicators, objectives, alerts, and responses to degradation.",
+      "path": "sre-operations"
+    },
+    {
+      "id": "storytelling",
+      "description": "Connect intent, a supportable promise, messaging, and consistent narrative across product surfaces.",
+      "path": "storytelling"
+    },
+    {
+      "id": "user-research",
+      "description": "Reduce uncertainty about people, their tasks, and their context through proportionate observation.",
+      "path": "user-research"
+    },
+    {
+      "id": "ux-design",
+      "description": "Design journeys, interactions, states, and recovery for a user task.",
+      "path": "ux-design"
+    },
+    {
+      "id": "visual-design",
+      "description": "Define appropriate hierarchy, readability, colors, typography, spacing, and visual states.",
+      "path": "visual-design"
+    }
+  ]
+}

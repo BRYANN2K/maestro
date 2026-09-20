@@ -2,7 +2,6 @@ package tui
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -543,12 +542,23 @@ func (m *Model) dispatchRegionWithCmd(r Region) (tea.Model, tea.Cmd) {
 	if r.Action == ActionSwitchTab {
 		return m, m.switchTab(r.Tab)
 	}
+	if r.Action == ActionOpenPath {
+		return m, m.openWorkspaceLocation(r.Target, r.Line, r.Column, true)
+	}
 	model := m.dispatchRegion(r)
 	switch r.Action {
 	case ActionAccept:
-		return model, tea.Batch(m.refreshModifiedFiles(), m.takePostAcceptCommand())
+		return model, nil
 	case ActionAcceptHunk, ActionDiscardHunk:
 		return model, m.refreshModifiedFiles()
+	case ActionOpenProposalIDE:
+		return model, m.refreshModifiedFiles()
+	case ActionOpenFile, ActionOpenChanged:
+		return model, m.beginQueuedIDEOpen(m.ide)
+	case ActionSwitchBuffer:
+		return model, m.refreshIDEGutter()
+	case ActionAddContext:
+		return model, m.maybeOpenAtFile()
 	default:
 		return model, nil
 	}
@@ -566,7 +576,7 @@ func (m *Model) dispatchRegion(r Region) tea.Model {
 				if entry.Dir {
 					m.ide.toggleTree(entry.Path)
 				} else {
-					m.ide.OpenFileAt(entry.Path)
+					m.ide.queueOpen(entry.Path, 0, 0, true)
 					m.followAgent = false
 				}
 				m.ide.Focus = ideTree
@@ -579,7 +589,7 @@ func (m *Model) dispatchRegion(r Region) tea.Model {
 			m.ide.previewScroll = 0
 			m.followAgent = false
 			if b := m.ide.Ed.Buffer(); b != nil && m.ide.UI.Gutter != nil {
-				m.ide.UI.Gutter.Refresh(m.ctx(), b.Path)
+				m.ide.clearGutter(b.Path)
 			}
 		}
 	case ActionSwitchExplorer:
@@ -593,11 +603,11 @@ func (m *Model) dispatchRegion(r Region) tea.Model {
 		}
 	case ActionOpenChanged:
 		if m.activeTab == TabIDE && m.ide != nil && r.Index >= 0 && r.Index < len(m.sidebar.modFiles) {
-			m.ide.OpenFileAt(m.sidebar.modFiles[r.Index].Path)
+			m.ide.queueOpen(m.sidebar.modFiles[r.Index].Path, 0, 0, true)
 			m.followAgent = false
 		}
 	case ActionOpenPath:
-		m.openWorkspaceLocation(r.Target, r.Line, r.Column, true)
+		_ = m.openWorkspaceLocation(r.Target, r.Line, r.Column, true)
 		return m
 	case ActionAskFix:
 		return m.prepareFixPrompt(r.CardID)
@@ -641,7 +651,6 @@ func (m *Model) dispatchRegion(r Region) tea.Model {
 		} else {
 			m.focus = FocusInput
 		}
-		m.maybeOpenAtFile()
 		return m
 	case ActionPalette:
 		m.overlay = overlayPalette
@@ -797,13 +806,13 @@ func (m *Model) updateDiffOverlayMouse(diff *diffOverlay, msg tea.MouseMsg) (tea
 	}
 }
 
-func (m *Model) openWorkspaceLocation(target string, line, column int, manual bool) {
+func (m *Model) openWorkspaceLocation(target string, line, column int, manual bool) tea.Cmd {
 	if m.orch == nil {
-		return
+		return nil
 	}
 	root, err := filepath.Abs(m.orch.WorkDirDisplay())
 	if err != nil {
-		return
+		return nil
 	}
 	target = strings.TrimSpace(target)
 	full := target
@@ -812,33 +821,20 @@ func (m *Model) openWorkspaceLocation(target string, line, column int, manual bo
 	}
 	full, err = filepath.Abs(full)
 	if err != nil {
-		return
+		return nil
 	}
 	rel, err := filepath.Rel(root, full)
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		m.status.pushToast("error", "file is outside the workspace", 3*time.Second)
-		return
+		return nil
 	}
-	info, err := os.Stat(full)
-	if err != nil || info.IsDir() {
-		m.status.pushToast("error", "file not found: "+target, 3*time.Second)
-		return
-	}
-	m.switchTab(TabIDE)
+	switchCmd := m.switchTab(TabIDE)
 	if m.ide != nil {
-		if !m.ide.OpenFileAt(filepath.ToSlash(rel)) {
-			return
-		}
+		m.ide.queueOpen(filepath.ToSlash(rel), line, column, manual)
 		m.ide.proposalPreview = nil
-		if buf := m.ide.Ed.Buffer(); buf != nil && line > 0 {
-			buf.Cur.Line = clamp(line-1, 0, max(len(buf.Lines)-1, 0))
-			buf.Cur.Col = clamp(max(column-1, 0), 0, len([]rune(buf.LineText(buf.Cur.Line))))
-			m.ide.UI.SetScroll(max(buf.Cur.Line-max(m.ide.UI.Height/3, 1), 0))
-		}
-		if manual {
-			m.followAgent = false
-		}
+		return tea.Batch(switchCmd, m.beginQueuedIDEOpen(m.ide))
 	}
+	return switchCmd
 }
 
 // focusIDEPaneAt routes a plain click on empty IDE space to the pane under
@@ -1065,20 +1061,9 @@ func (m *Model) registerIDERegions(editorW, treeW, railW int) {
 }
 
 func (m *Model) acceptCard(r Region) tea.Model {
-	for _, msg := range m.messages {
-		for _, c := range msg.Cards {
-			if c.ID == r.CardID && c.Status == "proposed" {
-				m.acceptProposalCard(c)
-				if c.Status == "error" {
-					m.status.pushToast("error", c.Detail, 4*time.Second)
-					m.renderMessages()
-					return m
-				}
-				m.removePending(c)
-				m.completeProposalReviewIfSettled()
-				m.renderMessages()
-				return m
-			}
+	for _, c := range m.pending {
+		if c.ID == r.CardID && c.Status == "proposed" {
+			return m.requestProposalConfirmation(c)
 		}
 	}
 	return m

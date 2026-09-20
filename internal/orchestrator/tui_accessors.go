@@ -1,9 +1,11 @@
 package orchestrator
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -13,6 +15,8 @@ import (
 	"github.com/bryann2k/maestro/internal/git"
 	"github.com/bryann2k/maestro/internal/settings"
 )
+
+const maxUntrackedLineCountBytes int64 = 8 << 20
 
 // ProjectName returns the base name of the project root.
 func (o *Orchestrator) ProjectName() string {
@@ -126,12 +130,13 @@ func (o *Orchestrator) SetActiveModel(ctx context.Context, id string) error {
 }
 
 // ContextUsage returns (used, total) context tokens for the statusline:
-// used is the measured session consumption from Done usage events, total is
-// the active model's context window (0 when the model is unknown).
+// used is the latest measured provider turn from Done usage events, total is
+// the active model's context window (0 when the model is unknown). Context is
+// per request; cumulative session traffic would make this meter misleading.
 func (o *Orchestrator) ContextUsage() (used, total int) {
 	if o.eco != nil {
 		o.eco.mu.Lock()
-		used = o.eco.sessionTok
+		used = o.eco.contextTok[agentcore.RoleOrchestrator]
 		o.eco.mu.Unlock()
 	}
 	if o.registry != nil {
@@ -270,15 +275,56 @@ func (o *Orchestrator) ModifiedFilesFor(ctx context.Context, workspace Workspace
 			if ctx.Err() != nil {
 				return nil
 			}
-			lines := 0
-			if data, err := os.ReadFile(filepath.Join(workspace.WorkDir(), path)); err == nil {
-				lines = strings.Count(string(data), "\n")
-			}
+			// The sidebar refreshes this list frequently. Keep pathological
+			// untracked files (large artifacts, FIFOs, symlinks) visible without
+			// reading them wholesale or blocking the UI on special files.
+			lines, _ := countFileNewlines(ctx, filepath.Join(workspace.WorkDir(), path), maxUntrackedLineCountBytes)
 			stats = append(stats, git.NumStat{Path: path, Additions: lines, Untracked: true})
 		}
 	}
 	sort.Slice(stats, func(i, j int) bool { return stats[i].Path < stats[j].Path })
 	return stats
+}
+
+// countFileNewlines counts a small regular file without materializing it.
+// The bool is false when a stable, complete count is unavailable.
+func countFileNewlines(ctx context.Context, path string, limit int64) (int, bool) {
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Size() > limit {
+		return 0, false
+	}
+	f, err := openReadOnly(path)
+	if err != nil {
+		return 0, false
+	}
+	defer f.Close()
+	openedInfo, err := f.Stat()
+	if err != nil || !openedInfo.Mode().IsRegular() {
+		return 0, false
+	}
+
+	var (
+		buf   [32 << 10]byte
+		lines int
+		total int64
+	)
+	for {
+		if ctx.Err() != nil {
+			return 0, false
+		}
+		n, readErr := f.Read(buf[:])
+		total += int64(n)
+		if total > limit {
+			return 0, false
+		}
+		lines += bytes.Count(buf[:n], []byte{'\n'})
+		if errors.Is(readErr, io.EOF) {
+			return lines, true
+		}
+		if readErr != nil {
+			return 0, false
+		}
+	}
 }
 
 // SessionList returns the saved session IDs for this project.

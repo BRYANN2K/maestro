@@ -399,6 +399,69 @@ func TestWorktreeDiffIncludesCleanSubmoduleCommitChange(t *testing.T) {
 	}
 }
 
+func TestWorktreeDiffRejectsOversizePatchWithoutReturningPrefix(t *testing.T) {
+	dir := initRepo(t)
+	// A text patch is emitted verbatim rather than as a compressible binary
+	// delta. One long line also keeps this limit regression test inexpensive.
+	writeFile(t, dir, "oversize.txt", strings.Repeat("x", maxWorktreeDiffBytes+1)+"\n")
+
+	diff, err := New(dir).WorktreeDiff(t.Context(), "HEAD")
+	if err == nil || !strings.Contains(err.Error(), "patch exceeds review evidence limit") {
+		t.Fatalf("WorktreeDiff error = %v, want explicit evidence-limit refusal", err)
+	}
+	if diff != "" {
+		t.Fatalf("WorktreeDiff returned a %d-byte semantic prefix with its limit error", len(diff))
+	}
+}
+
+func TestBoundedCommandBufferDrainsButRetainsOnlyLimit(t *testing.T) {
+	buffer := &boundedCommandBuffer{limit: 32}
+	payload := []byte(strings.Repeat("x", 1024))
+	n, err := buffer.Write(payload)
+	if !errors.Is(err, errGitCommandOutputLimit) || n != len(payload) {
+		t.Fatalf("Write = %d, %v; want %d, output-limit error", n, err, len(payload))
+	}
+	if got := len(buffer.Bytes()); got != 32 || !buffer.exceeded {
+		t.Fatalf("bounded buffer retained %d bytes, exceeded=%v; want 32, true", got, buffer.exceeded)
+	}
+}
+
+func BenchmarkWorktreeDiff(b *testing.B) {
+	dir := b.TempDir()
+	runGit := func(args ...string) {
+		b.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			b.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
+		}
+	}
+	runGit("init", "-b", "main")
+	runGit("config", "user.email", "test@maestro.local")
+	runGit("config", "user.name", "Maestro Test")
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("# repo\n"), 0o644); err != nil {
+		b.Fatal(err)
+	}
+	runGit("add", "README.md")
+	runGit("commit", "-m", "initial commit")
+	payload := strings.Repeat("changed review line\n", 4096)
+	if err := os.WriteFile(filepath.Join(dir, "changed.txt"), []byte(payload), 0o644); err != nil {
+		b.Fatal(err)
+	}
+	client := New(dir)
+	ctx := context.Background()
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		diff, err := client.WorktreeDiff(ctx, "HEAD")
+		if err != nil {
+			b.Fatal(err)
+		}
+		b.ReportMetric(float64(len(diff)), "patch_B/op")
+	}
+}
+
 func TestStatus(t *testing.T) {
 	dir := initRepo(t)
 	c := New(dir)

@@ -48,6 +48,9 @@ func TestCompileRulesNoBlock(t *testing.T) {
 	if len(rs.Rules()) != 0 {
 		t.Errorf("rules = %+v", rs.Rules())
 	}
+	if rs.HasActive() {
+		t.Error("empty rule set reported active")
+	}
 }
 
 func TestCompileRulesBadRegex(t *testing.T) {
@@ -81,6 +84,9 @@ func TestRulesFireOnce(t *testing.T) {
 	}
 	if rs.Fired() != 2 {
 		t.Errorf("fired = %d", rs.Fired())
+	}
+	if rs.HasActive() {
+		t.Error("fully fired rule set reported active")
 	}
 }
 

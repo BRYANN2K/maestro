@@ -48,6 +48,9 @@ func (o *Orchestrator) Docs(ctx context.Context) error {
 // DocsDraft generates the ADR path and content without touching the
 // filesystem. Interactive frontends stage this output as a proposal.
 func (o *Orchestrator) DocsDraft(ctx context.Context) (string, string, error) {
+	if err := o.requireLegacyWorkflow(); err != nil {
+		return "", "", err
+	}
 	if o.spec == nil {
 		return "", "", errors.New("docs: no active spec")
 	}
@@ -412,6 +415,9 @@ func markdownBullets(items []string) string {
 // CompleteDocs records the phase only after the artifact was accepted and
 // persisted by the caller.
 func (o *Orchestrator) CompleteDocs(ctx context.Context, path string) error {
+	if err := o.requireLegacyWorkflow(); err != nil {
+		return err
+	}
 	from := o.sess.Phase
 	if from != session.PhaseReview {
 		return fmt.Errorf("docs: cannot complete from phase %q", from)
