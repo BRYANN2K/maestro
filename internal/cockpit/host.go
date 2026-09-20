@@ -164,7 +164,7 @@ func Path() (string, error) {
 	}
 	st, err := os.Stat(path)
 	if err != nil || !st.Mode().IsRegular() {
-		return "", errors.New("Maestro UI is missing; run make build or install the complete bundle")
+		return "", errors.New("missing Maestro UI; run make build or install the complete bundle")
 	}
 	return path, nil
 }
@@ -325,7 +325,7 @@ func (h *Host) Run(ctx context.Context, in, out, errOut *os.File) error {
 					h.mu.Unlock()
 					reply(cached, nil)
 				} else {
-					reply(nil, errors.New("Maestro is working; cancel or wait before another action"))
+					reply(nil, errors.New("operation in progress; cancel or wait before another action"))
 				}
 				continue
 			}
@@ -363,7 +363,7 @@ func (h *Host) Run(ctx context.Context, in, out, errOut *os.File) error {
 		cancel()
 		h.Orch.CancelRun()
 		if e != nil {
-			return fmt.Errorf("Maestro UI exited: %w", e)
+			return fmt.Errorf("unexpected Maestro UI exit: %w", e)
 		}
 		if errors.Is(scanner.Err(), net.ErrClosed) {
 			return nil
@@ -373,6 +373,6 @@ func (h *Host) Run(ctx context.Context, in, out, errOut *os.File) error {
 		cancel()
 		h.Orch.CancelRun()
 		<-done
-		return errors.New("Maestro UI disconnected without exiting")
+		return errors.New("unexpected Maestro UI disconnection without exiting")
 	}
 }

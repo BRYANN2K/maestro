@@ -1,3 +1,9 @@
+import { rmSync } from "node:fs";
+
+// GoReleaser creates dist after before hooks and requires it to be empty.
+// Keep companion bundles outside dist and discard any previous build outputs.
+rmSync("bin/release", { recursive: true, force: true });
+
 const uiInstall = Bun.spawn(
   [
     "bun",
@@ -34,13 +40,13 @@ for (const [os, arch] of [
   ["windows", "amd64"],
 ]) {
   const child = Bun.spawn(
-    ["bun", "scripts/build-runtime.ts", os, arch, `dist/runtime/${os}_${arch}`],
+    ["bun", "scripts/build-runtime.ts", os, arch, `bin/release/${os}_${arch}`],
     { stdout: "inherit", stderr: "inherit" },
   );
   if (await child.exited)
     throw new Error(`Runtime build failed for ${os}/${arch}`);
   const ui = Bun.spawn(
-    ["bun", "scripts/build-ui.ts", os, arch, `dist/runtime/${os}_${arch}`],
+    ["bun", "scripts/build-ui.ts", os, arch, `bin/release/${os}_${arch}`],
     { stdout: "inherit", stderr: "inherit" },
   );
   if (await ui.exited) throw Error(`UI build failed for ${os}/${arch}`);

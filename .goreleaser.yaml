@@ -41,7 +41,7 @@ archives:
           - zip
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     files:
-      - src: "dist/runtime/{{ .Os }}_{{ .Arch }}/*"
+      - src: "bin/release/{{ .Os }}_{{ .Arch }}/*"
         strip_parent: true
       - src: "runtime/LICENSE.oh-my-pi"
       - src: "runtime/upstream.json"
