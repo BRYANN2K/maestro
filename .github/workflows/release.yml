@@ -109,7 +109,6 @@ jobs:
             "maestro_${RELEASE_VERSION}_linux_amd64.tar.gz"
             "maestro_${RELEASE_VERSION}_linux_arm64.tar.gz"
             "maestro_${RELEASE_VERSION}_windows_amd64.zip"
-            "maestro_${RELEASE_VERSION}_windows_arm64.zip"
           )
           for asset in "${expected_assets[@]}"; do
             grep -Fxq "$asset" <<< "$published_assets" || {

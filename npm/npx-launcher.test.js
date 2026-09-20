@@ -10,6 +10,7 @@ const { test } = require("node:test");
 const zlib = require("zlib");
 
 const launcher = require("./npx-launcher.js");
+const { version } = require("./package.json");
 
 function tempHome(t) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "maestro-npx-"));
@@ -164,18 +165,18 @@ function fakeHTTPS(routes) {
   };
 }
 
-test("maps all supported Node targets to GoReleaser v1 assets", () => {
+test("maps all supported Node targets to version-pinned GoReleaser assets", () => {
   const cases = [
-    ["darwin", "x64", "maestro_1.0.0_darwin_amd64.tar.gz"],
-    ["darwin", "arm64", "maestro_1.0.0_darwin_arm64.tar.gz"],
-    ["linux", "x64", "maestro_1.0.0_linux_amd64.tar.gz"],
-    ["linux", "arm64", "maestro_1.0.0_linux_arm64.tar.gz"],
-    ["win32", "x64", "maestro_1.0.0_windows_amd64.zip"],
+    ["darwin", "x64", `maestro_${version}_darwin_amd64.tar.gz`],
+    ["darwin", "arm64", `maestro_${version}_darwin_arm64.tar.gz`],
+    ["linux", "x64", `maestro_${version}_linux_amd64.tar.gz`],
+    ["linux", "arm64", `maestro_${version}_linux_arm64.tar.gz`],
+    ["win32", "x64", `maestro_${version}_windows_amd64.zip`],
   ];
   for (const [platform, arch, expected] of cases) {
     assert.equal(launcher.assetName(platform, arch), expected);
     assert.equal(launcher.releaseURLs(platform, arch).archive,
-      `https://github.com/BRYANN2K/maestro/releases/download/v1.0.0/${expected}`);
+      `https://github.com/BRYANN2K/maestro/releases/download/v${version}/${expected}`);
   }
   assert.throws(() => launcher.targetFor("freebsd", "x64"), /unsupported platform freebsd\/x64/);
   assert.throws(() => launcher.targetFor("linux", "ia32"), /unsupported platform linux\/ia32/);
@@ -185,7 +186,7 @@ test("uses an architecture-specific versioned cache and Windows suffix", () => {
   const home = path.join("tmp", "home");
   assert.equal(
     launcher.versionedBinDir(home, "linux", "arm64"),
-    path.join(home, ".maestro", "bin", "v1.0.0", "linux-arm64")
+    path.join(home, ".maestro", "bin", `v${version}`, "linux-arm64")
   );
   assert.equal(launcher.executableName("linux"), "maestro");
   assert.equal(launcher.executableName("win32"), "maestro.exe");
@@ -193,7 +194,7 @@ test("uses an architecture-specific versioned cache and Windows suffix", () => {
 });
 
 test("parses an exact checksum entry and rejects malformed or duplicate manifests", () => {
-  const asset = "maestro_1.0.0_linux_amd64.tar.gz";
+  const asset = `maestro_${version}_linux_amd64.tar.gz`;
   const hash = "a".repeat(64);
   assert.equal(launcher.parseChecksums(`${"b".repeat(64)}  other\n${hash} *${asset}\n`, asset), hash);
   assert.throws(() => launcher.parseChecksums("not a manifest\n", asset), /invalid line/);

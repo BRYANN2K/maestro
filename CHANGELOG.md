@@ -3,7 +3,16 @@
 All notable changes to Maestro are documented here. Maestro follows
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [1.1.0] — 2026-09-21
+
+### Built-in Maestro harness
+
+- Integrated the oh-my-pi runtime, Stipulate workflow and RLM context support
+  behind the Maestro harness, with provider accounts and OpenAI-compatible
+  endpoints that discover their models automatically.
+- Shipped complete Go host, OpenTUI frontend, runtime and native-library bundles
+  for macOS and Linux on AMD64/ARM64, and Windows AMD64. Windows ARM64 bundles
+  are unavailable in this version.
 
 ### OpenTUI workspace
 
@@ -12,6 +21,9 @@ All notable changes to Maestro are documented here. Maestro follows
 - Added native model/account dialogs, masked API-key entry, endpoint discovery,
   multiline composition, file previews and saved-session navigation.
 - Bound contract approval to the exact reviewed digest; stale approvals fail.
+- Added clickable HTTP/HTTPS links, refreshed dialog focus and scrolling,
+  and protected asynchronous operations and provider discovery from stale state.
+- Updated the visual identity, cover, English README and real TUI screenshots.
 - Added authenticated host/UI transport, cancellation and terminal restoration.
 - Included the compiled UI in source builds, release bundles and npm cache
   verification. The previous editor remains under `maestro tui --classic`.
@@ -182,4 +194,5 @@ the terminal.
   analysis, dependency verification, vulnerability scanning, and npm package
   validation.
 
+[1.1.0]: https://github.com/BRYANN2K/maestro/releases/tag/v1.1.0
 [1.0.0]: https://github.com/BRYANN2K/maestro/releases/tag/v1.0.0

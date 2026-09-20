@@ -1,13 +1,13 @@
 # Production readiness
 
-Released baseline: Maestro 1.0.0
+Release target: Maestro 1.1.0
 
-Unreleased hardening review: 2026-08-23
+Hardening review: 2026-08-23; OpenTUI review: 2026-09-20
 
 ## Decision
 
-Version 1.0.0 is the released baseline. This audit covers the current
-Unreleased hardening changes and does not assign their next release version.
+Version 1.1.0 packages the built-in harness, OpenTUI workspace and hardening
+changes reviewed since the 1.0.0 baseline.
 Publication must use one reviewed, clean commit for which every gate below
 passes. A local build from a dirty worktree is useful evidence, but it is not a
 releasable artifact.
@@ -20,9 +20,7 @@ browser application in the release.
 ## Release contract
 
 One Git tag, one GitHub release, one npm package, and the embedded binary must
-use the same reviewed version. The examples below retain `1.0.0` because they
-describe the released baseline; choose the next version before creating a new
-tag or package.
+use the same reviewed version: `1.1.0` for this release.
 
 The supported prebuilt matrix is:
 
@@ -30,12 +28,13 @@ The supported prebuilt matrix is:
 | --- | --- | --- |
 | macOS | AMD64, ARM64 | `.tar.gz` |
 | Linux | AMD64, ARM64 | `.tar.gz` |
-| Windows | AMD64, ARM64 | `.zip` |
+| Windows | AMD64 | `.zip` |
 
 Every binary is built with `CGO_ENABLED=0` and `-trimpath`. GoReleaser emits
 `checksums.txt`; the npm launcher downloads the matching release asset and
-verifies its SHA-256 digest before installation. `go install` is a fallback for
-users who intentionally build with a local Go toolchain.
+verifies its SHA-256 digest before installation. Every archive includes the
+compiled UI, harness runtime and native library. Use `make build` for a complete
+source build; `go install` alone does not install these companions.
 
 ## Required release gate
 
@@ -59,7 +58,7 @@ That aggregate gate must prove:
 | npm package | Dry run contains only the declared launcher, README, license, and package metadata |
 
 Before tagging, also run a GoReleaser configuration check and a snapshot build
-of all six OS/architecture targets. Launch the freshly built local binary in a
+of all five bundled OS/architecture targets. Launch the freshly built local binary in a
 pseudo-terminal and exercise startup, Settings, model selection, one project
 flow, one session restore, Skills, MCP status, Learn, IDE, compact rendering,
 and clean exit.
@@ -95,13 +94,13 @@ Configure the npm package's trusted publisher once with these exact values:
 | Environment | Leave empty |
 | Allowed action | `npm publish` |
 
-The workflow is idempotent. A rerun verifies the seven expected GitHub assets
+The workflow is idempotent. A rerun verifies the six expected GitHub assets
 and compares the published npm tarball's SHA-1 with a package rebuilt from the
 tag before it skips either publication. For example, reconcile the existing
-1.0.0 tag from the default branch with:
+1.1.0 tag from the default branch with:
 
 ```sh
-gh workflow run Release --ref main -f tag=v1.0.0
+gh workflow run Release --ref main -f tag=v1.1.0
 ```
 
 ## Hardened boundaries
@@ -223,7 +222,7 @@ gh workflow run Release --ref main -f tag=v1.0.0
    exact commit.
 6. Verify every GitHub asset and checksum, then publish the matching npm
    package.
-7. Install through npm, a direct archive, and `go install` in clean fixtures;
+7. Install through npm, a direct archive, and `make build` in clean fixtures;
    each command must report the chosen version.
 
 No commit, tag, push, GitHub release, or npm publication is implied by this

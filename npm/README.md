@@ -20,19 +20,18 @@ npx @bryann2k/maestro version
 npx @bryann2k/maestro spec list
 ```
 
-Use `npx @bryann2k/maestro@1.0.0` to pin the launcher explicitly.
+Use `npx @bryann2k/maestro@1.1.0` to pin the launcher explicitly.
 
 The launcher requires Node.js 18 or newer. A Go toolchain is **not** required.
-It downloads the matching Maestro 1.0.0 archive from GitHub Releases, verifies
+It downloads the matching Maestro 1.1.0 archive from GitHub Releases, verifies
 the archive against the release SHA-256 checksum manifest, and caches that exact
-binary under `~/.maestro/bin/v1.0.0/<platform>-<architecture>/`. The cached
+binary under `~/.maestro/bin/v1.1.0/<platform>-<architecture>/`. The cached
 binary is checked against private integrity metadata before every launch.
 
 Complete harness bundles target macOS and Linux on x64/arm64, and Windows x64.
 Windows ARM64 is not currently packaged. Python 3.11+ (`python3`) is required
 for Stipulate and RLM. The launcher verifies the frontend, runtime and native
-library before launch. These harness changes are pending release; use the
-source build until a matching bundle is published. Windows uses
+library before launch. Windows uses
 `maestro.exe` and a ZIP archive; macOS and Linux use TAR.GZ archives. Downloads
 use HTTPS with bounded redirects, size, and time. Installation is atomic, so
 concurrent `npx` calls cannot observe a partial binary.
@@ -43,7 +42,7 @@ telemetry. Updating the npm package selects a separate versioned cache entry.
 ## Other installation paths
 
 Prebuilt archives and `checksums.txt` are available from the
-[Maestro 1.0.0 release](https://github.com/BRYANN2K/maestro/releases/tag/v1.0.0).
+[Maestro 1.1.0 release](https://github.com/BRYANN2K/maestro/releases/tag/v1.1.0).
 Developers need Go 1.26.5+, Bun 1.3.14 and Python 3.11+. From the source checkout:
 
 ```sh
@@ -51,7 +50,7 @@ make build
 ./bin/maestro
 ```
 
-Keep all three generated executables/libraries in `bin/` together.
+Keep the three executables and the native library in `bin/` together.
 
 ## License
 
