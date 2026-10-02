@@ -678,8 +678,7 @@ func (k vaultKeyStore) SaveKey(ctx context.Context, name, value string) error {
 	if k.vault == nil {
 		return fmt.Errorf("credential vault unavailable")
 	}
-	k.vault.Set("key:"+name, value)
-	return k.vault.Save(ctx)
+	return k.vault.SetAndSave(ctx, "key:"+name, value)
 }
 
 // ReloadCredentials applies a completed account login to the active registry.

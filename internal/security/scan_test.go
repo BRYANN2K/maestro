@@ -121,3 +121,21 @@ func TestFindingString(t *testing.T) {
 		t.Errorf("String = %q", f.String())
 	}
 }
+
+func TestScanMissingRLSIgnoresTableNamesContainingRLS(t *testing.T) {
+	dir := t.TempDir()
+	writeFiles(t, dir, map[string]string{
+		"migrations/001.sql": "CREATE TABLE urls (id int);\n",
+		"migrations/002.sql": "CREATE TABLE notes (id int);\n-- rls: enabled below\nALTER TABLE notes ENABLE ROW LEVEL SECURITY;\n",
+	})
+	findings, err := Scan(context.Background(), []string{
+		filepath.Join(dir, "migrations/001.sql"),
+		filepath.Join(dir, "migrations/002.sql"),
+	}, func(p string) ([]byte, error) { return os.ReadFile(p) })
+	if err != nil {
+		t.Fatalf("Scan: %v", err)
+	}
+	if len(findings) != 1 || findings[0].ID != "missing-rls" || !strings.HasSuffix(findings[0].File, "001.sql") {
+		t.Errorf("findings = %+v, want one missing-rls on 001.sql", findings)
+	}
+}

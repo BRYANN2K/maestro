@@ -3,6 +3,32 @@
 All notable changes to Maestro are documented here. Maestro follows
 [Semantic Versioning](https://semver.org/).
 
+## [1.1.1] — 2026-10-03
+
+### Fixed
+
+- npm launcher: the download timeout now measures idle time (30s) with a
+  15-minute overall limit, so ~100MB bundles install on ordinary connections;
+  concurrent installers wait long enough for an in-progress download.
+- npm launcher: SIGTERM and SIGHUP sent to the launcher are forwarded to
+  Maestro instead of orphaning it.
+- Credential vault: saves are serialized and fsynced before the atomic rename,
+  so concurrent token refreshes cannot overwrite each other and a crash cannot
+  truncate the vault; a vault file containing `null` no longer panics.
+- Security scan: tables whose names contain "rls" (e.g. `urls`) are no longer
+  treated as having row-level security.
+- Atomic commits: every changed file of an imported package is ordered before
+  its importers.
+- Git errors keep their cause, so cancellations are recognised as such.
+
+### Changed
+
+- Updated Go dependencies (lipgloss v2.0.6, x/ansi v0.11.8, x/sys v0.48.0,
+  x/term v0.46.0, jsonschema v6.0.3) and their license manifest.
+- CI runs once per pull request instead of twice (push builds are limited to
+  `main`).
+- Removed the unused `internal/oauth` package.
+
 ## [1.1.0] — 2026-09-21
 
 ### Built-in Maestro harness
@@ -194,5 +220,6 @@ the terminal.
   analysis, dependency verification, vulnerability scanning, and npm package
   validation.
 
+[1.1.1]: https://github.com/BRYANN2K/maestro/releases/tag/v1.1.1
 [1.1.0]: https://github.com/BRYANN2K/maestro/releases/tag/v1.1.0
 [1.0.0]: https://github.com/BRYANN2K/maestro/releases/tag/v1.0.0

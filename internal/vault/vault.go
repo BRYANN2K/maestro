@@ -24,10 +24,13 @@ func cryptoRandRead(b []byte) (int, error) { return rand.Read(b) }
 // Vault is a key/value secret store persisted as JSON (or AES-256 with
 // OpenAES).
 type Vault struct {
-	mu   sync.RWMutex
-	path string
-	data map[string]string
-	aes  []byte // non-nil when the vault is encrypted
+	mu sync.RWMutex
+	// saveMu serializes Save from snapshot to rename so an older snapshot
+	// can never be renamed over a newer one (e.g. a refreshed token).
+	saveMu sync.Mutex
+	path   string
+	data   map[string]string
+	aes    []byte // non-nil when the vault is encrypted
 }
 
 // Open loads the vault at path, creating an empty one (with 0600 permissions)
@@ -65,6 +68,12 @@ func (v *Vault) Set(key, value string) {
 	v.data[key] = value
 }
 
+// SetAndSave stores value for key and persists the vault.
+func (v *Vault) SetAndSave(ctx context.Context, key, value string) error {
+	v.Set(key, value)
+	return v.Save(ctx)
+}
+
 // Delete removes key. It is not persisted until Save.
 func (v *Vault) Delete(key string) {
 	v.mu.Lock()
@@ -100,6 +109,8 @@ func (v *Vault) Save(ctx context.Context) error {
 	if v.path == "" {
 		return errors.New("vault path is required")
 	}
+	v.saveMu.Lock()
+	defer v.saveMu.Unlock()
 	v.mu.RLock()
 	snapshot := make(map[string]string, len(v.data))
 	for key, value := range v.data {
@@ -135,6 +146,10 @@ func (v *Vault) Save(ctx context.Context) error {
 		tmp.Close()
 		return fmt.Errorf("save vault: %w", err)
 	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return fmt.Errorf("save vault: %w", err)
+	}
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("save vault: %w", err)
 	}
@@ -151,7 +166,7 @@ const aesMagic = "MAESTRO-AES-v1\n"
 
 // aesKeyFile is the master key path next to the vault.
 func aesKeyPath(vaultPath string) string {
-	return filepath.Dir(vaultPath) + string(os.PathSeparator) + "vault.key"
+	return filepath.Join(filepath.Dir(vaultPath), "vault.key")
 }
 
 func readKey(path string) ([]byte, error) {
@@ -301,6 +316,9 @@ func OpenAES(ctx context.Context, path string, warn func(string)) (*Vault, error
 		// Legacy / corrupt: try the JSON path; corrupt JSON fails too.
 		var m map[string]string
 		if jerr := json.Unmarshal(data, &m); jerr == nil {
+			if m == nil {
+				m = map[string]string{}
+			}
 			v := &Vault{path: path, data: m, aes: key}
 			return v, nil
 		}
@@ -309,6 +327,9 @@ func OpenAES(ctx context.Context, path string, warn func(string)) (*Vault, error
 	var m map[string]string
 	if err := json.Unmarshal(plain, &m); err != nil {
 		return nil, fmt.Errorf("open vault %s: %w", path, err)
+	}
+	if m == nil {
+		m = map[string]string{}
 	}
 	return &Vault{path: path, data: m, aes: key}, nil
 }

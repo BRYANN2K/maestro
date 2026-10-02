@@ -291,3 +291,44 @@ func TestAESMigrationFromLegacy(t *testing.T) {
 		t.Error("vault should be re-encrypted after save")
 	}
 }
+
+func TestNullVaultFileIsWritable(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "vault.json")
+	if err := os.WriteFile(path, []byte("null"), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	v, err := OpenAES(context.Background(), path, func(string) {})
+	if err != nil {
+		t.Fatalf("OpenAES: %v", err)
+	}
+	if err := v.SetAndSave(context.Background(), "k", "v"); err != nil {
+		t.Fatalf("SetAndSave: %v", err)
+	}
+}
+
+func TestConcurrentSavesKeepLatestValue(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "vault.json")
+	v, err := Open(ctx, path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	var wg sync.WaitGroup
+	for i := 0; i < 20; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			if err := v.SetAndSave(ctx, "k"+string(rune('a'+i)), "v"); err != nil {
+				t.Errorf("SetAndSave: %v", err)
+			}
+		}(i)
+	}
+	wg.Wait()
+	reloaded, err := Open(ctx, path)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	if reloaded.Len() != 20 {
+		t.Errorf("persisted %d keys, want 20", reloaded.Len())
+	}
+}

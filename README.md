@@ -85,16 +85,16 @@ changes and actions within reach. `NO_COLOR` selects a monochrome palette.
 
 ## Get started
 
-Maestro 1.1.0 includes the built-in harness and OpenTUI workspace. With Node.js
+Maestro 1.1 includes the built-in harness and OpenTUI workspace. With Node.js
 18+ and Python 3.11+ (`python3` on PATH), run:
 
 ```sh
-npx @bryann2k/maestro@1.1.0 --dir /path/to/your/project
+npx @bryann2k/maestro@1.1.1 --dir /path/to/your/project
 ```
 
 Prebuilt bundles support macOS and Linux on x64/ARM64, and Windows x64.
 You can also download an archive from the
-[1.1.0 release](https://github.com/BRYANN2K/maestro/releases/tag/v1.1.0)
+[1.1.1 release](https://github.com/BRYANN2K/maestro/releases/tag/v1.1.1)
 or build from source:
 
 **Build requirements:** Go 1.26.6+, Bun 1.3.14 and Python 3.11+ (`python3` on PATH).

@@ -40,7 +40,7 @@ The list below is the union of `CGO_ENABLED=0 go list -deps ./cmd/maestro` for m
 
 | Module | Version | Linked targets | License and notice text |
 | --- | --- | --- | --- |
-| `charm.land/lipgloss/v2` | `v2.0.5` | all six release targets | [`LICENSE`](LICENSES/modules/charm.land/lipgloss/v2/LICENSE) |
+| `charm.land/lipgloss/v2` | `v2.0.6` | all six release targets | [`LICENSE`](LICENSES/modules/charm.land/lipgloss/v2/LICENSE) |
 | `github.com/alecthomas/chroma/v2` | `v2.27.0` | all six release targets | [`COPYING`](LICENSES/modules/github.com/alecthomas/chroma/v2/COPYING) |
 | `github.com/atotto/clipboard` | `v0.1.4` | all six release targets | [`LICENSE`](LICENSES/modules/github.com/atotto/clipboard/LICENSE) |
 | `github.com/aymanbagabas/go-osc52/v2` | `v2.0.1` | all six release targets | [`LICENSE`](LICENSES/modules/github.com/aymanbagabas/go-osc52/v2/LICENSE) |
@@ -50,8 +50,8 @@ The list below is the union of `CGO_ENABLED=0 go list -deps ./cmd/maestro` for m
 | `github.com/charmbracelet/colorprofile` | `v0.4.3` | all six release targets | [`LICENSE`](LICENSES/modules/github.com/charmbracelet/colorprofile/LICENSE) |
 | `github.com/charmbracelet/glamour` | `v1.0.0` | all six release targets | [`LICENSE`](LICENSES/modules/github.com/charmbracelet/glamour/LICENSE) |
 | `github.com/charmbracelet/lipgloss` | `v1.1.1-0.20250404203927-76690c660834` | all six release targets | [`LICENSE`](LICENSES/modules/github.com/charmbracelet/lipgloss/LICENSE) |
-| `github.com/charmbracelet/ultraviolet` | `v0.0.0-20251205161215-1948445e3318` | all six release targets | [`LICENSE`](LICENSES/modules/github.com/charmbracelet/ultraviolet/LICENSE) |
-| `github.com/charmbracelet/x/ansi` | `v0.11.7` | all six release targets | [`LICENSE`](LICENSES/modules/github.com/charmbracelet/x/ansi/LICENSE) |
+| `github.com/charmbracelet/ultraviolet` | `v0.0.0-20260811164956-006e29f97886` | all six release targets | [`LICENSE`](LICENSES/modules/github.com/charmbracelet/ultraviolet/LICENSE) |
+| `github.com/charmbracelet/x/ansi` | `v0.11.8` | all six release targets | [`LICENSE`](LICENSES/modules/github.com/charmbracelet/x/ansi/LICENSE) |
 | `github.com/charmbracelet/x/cellbuf` | `v0.0.15` | all six release targets | [`LICENSE`](LICENSES/modules/github.com/charmbracelet/x/cellbuf/LICENSE) |
 | `github.com/charmbracelet/x/exp/slice` | `v0.0.0-20250327172914-2fdc97757edf` | all six release targets | [`LICENSE`](LICENSES/modules/github.com/charmbracelet/x/exp/slice/LICENSE) |
 | `github.com/charmbracelet/x/term` | `v0.2.2` | all six release targets | [`LICENSE`](LICENSES/modules/github.com/charmbracelet/x/term/LICENSE) |
@@ -65,21 +65,21 @@ The list below is the union of `CGO_ENABLED=0 go list -deps ./cmd/maestro` for m
 | `github.com/lucasb-eyer/go-colorful` | `v1.4.1` | all six release targets | [`LICENSE`](LICENSES/modules/github.com/lucasb-eyer/go-colorful/LICENSE) |
 | `github.com/mattn/go-isatty` | `v0.0.20` | all six release targets | [`LICENSE`](LICENSES/modules/github.com/mattn/go-isatty/LICENSE) |
 | `github.com/mattn/go-localereader` | `v0.0.1` | Windows (amd64, arm64) | [`LICENSE`](LICENSES/modules/github.com/mattn/go-localereader/LICENSE) |
-| `github.com/mattn/go-runewidth` | `v0.0.23` | all six release targets | [`LICENSE`](LICENSES/modules/github.com/mattn/go-runewidth/LICENSE) |
+| `github.com/mattn/go-runewidth` | `v0.0.24` | all six release targets | [`LICENSE`](LICENSES/modules/github.com/mattn/go-runewidth/LICENSE) |
 | `github.com/microcosm-cc/bluemonday` | `v1.0.27` | all six release targets | [`LICENSE.md`](LICENSES/modules/github.com/microcosm-cc/bluemonday/LICENSE.md) |
 | `github.com/muesli/ansi` | `v0.0.0-20230316100256-276c6243b2f6` | all six release targets | [`LICENSE`](LICENSES/modules/github.com/muesli/ansi/LICENSE) |
 | `github.com/muesli/cancelreader` | `v0.2.2` | all six release targets | [`LICENSE`](LICENSES/modules/github.com/muesli/cancelreader/LICENSE) |
 | `github.com/muesli/reflow` | `v0.3.0` | all six release targets | [`LICENSE`](LICENSES/modules/github.com/muesli/reflow/LICENSE) |
 | `github.com/muesli/termenv` | `v0.16.0` | all six release targets | [`LICENSE`](LICENSES/modules/github.com/muesli/termenv/LICENSE) |
 | `github.com/rivo/uniseg` | `v0.4.7` | all six release targets | [`LICENSE.txt`](LICENSES/modules/github.com/rivo/uniseg/LICENSE.txt) |
-| `github.com/santhosh-tekuri/jsonschema/v6` | `v6.0.2` | all six release targets | [`LICENSE`](LICENSES/modules/github.com/santhosh-tekuri/jsonschema/v6/LICENSE) |
+| `github.com/santhosh-tekuri/jsonschema/v6` | `v6.0.3` | all six release targets | [`LICENSE`](LICENSES/modules/github.com/santhosh-tekuri/jsonschema/v6/LICENSE) |
 | `github.com/xo/terminfo` | `v0.0.0-20220910002029-abceb7e1c41e` | all six release targets | [`LICENSE`](LICENSES/modules/github.com/xo/terminfo/LICENSE) |
 | `github.com/yuin/goldmark` | `v1.7.17` | all six release targets | [`LICENSE`](LICENSES/modules/github.com/yuin/goldmark/LICENSE) |
 | `github.com/yuin/goldmark-emoji` | `v1.0.6` | all six release targets | [`LICENSE`](LICENSES/modules/github.com/yuin/goldmark-emoji/LICENSE) |
 | `golang.org/x/net` | `v0.38.0` | all six release targets | [`LICENSE`](LICENSES/modules/golang.org/x/net/LICENSE); [`PATENTS`](LICENSES/modules/golang.org/x/PATENTS) |
-| `golang.org/x/sync` | `v0.21.0` | all six release targets | [`LICENSE`](LICENSES/modules/golang.org/x/sync/LICENSE); [`PATENTS`](LICENSES/modules/golang.org/x/PATENTS) |
-| `golang.org/x/sys` | `v0.46.0` | all six release targets | [`LICENSE`](LICENSES/modules/golang.org/x/sys/LICENSE); [`PATENTS`](LICENSES/modules/golang.org/x/PATENTS) |
-| `golang.org/x/term` | `v0.36.0` | all six release targets | [`LICENSE`](LICENSES/modules/golang.org/x/term/LICENSE); [`PATENTS`](LICENSES/modules/golang.org/x/PATENTS) |
+| `golang.org/x/sync` | `v0.22.0` | all six release targets | [`LICENSE`](LICENSES/modules/golang.org/x/sync/LICENSE); [`PATENTS`](LICENSES/modules/golang.org/x/PATENTS) |
+| `golang.org/x/sys` | `v0.48.0` | all six release targets | [`LICENSE`](LICENSES/modules/golang.org/x/sys/LICENSE); [`PATENTS`](LICENSES/modules/golang.org/x/PATENTS) |
+| `golang.org/x/term` | `v0.46.0` | all six release targets | [`LICENSE`](LICENSES/modules/golang.org/x/term/LICENSE); [`PATENTS`](LICENSES/modules/golang.org/x/PATENTS) |
 | `golang.org/x/text` | `v0.39.0` | all six release targets | [`LICENSE`](LICENSES/modules/golang.org/x/text/LICENSE); [`PATENTS`](LICENSES/modules/golang.org/x/PATENTS) |
 | `gopkg.in/yaml.v3` | `v3.0.1` | all six release targets | [`LICENSE`](LICENSES/modules/gopkg.in/yaml.v3/LICENSE); [`NOTICE`](LICENSES/modules/gopkg.in/yaml.v3/NOTICE) |
 

@@ -147,16 +147,19 @@ func categoryOf(specID string) string {
 }
 
 // ImportDeps parses Go import dependencies between the changed files:
-// path → list of other changed files it imports.
+// path → list of other changed files it imports. Every changed file of an
+// imported package is a dependency, so its commits all land first.
 func ImportDeps(root string, changed []string) map[string][]string {
 	deps := map[string][]string{}
 	importRe := regexp.MustCompile(`"([^"]+)"`)
-	byPkg := map[string]string{}
+	module := modulePath(root)
+	byPkg := map[string][]string{}
 	for _, f := range changed {
 		if !strings.HasSuffix(f, ".go") {
 			continue
 		}
-		byPkg[pkgPath(root, f)] = f
+		pkg := pkgPath(module, f)
+		byPkg[pkg] = append(byPkg[pkg], f)
 	}
 	for _, f := range changed {
 		if !strings.HasSuffix(f, ".go") {
@@ -167,27 +170,30 @@ func ImportDeps(root string, changed []string) map[string][]string {
 			continue
 		}
 		for _, m := range importRe.FindAllStringSubmatch(string(data), -1) {
-			imp := m[1]
-			if target, ok := byPkg[imp]; ok {
-				deps[f] = append(deps[f], target)
-			}
+			deps[f] = append(deps[f], byPkg[m[1]]...)
 		}
 	}
 	return deps
 }
 
-// pkgPath guesses the package path of a file from the module + dir.
-func pkgPath(root, file string) string {
+// modulePath reads the module path from root/go.mod ("" when unavailable).
+func modulePath(root string) string {
 	mod, err := os.ReadFile(filepath.Join(root, "go.mod"))
 	if err != nil {
 		return ""
 	}
-	module := ""
 	for _, line := range strings.Split(string(mod), "\n") {
 		if strings.HasPrefix(line, "module ") {
-			module = strings.TrimSpace(strings.TrimPrefix(line, "module "))
-			break
+			return strings.TrimSpace(strings.TrimPrefix(line, "module "))
 		}
+	}
+	return ""
+}
+
+// pkgPath guesses the package path of a file from the module + dir.
+func pkgPath(module, file string) string {
+	if module == "" {
+		return ""
 	}
 	rel := filepath.ToSlash(filepath.Dir(file))
 	if rel == "." {
