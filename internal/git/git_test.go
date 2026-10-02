@@ -755,3 +755,13 @@ func TestUntrackedFiles(t *testing.T) {
 		t.Errorf("untracked after commit = %v", paths)
 	}
 }
+
+func TestCommandErrorsKeepCancellationCause(t *testing.T) {
+	dir := initRepo(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := New(dir).CurrentBranch(ctx)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("CurrentBranch error = %v, want context.Canceled in chain", err)
+	}
+}

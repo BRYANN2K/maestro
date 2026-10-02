@@ -7,7 +7,7 @@ const https = require("https");
 const os = require("os");
 const path = require("path");
 const zlib = require("zlib");
-const { spawnSync: systemSpawnSync } = require("child_process");
+const { spawn: systemSpawn } = require("child_process");
 const { version: VERSION } = require("./package.json");
 
 const REPOSITORY = "BRYANN2K/maestro";
@@ -19,9 +19,12 @@ const MAX_ARCHIVE_BYTES = 256 * 1024 * 1024;
 const MAX_CHECKSUM_BYTES = 1024 * 1024;
 const MAX_EXTRACTED_BYTES = 512 * 1024 * 1024;
 const MAX_BINARY_BYTES = 256 * 1024 * 1024;
+// Idle limit: a transfer fails only after this long without receiving data.
 const DOWNLOAD_TIMEOUT_MS = 30_000;
+const DOWNLOAD_TOTAL_TIMEOUT_MS = 15 * 60_000;
 const MAX_REDIRECTS = 5;
-const LOCK_TIMEOUT_MS = 120_000;
+// Waiters must outlast an installer that is still downloading.
+const LOCK_TIMEOUT_MS = DOWNLOAD_TOTAL_TIMEOUT_MS + 60_000;
 const LOCK_POLL_MS = 50;
 const LOCK_ORPHAN_GRACE_MS = 1_000;
 const LOCK_MALFORMED_STALE_MS = 90_000;
@@ -259,8 +262,9 @@ function downloadBuffer(url, options = {}) {
   const get = options.get || https.get;
   const maxBytes = options.maxBytes || MAX_ARCHIVE_BYTES;
   const timeoutMs = options.timeoutMs || DOWNLOAD_TIMEOUT_MS;
+  const totalTimeoutMs = options.totalTimeoutMs || DOWNLOAD_TOTAL_TIMEOUT_MS;
   const maxRedirects = options.maxRedirects ?? MAX_REDIRECTS;
-  const deadline = Date.now() + timeoutMs;
+  const deadline = Date.now() + totalTimeoutMs;
 
   if (!Number.isSafeInteger(maxBytes) || maxBytes < 1) {
     return Promise.reject(new Error("invalid download size limit"));
@@ -280,29 +284,36 @@ function downloadBuffer(url, options = {}) {
         return;
       }
 
-      const remaining = deadline - Date.now();
-      if (remaining <= 0) {
-        reject(timeoutError(timeoutMs));
+      if (deadline - Date.now() <= 0) {
+        reject(timeoutError(totalTimeoutMs));
         return;
       }
 
       let settled = false;
       let req;
       let activeResponse;
+      let timer;
       const finish = (callback, value) => {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
         callback(value);
       };
-      const timer = setTimeout(() => {
-        const error = timeoutError(timeoutMs);
-        if (activeResponse && typeof activeResponse.destroy === "function") {
-          activeResponse.destroy(error);
-        }
-        if (req && typeof req.destroy === "function") req.destroy(error);
-        finish(reject, error);
-      }, remaining);
+      // (Re)arms the idle timer, capped by the overall deadline.
+      const armTimer = () => {
+        clearTimeout(timer);
+        const remaining = deadline - Date.now();
+        const capped = remaining < timeoutMs;
+        timer = setTimeout(() => {
+          const error = timeoutError(capped ? totalTimeoutMs : timeoutMs);
+          if (activeResponse && typeof activeResponse.destroy === "function") {
+            activeResponse.destroy(error);
+          }
+          if (req && typeof req.destroy === "function") req.destroy(error);
+          finish(reject, error);
+        }, Math.max(1, Math.min(timeoutMs, remaining)));
+      };
+      armTimer();
 
       try {
         req = get(
@@ -380,6 +391,7 @@ function downloadBuffer(url, options = {}) {
                 return;
               }
               chunks.push(data);
+              armTimer();
             });
             response.once("aborted", () =>
               finish(reject, new Error("release download was interrupted"))
@@ -913,12 +925,46 @@ async function install(options = {}) {
   }
 }
 
+// Termination signals sent only to the launcher (supervisors, `kill <pid>`)
+// are forwarded so Maestro is never orphaned. SIGINT is swallowed rather than
+// forwarded: a terminal Ctrl-C already reaches the child via its process group.
+const FORWARDED_SIGNALS = ["SIGTERM", "SIGHUP"];
+
+function launchChild(command, args, options, spawn = systemSpawn) {
+  return new Promise((resolve) => {
+    let child;
+    try {
+      child = spawn(command, args, options);
+    } catch (error) {
+      resolve({ error });
+      return;
+    }
+    const forward = (signal) => {
+      try {
+        child.kill(signal);
+      } catch {
+        // The child already exited; its exit event settles the launch.
+      }
+    };
+    const ignore = () => {};
+    for (const signal of FORWARDED_SIGNALS) process.on(signal, forward);
+    process.on("SIGINT", ignore);
+    const settle = (result) => {
+      for (const signal of FORWARDED_SIGNALS) process.removeListener(signal, forward);
+      process.removeListener("SIGINT", ignore);
+      resolve(result);
+    };
+    child.once("error", (error) => settle({ error }));
+    child.once("exit", (status, signal) => settle({ status, signal }));
+  });
+}
+
 async function run(args = process.argv.slice(2), options = {}) {
   const home = options.home || os.homedir();
   const platform = options.platform || process.platform;
   const hostPlatform = options.hostPlatform || process.platform;
   const arch = options.arch || process.arch;
-  const spawnSync = options.spawnSync || systemSpawnSync;
+  const launch = options.launch || launchChild;
   const fsImpl = options.fs || fs;
   const env = options.env || process.env;
   const log = options.log || console.error;
@@ -929,7 +975,7 @@ async function run(args = process.argv.slice(2), options = {}) {
     if (!cacheReady(home, platform, arch, fsImpl, hostPlatform)) {
       bin = await install({ ...options, home, platform, arch, fs: fsImpl, log });
     }
-    const result = spawnSync(bin, args, { stdio: "inherit", env });
+    const result = await launch(bin, args, { stdio: "inherit", env });
     if (result.error) throw new Error(`could not launch ${bin}: ${result.error.message}`);
     if (result.signal) {
       const signalNumber = os.constants.signals[result.signal];
@@ -977,6 +1023,7 @@ module.exports = {
   executableName,
   extractBinary,
   install,
+  launchChild,
   metadataPath,
   parseChecksums,
   releaseURLs,

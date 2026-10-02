@@ -72,6 +72,7 @@ func TestImportDeps(t *testing.T) {
 	files := map[string]string{
 		"main.go":               "package main\n\nimport \"example.com/app/internal/spec\"\n",
 		"internal/spec/spec.go": "package spec\n",
+		"internal/spec/load.go": "package spec\n",
 	}
 	for name, content := range files {
 		path := filepath.Join(dir, name)
@@ -82,9 +83,10 @@ func TestImportDeps(t *testing.T) {
 			t.Fatalf("WriteFile: %v", err)
 		}
 	}
-	changed := []string{"main.go", "internal/spec/spec.go"}
+	changed := []string{"main.go", "internal/spec/spec.go", "internal/spec/load.go"}
 	deps := ImportDeps(dir, changed)
-	if len(deps["main.go"]) != 1 || deps["main.go"][0] != "internal/spec/spec.go" {
+	// Every changed file of the imported package is a dependency.
+	if len(deps["main.go"]) != 2 || deps["main.go"][0] != "internal/spec/spec.go" || deps["main.go"][1] != "internal/spec/load.go" {
 		t.Errorf("deps = %v", deps)
 	}
 }

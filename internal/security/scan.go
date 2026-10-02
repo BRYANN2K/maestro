@@ -82,7 +82,7 @@ var patterns = []struct {
 				// scan the next 15 lines for RLS
 				for j := i; j < len(lines) && j < i+15; j++ {
 					lj := strings.ToLower(lines[j])
-					if strings.Contains(lj, "row level security") || strings.Contains(lj, "enable_row_level_security") || strings.Contains(lj, "rls") {
+					if strings.Contains(lj, "row level security") || strings.Contains(lj, "enable_row_level_security") || rlsWord.MatchString(lj) {
 						return nil
 					}
 				}
@@ -96,6 +96,9 @@ var patterns = []struct {
 		},
 	},
 }
+
+// rlsWord matches "rls" as a word, so table names like "urls" don't count.
+var rlsWord = regexp.MustCompile(`\brls\b`)
 
 // Scan checks every file in the diff for the 5 patterns.
 func Scan(ctx context.Context, files []string, read ReadFile) ([]Finding, error) {

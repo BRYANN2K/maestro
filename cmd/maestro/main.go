@@ -1092,8 +1092,7 @@ func (k keyStore) SaveKey(ctx context.Context, name, value string) error {
 	if k.vault == nil {
 		return fmt.Errorf("credential vault unavailable")
 	}
-	k.vault.Set("key:"+name, value)
-	return k.vault.Save(ctx)
+	return k.vault.SetAndSave(ctx, "key:"+name, value)
 }
 
 // runTUI launches the OpenTUI/React companion. Go remains the sole execution host.

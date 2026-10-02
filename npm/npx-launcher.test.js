@@ -154,7 +154,16 @@ function fakeHTTPS(routes) {
       route.response = response;
       callback(response);
       if (route.neverEnd) return;
-      if (route.chunks) {
+      if (route.chunks && route.intervalMs) {
+        let index = 0;
+        const tick = setInterval(() => {
+          if (index < route.chunks.length) response.write(route.chunks[index++]);
+          else {
+            clearInterval(tick);
+            response.end();
+          }
+        }, route.intervalMs);
+      } else if (route.chunks) {
         for (const chunk of route.chunks) response.write(chunk);
         response.end();
       } else {
@@ -449,7 +458,7 @@ test("does not execute a replaced cached binary", async (t) => {
     arch: "x64",
     download: second.download,
     log() {},
-    spawnSync(command) {
+    launch(command) {
       launched.push({ command, content: fs.readFileSync(command, "utf8") });
       return { status: 0 };
     },
@@ -546,7 +555,7 @@ test("forwards exact arguments, stdio, environment, and exit status", async (t) 
   const status = await launcher.run(args, {
     home,
     env,
-    spawnSync(command, actualArgs, options) {
+    launch(command, actualArgs, options) {
       calls.push({ command, actualArgs, options });
       return { status: 17 };
     },
@@ -567,7 +576,7 @@ test("reports unsupported targets without downloading or spawning", async (t) =>
     platform: "aix",
     arch: "ppc64",
     download() { touched = true; },
-    spawnSync() { touched = true; },
+    launch() { touched = true; },
     log(message) { logs.push(message); },
   });
   assert.equal(status, 1);
@@ -582,7 +591,7 @@ test("returns one when launching the binary itself fails", async (t) => {
   const logs = [];
   const status = await launcher.run([], {
     home,
-    spawnSync() { return { error: new Error("spawn denied") }; },
+    launch() { return { error: new Error("spawn denied") }; },
     log(message) { logs.push(message); },
   });
   assert.equal(status, 1);
@@ -596,11 +605,46 @@ test("relays child termination signals and preserves their shell exit code", asy
   const relayed = [];
   const status = await launcher.run([], {
     home,
-    spawnSync() { return { status: null, signal: "SIGTERM" }; },
+    launch() { return { status: null, signal: "SIGTERM" }; },
     relaySignal(signal) { relayed.push(signal); },
   });
   assert.deepEqual(relayed, ["SIGTERM"]);
   assert.equal(status, 128 + os.constants.signals.SIGTERM);
+});
+
+test("download timeout measures idle time, capped by an overall deadline", async () => {
+  const url = "https://example.test/slow";
+  const chunks = Array.from({ length: 8 }, (_, i) => Buffer.from(String(i)));
+  const steady = await launcher.downloadBuffer(url, {
+    get: fakeHTTPS(new Map([[url, { chunks, intervalMs: 15 }]])),
+    timeoutMs: 60,
+  });
+  assert.equal(steady.toString(), "01234567");
+  await assert.rejects(
+    launcher.downloadBuffer(url, {
+      get: fakeHTTPS(new Map([[url, { chunks, intervalMs: 15 }]])),
+      timeoutMs: 60,
+      totalTimeoutMs: 40,
+    }),
+    /timed out after 40ms/
+  );
+});
+
+test("forwards termination signals to the launched child", { skip: process.platform === "win32" }, async () => {
+  const script = "process.on('SIGTERM', () => process.exit(42)); process.send('ready'); setInterval(() => {}, 1000);";
+  const { spawn } = require("child_process");
+  const result = await launcher.launchChild(
+    process.execPath,
+    ["-e", script],
+    { stdio: ["ignore", "ignore", "inherit", "ipc"] },
+    (command, args, options) => {
+      const child = spawn(command, args, options);
+      child.once("message", () => process.emit("SIGTERM", "SIGTERM"));
+      return child;
+    }
+  );
+  assert.deepEqual(result, { status: 42, signal: null });
+  assert.equal(process.listenerCount("SIGTERM"), 0);
 });
 
 test("the launcher has no Go, shell, tar, or PowerShell install dependency", () => {

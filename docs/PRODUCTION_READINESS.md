@@ -1,12 +1,12 @@
 # Production readiness
 
-Release target: Maestro 1.1.0
+Release target: Maestro 1.1.1
 
 Hardening review: 2026-08-23; OpenTUI review: 2026-09-20
 
 ## Decision
 
-Version 1.1.0 packages the built-in harness, OpenTUI workspace and hardening
+Version 1.1.x packages the built-in harness, OpenTUI workspace and hardening
 changes reviewed since the 1.0.0 baseline.
 Publication must use one reviewed, clean commit for which every gate below
 passes. A local build from a dirty worktree is useful evidence, but it is not a
@@ -20,7 +20,7 @@ browser application in the release.
 ## Release contract
 
 One Git tag, one GitHub release, one npm package, and the embedded binary must
-use the same reviewed version: `1.1.0` for this release.
+use the same reviewed version: `1.1.1` for this release.
 
 The supported prebuilt matrix is:
 
@@ -97,10 +97,10 @@ Configure the npm package's trusted publisher once with these exact values:
 The workflow is idempotent. A rerun verifies the six expected GitHub assets
 and compares the published npm tarball's SHA-1 with a package rebuilt from the
 tag before it skips either publication. For example, reconcile the existing
-1.1.0 tag from the default branch with:
+1.1.1 tag from the default branch with:
 
 ```sh
-gh workflow run Release --ref main -f tag=v1.1.0
+gh workflow run Release --ref main -f tag=v1.1.1
 ```
 
 ## Hardened boundaries

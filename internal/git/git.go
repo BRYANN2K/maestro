@@ -1007,6 +1007,24 @@ func (c *Client) run(ctx context.Context, args ...string) ([]byte, error) {
 	return c.runWithEnv(ctx, nil, args...)
 }
 
+// gitCommandError reports Git's diagnostic as its message while keeping the
+// underlying cause (exit status, context cancellation) for errors.Is/As.
+type gitCommandError struct {
+	msg   string
+	cause error
+}
+
+func (e *gitCommandError) Error() string { return e.msg }
+func (e *gitCommandError) Unwrap() error { return e.cause }
+
+func commandError(ctx context.Context, args []string, msg string, err error) error {
+	cause := err
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		cause = errors.Join(err, ctxErr)
+	}
+	return &gitCommandError{msg: fmt.Sprintf("git %s: %s", strings.Join(args, " "), msg), cause: cause}
+}
+
 func (c *Client) runWithEnv(ctx context.Context, overrides map[string]string, args ...string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = c.dir
@@ -1019,7 +1037,7 @@ func (c *Client) runWithEnv(ctx context.Context, overrides map[string]string, ar
 		if msg == "" {
 			msg = err.Error()
 		}
-		return nil, fmt.Errorf("git %s: %s", strings.Join(args, " "), msg)
+		return nil, commandError(ctx, args, msg, err)
 	}
 	return out, nil
 }
@@ -1051,7 +1069,7 @@ func (c *Client) runWithEnvOutputLimit(ctx context.Context, overrides map[string
 		if msg == "" {
 			msg = err.Error()
 		}
-		return nil, stdout.exceeded, fmt.Errorf("git %s: %s", strings.Join(args, " "), msg)
+		return nil, stdout.exceeded, commandError(ctx, args, msg, err)
 	}
 	return stdout.Bytes(), stdout.exceeded, nil
 }
@@ -1073,7 +1091,7 @@ func (c *Client) runWithEnvNoOutput(ctx context.Context, overrides map[string]st
 		if msg == "" {
 			msg = err.Error()
 		}
-		return fmt.Errorf("git %s: %s", strings.Join(args, " "), msg)
+		return commandError(ctx, args, msg, err)
 	}
 	return nil
 }
@@ -1102,7 +1120,7 @@ func (c *Client) runWithEnvInputOutputLimit(ctx context.Context, overrides map[s
 		if msg == "" {
 			msg = err.Error()
 		}
-		return nil, false, fmt.Errorf("git %s: %s", strings.Join(args, " "), msg)
+		return nil, false, commandError(ctx, args, msg, err)
 	}
 	return stdout.Bytes(), false, nil
 }
@@ -1122,7 +1140,7 @@ func (c *Client) runWithEnvInputNoOutput(ctx context.Context, overrides map[stri
 		if msg == "" {
 			msg = err.Error()
 		}
-		return fmt.Errorf("git %s: %s", strings.Join(args, " "), msg)
+		return commandError(ctx, args, msg, err)
 	}
 	return nil
 }
