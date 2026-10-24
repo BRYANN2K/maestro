@@ -1,0 +1,91 @@
+# Port of .github/workflows/release.yml. Runs on a v* tag, or manually with
+# RELEASE_TAG=vX.Y.Z to publish or reconcile an existing tag.
+when:
+  - event: tag
+    ref: refs/tags/v*
+  - event: manual
+
+clone:
+  - name: clone
+    image: docker.io/woodpeckerci/plugin-git:2.10.1@sha256:550075c844fcec0af41d9d28f9860aa5d8c43e1e9419be4b9266dc02c2f29804
+    settings:
+      depth: 0
+      partial: false
+      tags: true
+
+steps:
+  - name: release
+    image: docker.io/library/golang:1.26.6-bookworm@sha256:116d58cbd88c1297624acc6e967a060012422bacf9930927e23fb719189c6f36
+    backend_options:
+      kubernetes:
+        resources:
+          requests: {cpu: 500m, memory: 1Gi}
+          limits: {cpu: "2", memory: 3Gi}
+    environment:
+      GITHUB_TOKEN:
+        from_secret: git_push_token
+      NPM_TOKEN:
+        from_secret: npm_token
+    commands:
+      - |
+        set -eu
+        RELEASE_TAG="${RELEASE_TAG:-${CI_COMMIT_TAG:-}}"
+        echo "$RELEASE_TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$' || { echo "invalid release tag: $RELEASE_TAG" >&2; exit 1; }
+        git config --global --add safe.directory "$CI_WORKSPACE"
+        git checkout -q "refs/tags/$RELEASE_TAG"
+        echo "RELEASE_TAG=$RELEASE_TAG" > /tmp/release.env
+      - curl -fsSL -o /tmp/node.tar.xz https://nodejs.org/dist/v24.13.0/node-v24.13.0-linux-x64.tar.xz
+      - echo "e798599612f4bb71333a3397ab0d095fd62214e115aea45aa858a145fc72d67e  /tmp/node.tar.xz" | sha256sum -c -
+      - curl -fsSL -o /tmp/goreleaser.tar.gz https://github.com/goreleaser/goreleaser/releases/download/v2.17.1/goreleaser_Linux_x86_64.tar.gz
+      - echo "a99bbc7ae0d8d897b07c4c497a9b62f222558804715ef219d1af05a7e417bc80  /tmp/goreleaser.tar.gz" | sha256sum -c -
+      - tar -xzf /tmp/goreleaser.tar.gz -C /usr/local/bin goreleaser
+      - tar -xJf /tmp/node.tar.xz -C /usr/local --strip-components=1
+      - curl -fsSL -o /tmp/bun.zip https://github.com/oven-sh/bun/releases/download/bun-v1.3.14/bun-linux-x64.zip
+      - echo "951ee2aee855f08595aeec6225226a298d3fea83a3dcd6465c09cbccdf7e848f  /tmp/bun.zip" | sha256sum -c -
+      - command -v unzip >/dev/null || { apt-get update -qq && apt-get install -y -qq --no-install-recommends unzip >/dev/null; }
+      - unzip -q -o /tmp/bun.zip -d /tmp && install /tmp/bun-linux-x64/bun /usr/local/bin/bun
+      - curl -fsSL -o /tmp/gh.tar.gz https://github.com/cli/cli/releases/download/v2.103.2/gh_2.103.2_linux_amd64.tar.gz
+      - echo "62ccf747115ddc61237efffdde66a3c8f70ba249433dc64f70801089b59c59c8  /tmp/gh.tar.gz" | sha256sum -c -
+      - tar -xzf /tmp/gh.tar.gz -C /tmp && install /tmp/gh_2.103.2_linux_amd64/bin/gh /usr/local/bin/gh
+      - |
+        set -eu
+        . /tmp/release.env
+        tag_commit="$(git rev-parse --verify "refs/tags/${RELEASE_TAG}^{commit}")"
+        test "$tag_commit" = "$(git rev-parse HEAD)"
+        package_version="$(node -p "require('./npm/package.json').version")"
+        test "${RELEASE_TAG#v}" = "$package_version" || { echo "tag ${RELEASE_TAG#v} does not match npm $package_version" >&2; exit 1; }
+        node -p "require('./npm/package.json').name" > /tmp/package-name
+      - npm install --global npm@11.5.1
+      - make tools
+      - make release-check
+      - |
+        set -eu
+        . /tmp/release.env
+        export GH_TOKEN="$GITHUB_TOKEN"
+        if gh release view "$RELEASE_TAG" --repo "$CI_REPO" >/dev/null 2>&1; then
+          echo "GitHub release $RELEASE_TAG already exists; verifying it instead of republishing."
+        else
+          goreleaser release --clean
+        fi
+        version="${RELEASE_TAG#v}"
+        assets="$(gh release view "$RELEASE_TAG" --repo "$CI_REPO" --json assets --jq '.assets[].name')"
+        for asset in checksums.txt "maestro_${version}_darwin_amd64.tar.gz" "maestro_${version}_darwin_arm64.tar.gz" \
+          "maestro_${version}_linux_amd64.tar.gz" "maestro_${version}_linux_arm64.tar.gz" "maestro_${version}_windows_amd64.zip"; do
+          printf '%s\n' "$assets" | grep -Fxq "$asset" || { echo "GitHub release $RELEASE_TAG is missing $asset" >&2; exit 1; }
+        done
+      - |
+        set -eu
+        . /tmp/release.env
+        cd npm
+        name="$(cat /tmp/package-name)" version="${RELEASE_TAG#v}"
+        printf '//registry.npmjs.org/:_authToken=%s\n' "$NPM_TOKEN" > "$HOME/.npmrc"
+        if published="$(npm view "$name@$version" dist.shasum 2>/tmp/npm-view.err)"; then
+          tarball="$(npm pack --silent | tail -n 1)"
+          test "$(sha1sum "$tarball" | awk '{print $1}')" = "$published" || { echo "npm $name@$version exists but does not match this tag" >&2; exit 1; }
+          rm -f "$tarball"
+        elif grep -q E404 /tmp/npm-view.err; then
+          npm publish --access public
+        else
+          cat /tmp/npm-view.err >&2; exit 1
+        fi
+        test "$(npm view "$name@$version" version)" = "$version"
