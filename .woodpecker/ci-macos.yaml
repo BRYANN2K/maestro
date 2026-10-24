@@ -1,0 +1,19 @@
+# Port of the macos-latest Node job of .github/workflows/ci.yml, on the Mac
+# agent. Uses the Mac's installed Node (the GitHub job tested 18 and 22).
+labels:
+  platform: darwin/arm64
+
+when:
+  - event: pull_request
+  - event: push
+    branch: main
+  - event: manual
+
+steps:
+  - name: node
+    image: bash
+    directory: npm
+    commands:
+      - node --version
+      - npm test
+      - npm pack --dry-run

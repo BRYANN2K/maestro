@@ -1,0 +1,65 @@
+# Port of .github/workflows/ci.yml, Linux jobs. The macOS Node job is
+# .woodpecker/ci-macos.yaml; the Windows Node job has no agent.
+when:
+  - event: pull_request
+  - event: push
+    branch: main
+  - event: manual
+
+variables:
+  - &go docker.io/library/golang:1.26.6-bookworm@sha256:116d58cbd88c1297624acc6e967a060012422bacf9930927e23fb719189c6f36
+  - &resources
+    kubernetes:
+      resources:
+        requests: {cpu: 500m, memory: 1Gi}
+        limits: {cpu: "2", memory: 3Gi}
+  - &bun |
+    curl -fsSL -o /tmp/bun.zip https://github.com/oven-sh/bun/releases/download/bun-v1.3.14/bun-linux-x64.zip
+    echo "951ee2aee855f08595aeec6225226a298d3fea83a3dcd6465c09cbccdf7e848f  /tmp/bun.zip" | sha256sum -c -
+    command -v unzip >/dev/null || { apt-get update -qq && apt-get install -y -qq --no-install-recommends unzip >/dev/null; }
+    unzip -q -o /tmp/bun.zip -d /tmp && install /tmp/bun-linux-x64/bun /usr/local/bin/bun
+
+steps:
+  - name: go-quality
+    image: *go
+    backend_options: *resources
+    commands:
+      - make tools
+      - make check-go vuln
+
+  - name: goreleaser-check
+    image: docker.io/goreleaser/goreleaser:v2.17.1@sha256:1098a0be4da1780f9616a85f4c5050447b53e3e74804d8017ec1e2bbb1fb697a
+    commands:
+      - goreleaser check
+
+  - name: cross-build
+    image: *go
+    backend_options: *resources
+    environment:
+      CGO_ENABLED: "0"
+    commands:
+      - |
+        for target in darwin/amd64 darwin/arm64 linux/amd64 linux/arm64 windows/amd64 windows/arm64; do
+          GOOS="$${target%/*}" GOARCH="$${target#*/}" go build -trimpath -o "/tmp/maestro-$${target%/*}-$${target#*/}" ./cmd/maestro
+        done
+
+  - name: node-18
+    image: docker.io/library/node:18-bookworm-slim@sha256:f9ab18e354e6855ae56ef2b290dd225c1e51a564f87584b9bd21dd651838830e
+    directory: npm
+    commands:
+      - npm test
+      - npm pack --dry-run
+
+  - name: node-22
+    image: docker.io/library/node:22-bookworm-slim@sha256:de170b39439eb0e5a3444ad7d60b015614a381e10fecae2e30ec9e735122f38d
+    directory: npm
+    commands:
+      - npm test
+      - npm pack --dry-run
+
+  - name: harness
+    image: *go
+    backend_options: *resources
+    commands:
+      - *bun
+      - make runtime-test ui-test
